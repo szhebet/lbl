@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: library-db
+    environment:
+      - POSTGRES_USER=library
+      - POSTGRES_PASSWORD=library_secret
+      - POSTGRES_DB=librarydb
+    volumes:
+      - ./db/scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql
+      - library_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U library"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: library-app
+    environment:
+      - DATABASE_URL=host=db port=5432 user=library password=library_secret dbname=librarydb sslmode=disable
+      - PORT=8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./bookarch:/app/bookarch
+      - ./tempfld:/app/tempfld
+
+volumes:
+  library_data:

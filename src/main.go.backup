@@ -1,0 +1,586 @@
+package main
+
+import (
+	"database/sql"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/gin-gonic/gin"
+	_ "github.com/lib/pq"
+)
+
+// BookDetails represents the denormalized book information from the view
+type BookDetails struct {
+	WorkID           int    `json:"work_id"`
+	OriginalTitle    string `json:"original_title"`
+	OriginalLanguage string `json:"original_language"`
+	FirstPublished   int    `json:"first_published,omitempty"`
+	WorkType         string `json:"work_type,omitempty"`
+	EditionID        int    `json:"edition_id"`
+	EditionTitle     string `json:"edition_title"`
+	EditionLanguage  string `json:"edition_language"`
+	ISBN             string `json:"isbn,omitempty"`
+	Publisher        string `json:"publisher,omitempty"`
+	Year             int    `json:"year,omitempty"`
+	Pages            int    `json:"pages,omitempty"`
+	Series           string `json:"series,omitempty"`
+	SeriesNumber     string `json:"series_number,omitempty"`
+	Quality          string `json:"quality,omitempty"`
+	Authors          string `json:"authors,omitempty"`
+	Translators      string `json:"translators,omitempty"`
+	Genres           string `json:"genres,omitempty"`
+	AvailableFormats string `json:"available_formats,omitempty"`
+	FormatCount      int    `json:"format_count,omitempty"`
+	PrimaryFilePath  string `json:"primary_file_path,omitempty"`
+	ReadingProgress  int    `json:"reading_progress,omitempty"`
+	Rating           int    `json:"rating,omitempty"`
+	FinishedAt       string `json:"finished_at,omitempty"`
+	CreatedAt        string `json:"created_at,omitempty"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
+}
+
+// CreateBookRequest represents the request body for creating a book
+type CreateBookRequest struct {
+	Title       string `json:"title" binding:"required"`
+	Author      string `json:"author" binding:"required"`
+	ISBN        string `json:"isbn,omitempty"`
+	PublishedYear int    `json:"published_year,omitempty"`
+	Genre       string `json:"genre,omitempty"`
+	Description string `json:"description,omitempty"`
+	Language    string `json:"language,omitempty"` // ISO 639-2/B code
+}
+
+// UpdateBookRequest represents the request body for updating a book
+type UpdateBookRequest struct {
+	Title       *string `json:"title,omitempty"`
+	Author      *string `json:"author,omitempty"`
+	ISBN        *string `json:"isbn,omitempty"`
+	PublishedYear *int    `json:"published_year,omitempty"` // Pointer to distinguish between 0 and unset
+	Genre       *string `json:"genre,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Language    *string `json:"language,omitempty"` // ISO 639-2/B code
+	Publisher   *string `json:"publisher,omitempty"`
+}
+
+func main() {
+	// Get database connection string from environment or use default
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "host=/var/run/postgresql user=postgres dbname=library sslmode=disable"
+	}
+
+	// Connect to database
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Error connecting to database: ", err)
+	}
+	defer db.Close()
+
+	// Test connection
+	err = db.Ping()
+	if err != nil {
+		log.Fatal("Error pinging database: ", err)
+	}
+
+	log.Println("Connected to database")
+
+	// Initialize Gin router
+	r := gin.Default()
+
+	// Make database connection available to handlers
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	// API routes
+	api := r.Group("/api/v1")
+	{
+		api.GET("/books", getBooks(db))
+		api.POST("/books", createBook(db))
+		api.GET("/books/:id", getBook(db))
+		api.PUT("/books/:id", updateBook(db))
+		api.DELETE("/books/:id", deleteBook(db))
+	}
+
+	// Serve static files (optional)
+	r.Static("/static", "./static")
+
+	// Start server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Printf("Starting server on :%s\n", port)
+	if err := r.Run(":" + port); err != nil {
+		log.Fatal("Failed to start server: ", err)
+	}
+}
+
+// getBooks returns a handler function that lists books
+func getBooks(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Query books from the book_details view
+		rows, err := db.Query(`
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at
+			FROM book_details
+			ORDER BY original_title
+		`)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var books []BookDetails
+		for rows.Next() {
+			var book BookDetails
+			var finishedAt sql.NullString
+			if err := rows.Scan(
+				&book.WorkID, &book.OriginalTitle, &book.OriginalLanguage, &book.FirstPublished, &book.WorkType,
+				&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
+				&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
+				&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
+				&book.ReadingProgress, &book.Rating, &finishedAt, &book.CreatedAt, &book.UpdatedAt,
+			); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if finishedAt.Valid {
+				book.FinishedAt = finishedAt.String
+			}
+			books = append(books, book)
+		}
+
+		if err = rows.Err(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, books)
+	}
+}
+
+// getBook returns a handler function that gets a specific book by edition ID
+func getBook(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+
+		// Query book from the book_details view by edition ID
+		var book BookDetails
+		var finishedAt sql.NullString
+		err := db.QueryRow(`
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at
+			FROM book_details
+			WHERE edition_id = $1
+		`, id).Scan(
+			&book.WorkID, &book.OriginalTitle, &book.OriginalLanguage, &book.FirstPublished, &book.WorkType,
+			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
+			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
+			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
+			&book.ReadingProgress, &book.Rating, &finishedAt, &book.CreatedAt, &book.UpdatedAt,
+		)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if finishedAt.Valid {
+			book.FinishedAt = finishedAt.String
+		}
+
+		c.JSON(http.StatusOK, book)
+	}
+}
+
+// createBook returns a handler function that creates a new book
+func createBook(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req CreateBookRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Start transaction
+		tx, err := db.Begin()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer func() {
+			if err != nil {
+				tx.Rollback()
+			} else {
+				tx.Commit()
+			}
+		}()
+
+		// Get or create language
+		var languageID string
+		if req.Language == "" {
+			languageID = "eng" // Default to English
+		} else {
+			languageID = req.Language
+		}
+
+		// Ensure language exists
+		var langExists bool
+		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", languageID).Scan(&langExists)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !langExists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid language code"})
+			return
+		}
+
+		// Insert work
+		var workID int
+		err = tx.QueryRow(`
+			INSERT INTO works (original_title, original_language, first_published, work_type, annotation, word_count)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id
+		`, req.Title, languageID, req.PublishedYear, "novel", req.Description, 0).Scan(&workID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Get or create author person (simplified - using author as last name)
+		var personID int
+		err = tx.QueryRow(`
+			INSERT INTO persons (last_name, first_name)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+			RETURNING id
+		`, req.Author, "").Scan(&personID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		// If person already existed, get their ID
+		if personID == 0 {
+			err = tx.QueryRow("SELECT id FROM persons WHERE last_name = $1 LIMIT 1", req.Author).Scan(&personID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		// Link work to author
+		_, err = tx.Exec(`
+			INSERT INTO work_contributors (work_id, person_id, role)
+			VALUES ($1, $2, 'author')
+			ON CONFLICT DO NOTHING
+		`, workID, personID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Insert edition
+		var editionID int
+		err = tx.QueryRow(`
+			INSERT INTO editions (work_id, title, language, publisher, year, city, pages, annotation, quality, source)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			RETURNING id
+		`, workID, req.Title, languageID, "Self-published", req.PublishedYear, "Self-published", 0, req.Description, "good", "manual").Scan(&editionID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Get or create format (default to EPUB if not specified)
+		var formatID int
+		err = tx.QueryRow("SELECT id FROM formats WHERE name = 'EPUB'").Scan(&formatID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Insert edition file
+		_, err = tx.Exec(`
+			INSERT INTO edition_files (edition_id, format_id, file_path, is_primary)
+			VALUES ($1, $2, $3, $4)
+		`, editionID, formatID, "/books/manual_upload.epub", true)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Return created book
+		var book BookDetails
+		var finishedAt sql.NullString
+		err = db.QueryRow(`
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at
+			FROM book_details
+			WHERE edition_id = $1
+		`, editionID).Scan(
+			&book.WorkID, &book.OriginalTitle, &book.OriginalLanguage, &book.FirstPublished, &book.WorkType,
+			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
+			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
+			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
+			&book.ReadingProgress, &book.Rating, &finishedAt, &book.CreatedAt, &book.UpdatedAt,
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if finishedAt.Valid {
+			book.FinishedAt = finishedAt.String
+		}
+
+		c.JSON(http.StatusCreated, book)
+	}
+}
+
+// updateBook returns a handler function that updates a book
+func updateBook(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var req UpdateBookRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Start transaction
+		tx, err := db.Begin()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer func() {
+			if err != nil {
+				tx.Rollback()
+			} else {
+				tx.Commit()
+			}
+		}()
+
+		// Get current edition ID to work with
+		var editionID int
+		var workID int
+		err = tx.QueryRow(`
+			SELECT e.id, e.work_id 
+			FROM editions e
+			WHERE e.id = $1
+		`, id).Scan(&editionID, &workID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Update work if title or other fields provided
+		titleChanged := req.Title != nil && *req.Title != ""
+		authorChanged := req.Author != nil && *req.Author != ""
+		yearChanged := req.PublishedYear != nil
+		descriptionChanged := req.Description != nil && *req.Description != ""
+		languageChanged := req.Language != nil && *req.Language != ""
+
+		if titleChanged || authorChanged || yearChanged || descriptionChanged || languageChanged {
+			// Get current work details
+			var currentOriginalTitle string
+			var currentOriginalLanguage string
+			var currentFirstPublished *int
+			var currentAnnotation string
+			err = tx.QueryRow(`
+				SELECT w.original_title, w.original_language, w.first_published, w.annotation
+				FROM works w
+				WHERE w.id = $1
+			`, workID).Scan(&currentOriginalTitle, &currentOriginalLanguage, &currentFirstPublished, &currentAnnotation)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Determine new values
+			newTitle := currentOriginalTitle
+			if titleChanged {
+				newTitle = *req.Title
+			}
+
+			newLanguage := currentOriginalLanguage
+			if languageChanged {
+				newLanguage = *req.Language
+			}
+
+			newYear := currentFirstPublished
+			if yearChanged {
+				newYear = req.PublishedYear
+			}
+
+			newAnnotation := currentAnnotation
+			if descriptionChanged {
+				newAnnotation = *req.Description
+			}
+
+			// Update work
+			_, err = tx.Exec(`
+				UPDATE works 
+				SET original_title = $1, original_language = $2, first_published = $3, annotation = $4, updated_at = NOW()
+				WHERE id = $5
+			`, newTitle, newLanguage, newYear, newAnnotation, workID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		// Update edition if publisher, year, city, pages, annotation, quality provided
+		publisherChanged := req.Publisher != nil && *req.Publisher != ""
+		yearChangedForEdition := req.PublishedYear != nil
+		descriptionChangedForEdition := req.Description != nil && *req.Description != ""
+
+		if publisherChanged || yearChangedForEdition || descriptionChangedForEdition {
+			// Get current edition details
+			var currentPublisher string
+			var currentYear *int
+			var currentCity string
+			var currentPages int
+			var currentAnnotation string
+			var currentQuality string
+			err = tx.QueryRow(`
+				SELECT e.publisher, e.year, e.city, e.pages, e.annotation, e.quality
+				FROM editions e
+				WHERE e.id = $1
+			`, editionID).Scan(&currentPublisher, &currentYear, &currentCity, &currentPages, &currentAnnotation, &currentQuality)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Determine new values
+			newPublisher := currentPublisher
+			if publisherChanged {
+				newPublisher = *req.Publisher
+			}
+
+			newYear := currentYear
+			if yearChangedForEdition {
+				newYear = req.PublishedYear
+			}
+
+			newAnnotation := currentAnnotation
+			if descriptionChangedForEdition {
+				newAnnotation = *req.Description
+			}
+
+			// Update edition
+			_, err = tx.Exec(`
+				UPDATE editions 
+				SET publisher = $1, year = $2, annotation = $3, updated_at = NOW()
+				WHERE id = $4
+			`, newPublisher, newYear, newAnnotation, editionID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		// Return updated book
+		var book BookDetails
+		var finishedAt sql.NullString
+		err = db.QueryRow(`
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at
+			FROM book_details
+			WHERE edition_id = $1
+		`, editionID).Scan(
+		err := db.QueryRow(`
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at
+			FROM book_details
+			WHERE edition_id = $1
+		`, editionID).Scan(
+			&book.WorkID, &book.OriginalTitle, &book.OriginalLanguage, &book.FirstPublished, &book.WorkType,
+			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
+			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
+			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
+			&book.ReadingProgress, &book.Rating, &finishedAt, &book.CreatedAt, &book.UpdatedAt,
+		)
+		}
+
+		c.JSON(http.StatusOK, book)
+	}
+}
+
+// deleteBook returns a handler function that deletes a book
+func deleteBook(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+
+		// Start transaction
+		tx, err := db.Begin()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer func() {
+			if err != nil {
+				tx.Rollback()
+			} else {
+				tx.Commit()
+			}
+		}()
+
+		// Check if book exists
+		var exists bool
+		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE id = $1)", id).Scan(&exists)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !exists {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
+			return
+		}
+
+		// Delete edition (will cascade to edition_files, reading_progress, etc.)
+		// Note: This will NOT delete the work or persons if they're used by other editions
+		_, err = tx.Exec("DELETE FROM editions WHERE id = $1", id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.Status(http.StatusNoContent)
+	}
+}

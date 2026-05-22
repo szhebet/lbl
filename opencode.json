@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "disabled_providers": ["Anthropic", "gemini"],
+  "provider": {
+    "my-local-model": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "My Local Model",
+      "options": {
+        "baseURL": "http://host.docker.internal:9090/v1",
+        "apiKey": "not-needed"
+      },
+      "models": {
+        "local-model": {
+          "name": "local-model"
+        }
+      }
+    }
+  },
+  "model": "my-local-model/local-model"
+}

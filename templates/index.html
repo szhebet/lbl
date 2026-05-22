@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Домашняя библиотека</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Домашняя библиотека</h1>
+            <button id="loadBooksBtn" class="btn">Загрузить книги</button>
+            <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="authors">Авторы</button>
+            <button class="tab" data-tab="books">Книги</button>
+            <button class="tab" data-tab="genres">Жанры</button>
+            <button class="tab" data-tab="import">Импорт</button>
+        </nav>
+
+        <main>
+            <!-- Вкладка Авторы -->
+            <div id="authors" class="tab-content active">
+                <div class="filters">
+                    <div class="filter-group">
+                        <label for="authorFilter">ФИО автора:</label>
+                        <input type="text" id="authorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="bookFilter">Название книги:</label>
+                        <input type="text" id="bookFilter" placeholder="Поиск по книге...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="genreFilter">Жанр:</label>
+                        <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
+                    </div>
+                    <button id="applyFilters" class="btn">Применить</button>
+                    <button id="clearFilters" class="btn btn-secondary">Очистить</button>
+                    <span class="shelf-link">
+                        <a href="/shelf/" class="shelf-link">📚 Полка<span id="shelfCount">(0)</span></a>
+                        <button id="addToShelfBtn" class="btn btn-small">Добавить на полку</button>
+                        <button id="clearShelfBtn" class="btn btn-small btn-secondary">Очистить полку</button>
+                    </span>
+                </div>
+
+                <div class="tree-view" id="authorsTree">
+                    <div class="loading">Загрузка...</div>
+                </div>
+            </div>
+
+            <!-- Вкладка Книги -->
+            <div id="books" class="tab-content">
+                <div class="coming-soon">Раздел в разработке</div>
+            </div>
+
+            <!-- Вкладка Жанры -->
+            <div id="genres" class="tab-content">
+                <div class="coming-soon">Раздел в разработке</div>
+            </div>
+
+            <!-- Вкладка Импорт -->
+            <div id="import" class="tab-content">
+                <h2>Импорт книг</h2>
+                
+                <div class="import-section">
+                    <h3>Загрузить файл книги</h3>
+                    <form id="uploadForm">
+                        <div class="form-group">
+                            <label for="bookFile">Выберите файл (FB2, FB2.ZIP, EPUB):</label>
+                            <input type="file" id="bookFile" accept=".fb2,.fb2.zip,.epub,.zip" class="file-input">
+                        </div>
+                        <div id="uploadPreview" class="upload-preview" style="display: none;"></div>
+                        <button type="submit" class="btn">Загрузить</button>
+                    </form>
+                    <div id="uploadResult" class="upload-result"></div>
+                </div>
+
+                <div class="import-section">
+                    <h3>Импорт из папки</h3>
+                    <form id="directoryForm">
+                        <div class="form-group">
+                            <label for="directoryPath">Путь к папке:</label>
+                            <input type="text" id="directoryPath" placeholder="/path/to/books" class="directory-input">
+                        </div>
+                        <button type="submit" class="btn">Импортировать все книги</button>
+                    </form>
+                    <div id="directoryResult" class="upload-result"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Модальное окно для редактирования -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="editForm">
+                <div id="modalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/import.js"></script>
+</body>
+</html>

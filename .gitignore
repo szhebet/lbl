@@ -1,0 +1,8 @@
+bookarch
+*Bookarch
+logs
+example
+errors*
+*.log
+testdata
+tempfld
