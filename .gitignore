@@ -1,8 +1,7 @@
 bookarch
-*Bookarch
 logs
 example
 errors*
-*.log
-testdata
-tempfld
+tmpBookarch
+config.toml
+opencode.json
