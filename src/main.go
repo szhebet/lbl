@@ -7,6 +7,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -17,6 +18,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,8 +27,245 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
+	"libapp/src/config"
 	"libapp/src/utils"
 )
+
+const currentDBVersion = "1.0"
+
+type migration struct {
+	Version     string
+	Description string
+	SQL         string
+}
+
+var migrations = []migration{
+	{
+		Version:     "1.0",
+		Description: "Initial schema",
+		SQL: `
+			CREATE TABLE IF NOT EXISTS db_version (
+				version     VARCHAR(20) NOT NULL,
+				updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+			INSERT INTO db_version (version) VALUES ('1.0')
+			ON CONFLICT DO NOTHING;
+		`,
+	},
+}
+
+func parseVersion(v string) (major, minor int) {
+	parts := strings.SplitN(v, ".", 2)
+	if len(parts) > 0 {
+		major, _ = strconv.Atoi(parts[0])
+	}
+	if len(parts) > 1 {
+		minor, _ = strconv.Atoi(parts[1])
+	}
+	return
+}
+
+func versionGreater(a, b string) bool {
+	amaj, amin := parseVersion(a)
+	bmaj, bmin := parseVersion(b)
+	if amaj != bmaj {
+		return amaj > bmaj
+	}
+	return amin > bmin
+}
+
+func runMigrations(db *sql.DB) error {
+	// Ensure db_version table exists
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS db_version (
+		version     VARCHAR(20) NOT NULL,
+		updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		return fmt.Errorf("failed to create db_version table: %w", err)
+	}
+
+	// Get current version
+	var currentVer string
+	err = db.QueryRow(`SELECT version FROM db_version ORDER BY updated_at DESC LIMIT 1`).Scan(&currentVer)
+	if err == sql.ErrNoRows || err != nil {
+		currentVer = "0.0"
+		_, err = db.Exec(`INSERT INTO db_version (version) VALUES ('0.0')`)
+		if err != nil {
+			return fmt.Errorf("failed to insert initial version: %w", err)
+		}
+	}
+
+	// Sort migrations by version
+	sorted := make([]migration, len(migrations))
+	copy(sorted, migrations)
+	sort.Slice(sorted, func(i, j int) bool {
+		return versionGreater(sorted[j].Version, sorted[i].Version)
+	})
+
+	// Apply pending migrations
+	applied := 0
+	for _, m := range sorted {
+		if m.SQL == "" {
+			continue
+		}
+		if versionGreater(m.Version, currentVer) {
+			log.Printf("Running migration: %s — %s", m.Version, m.Description)
+			_, err := db.Exec(m.SQL)
+			if err != nil {
+				return fmt.Errorf("migration %s failed: %w", m.Version, err)
+			}
+			// Update version after successful migration
+			_, err = db.Exec(`UPDATE db_version SET version = $1, updated_at = NOW()`, m.Version)
+			if err != nil {
+				return fmt.Errorf("failed to update version after migration %s: %w", m.Version, err)
+			}
+			applied++
+		}
+	}
+
+	if applied > 0 {
+		log.Printf("DB migration complete: %d script(s) applied", applied)
+	} else {
+		log.Printf("DB is up to date (version %s)", currentVer)
+	}
+	return nil
+}
+
+func normalizeStr(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, "ё", "е")
+}
+
+func normalizeQuery(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(strings.ReplaceAll(s, "ё", "е"))
+}
+
+type ImportItem struct {
+	File   string `json:"file"`
+	Status string `json:"status"`
+	Title  string `json:"title,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type ImportState struct {
+	Running   bool         `json:"running"`
+	Total     int          `json:"total"`
+	Completed int          `json:"completed"`
+	Errors    int          `json:"errors"`
+	Items     []ImportItem `json:"items"`
+	StartTime int64        `json:"start_time"`
+}
+
+type ImportManager struct {
+	mu     sync.RWMutex
+	state  ImportState
+	cancel context.CancelFunc
+	db     *sql.DB
+	cfg    *config.Config
+}
+
+var importManager *ImportManager
+
+func NewImportManager(db *sql.DB, cfg *config.Config) *ImportManager {
+	return &ImportManager{db: db, cfg: cfg}
+}
+
+var supportedExts = map[string]bool{
+	".fb2": true, ".fb2.zip": true, ".epub": true,
+	".zip": true, ".pdf": true, ".doc": true, ".docx": true,
+}
+
+func isSupportedFile(name string) bool {
+	low := strings.ToLower(name)
+	if supportedExts[low] {
+		return true
+	}
+	ext := filepath.Ext(low)
+	if ext == ".zip" {
+		base := strings.TrimSuffix(low, ".zip")
+		if strings.HasSuffix(base, ".fb2") || strings.HasSuffix(base, ".pdf") || strings.HasSuffix(base, ".doc") || strings.HasSuffix(base, ".docx") || strings.HasSuffix(base, ".epub") {
+			return true
+		}
+	}
+	return supportedExts[ext]
+}
+
+func (im *ImportManager) Start(dirPath string, files []string) error {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if im.state.Running {
+		return fmt.Errorf("import already in progress")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	im.cancel = cancel
+	items := make([]ImportItem, len(files))
+	for i, f := range files {
+		items[i] = ImportItem{File: f, Status: "pending"}
+	}
+	im.state = ImportState{
+		Running:   true,
+		Total:     len(files),
+		Completed: 0,
+		Errors:    0,
+		Items:     items,
+		StartTime: time.Now().Unix(),
+	}
+	go im.run(ctx, dirPath)
+	return nil
+}
+
+func (im *ImportManager) Cancel() {
+	im.mu.RLock()
+	cancel := im.cancel
+	im.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (im *ImportManager) Status() ImportState {
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+	return im.state
+}
+
+func (im *ImportManager) updateItemStatus(idx int, status, title, errMsg string) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if idx < len(im.state.Items) {
+		im.state.Items[idx].Status = status
+		if title != "" {
+			im.state.Items[idx].Title = title
+		}
+		if errMsg != "" {
+			im.state.Items[idx].Error = errMsg
+		}
+		if status == "done" {
+			im.state.Completed++
+		} else if status == "error" {
+			im.state.Errors++
+		}
+	}
+}
+
+func (im *ImportManager) run(ctx context.Context, dirPath string) {
+	defer func() {
+		im.mu.Lock()
+		im.state.Running = false
+		im.cancel = nil
+		im.mu.Unlock()
+		tmpDir := filepath.Clean(im.cfg.Directories.Temp)
+		if strings.HasPrefix(filepath.Clean(dirPath), tmpDir) {
+			os.RemoveAll(dirPath)
+		}
+	}()
+	processDirectoryImport(ctx, dirPath, im.db, im.cfg, im.state.Items, im.updateItemStatus)
+}
 
 // BookDetails represents the denormalized book information from the view
 type BookDetails struct {
@@ -55,6 +295,7 @@ type BookDetails struct {
 	FinishedAt       sql.NullString  `json:"finished_at,omitempty"`
 	CreatedAt        string          `json:"created_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW(), so it's never NULL
 	UpdatedAt        string          `json:"updated_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW() and updated by trigger, so it's never NULL
+	UploadDate       string          `json:"upload_date,omitempty"`
 	OnShelf          bool            `json:"on_shelf"`
 	ShelfOrder       int             `json:"shelf_order"`
 }
@@ -82,21 +323,40 @@ type UpdateBookRequest struct {
 	Publisher   *string `json:"publisher,omitempty"`
 }
 
+func getConfig(c *gin.Context) *config.Config {
+	if cfg, exists := c.Get("config"); exists {
+		return cfg.(*config.Config)
+	}
+	return config.DefaultConfig()
+}
+
+func recognizeBook(text string, cfg *config.Config) *utils.LLMResult {
+	if cfg.LLM.BaseURL == "" {
+		return nil
+	}
+	if len(text) > 2000 {
+		text = text[:2000]
+	}
+	return utils.RecognizeBook(text, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Token, cfg.LLM.Prompt, cfg.LLM.Prompt2, cfg.LLM.Timeout, true)
+}
+
 func main() {
-	// Get database connection string from environment or use default
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "host=/var/run/postgresql user=postgres password=postgres dbname=library sslmode=disable"
+	cfg, err := config.Load("")
+	if err != nil {
+		log.Fatal("Error loading config: ", err)
 	}
 
-	// Connect to database
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = cfg.DSN()
+	}
+
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal("Error connecting to database: ", err)
 	}
 	defer db.Close()
 
-	// Test connection
 	err = db.Ping()
 	if err != nil {
 		log.Fatal("Error pinging database: ", err)
@@ -104,12 +364,17 @@ func main() {
 
 	log.Println("Connected to database")
 
-	// Initialize Gin router
+	if err := runMigrations(db); err != nil {
+		log.Fatal("Migration failed: ", err)
+	}
+
+	importManager = NewImportManager(db, cfg)
+
 	r := gin.Default()
 
-	// Make database connection available to handlers
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
+		c.Set("config", cfg)
 		c.Next()
 	})
 
@@ -134,9 +399,13 @@ func main() {
 		api.POST("/tags", createTag(db))
 		api.GET("/persons", getPersons(db))
 		api.GET("/languages", getLanguages(db))
+		api.GET("/config", getAppConfig())
 		
 		api.POST("/import/file", importBookFile(db))
-		api.POST("/import/directory", importBooksFromDirectory(db))
+		api.POST("/import/upload", importUploadFiles())
+		api.POST("/import/directory", startImport())
+		api.GET("/import/status", getImportStatus())
+		api.POST("/import/cancel", cancelImport())
 		api.POST("/books/:id/cover", uploadCover(db))
 		api.GET("/books/:id/download", downloadBook(db))
 		api.PUT("/books/:id/shelf", updateBookShelf(db))
@@ -154,12 +423,18 @@ func main() {
 	r.PUT("/api/v1/shelf/clear", clearShelf(db))
 	r.GET("/api/v1/shelf/count", getShelfCount(db))
 
-// Start server
+	// Debug endpoints (always available)
+	r.GET("/debug/goroutines", func(c *gin.Context) {
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", buf[:n])
+	})
+
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "9091"
+		port = fmt.Sprintf("%d", cfg.Server.Port)
 	}
-	addr := "0.0.0.0:" + port
+	addr := cfg.Server.Bind + ":" + port
 	log.Printf("Starting server on %s\n", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatal("Failed to start server: ", err)
@@ -168,6 +443,8 @@ func main() {
 
 func uploadCover(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		cfg := getConfig(c)
+
 		editionID := c.Param("id")
 
 		file, header, err := c.Request.FormFile("cover")
@@ -195,7 +472,7 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		coverDir := "./bookarch/covers"
+		coverDir := filepath.Join(cfg.Directories.Bookarch, "covers")
 		os.MkdirAll(coverDir, 0755)
 
 		ext := ".jpg"
@@ -236,28 +513,99 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 
 func getBooks(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		authorFilter := c.Query("author")
+		bookFilter := c.Query("book")
+		genreFilter := c.Query("genre")
+		sortBy := c.DefaultQuery("sort_by", "original_title")
+		sortOrder := c.DefaultQuery("sort_order", "asc")
 		limit := c.DefaultQuery("limit", "50")
 		offset := c.DefaultQuery("offset", "0")
 
+		allowedSorts := map[string]string{
+			"original_title":   "original_title",
+			"upload_date":      "upload_date",
+			"authors":          "authors",
+			"available_formats": "available_formats",
+		}
+		sortCol, ok := allowedSorts[sortBy]
+		if !ok {
+			sortCol = "original_title"
+		}
+		if sortOrder != "desc" {
+			sortOrder = "asc"
+		}
+
+		whereClause := " WHERE 1=1"
+		args := []interface{}{}
+		argNum := 1
+
+		if authorFilter != "" || bookFilter != "" {
+			conditions := []string{}
+			if authorFilter != "" {
+				q := "%" + normalizeQuery(authorFilter) + "%"
+				conditions = append(conditions, fmt.Sprintf("p.lower_fio LIKE $%d", argNum))
+				args = append(args, q)
+				argNum++
+			}
+			if bookFilter != "" {
+				q := "%" + normalizeQuery(bookFilter) + "%"
+				conditions = append(conditions, fmt.Sprintf("w.lower_original_title LIKE $%d", argNum))
+				args = append(args, q)
+				argNum++
+			}
+			whereClause += fmt.Sprintf(` AND edition_id IN (
+				SELECT DISTINCT e.id FROM editions e
+				JOIN works w ON w.id = e.work_id
+				LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+				LEFT JOIN persons p ON p.id = wc.person_id
+				WHERE %s
+			)`, strings.Join(conditions, " OR "))
+		}
+
+		if genreFilter != "" {
+			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", argNum)
+			args = append(args, "%"+genreFilter+"%")
+			argNum++
+		}
+
+		dateFrom := c.Query("date_from")
+		dateTo := c.Query("date_to")
+		if dateFrom != "" {
+			whereClause += fmt.Sprintf(" AND upload_date >= $%d::date", argNum)
+			args = append(args, dateFrom)
+			argNum++
+		}
+		if dateTo != "" {
+			whereClause += fmt.Sprintf(" AND upload_date < ($%d::date + interval '1 day')", argNum)
+			args = append(args, dateTo)
+			argNum++
+		}
+
+		// Count total matching
 		var total int
-		err := db.QueryRow("SELECT COUNT(*) FROM book_details").Scan(&total)
+		countQuery := "SELECT COUNT(*) FROM book_details" + whereClause
+		err := db.QueryRow(countQuery, args...).Scan(&total)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		rows, err := db.Query(`
+		// Main query with sort and pagination
+		query := fmt.Sprintf(`
 			SELECT 
 				work_id, original_title, original_language, first_published, work_type,
 				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
 				series, series_number, quality, authors, translators, genres,
 				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at,
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
 				on_shelf, shelf_order
-			FROM book_details
-			ORDER BY original_title
-			LIMIT $1 OFFSET $2
-		`, limit, offset)
+			FROM book_details%s
+			ORDER BY %s %s
+			LIMIT $%d OFFSET $%d
+		`, whereClause, sortCol, sortOrder, argNum, argNum+1)
+		queryArgs := append(args, limit, offset)
+
+		rows, err := db.Query(query, queryArgs...)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -272,7 +620,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
 				&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 				&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
-				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt,
+				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 				&book.OnShelf, &book.ShelfOrder,
 			); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -287,10 +635,10 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"total": total,
-			"limit": limit,
+			"total":  total,
+			"limit":  limit,
 			"offset": offset,
-			"books": books,
+			"books":  books,
 		})
 	}
 }
@@ -311,7 +659,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
 				series, series_number, quality, authors, translators, genres,
 				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at,
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
 				on_shelf, shelf_order
 			FROM book_details
 			WHERE 1=1`
@@ -320,8 +668,15 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 		argIndex := 1
 
 		if query != "" {
-			sqlQuery += fmt.Sprintf(" AND (original_title ILIKE $%d OR authors ILIKE $%d)", argIndex, argIndex+1)
-			args = append(args, "%"+query+"%", "%"+query+"%")
+			query = "%" + normalizeQuery(query) + "%"
+			sqlQuery += fmt.Sprintf(` AND edition_id IN (
+				SELECT DISTINCT e.id FROM editions e
+				JOIN works w ON w.id = e.work_id
+				LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+				LEFT JOIN persons p ON p.id = wc.person_id
+				WHERE w.lower_original_title LIKE $%d OR p.lower_fio LIKE $%d
+			)`, argIndex, argIndex+1)
+			args = append(args, query, query)
 			argIndex += 2
 		}
 
@@ -349,45 +704,49 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 			argIndex++
 		}
 
-		var countQuery = "SELECT COUNT(*) FROM book_details WHERE 1=1"
+		// Build WHERE clause for count query (same conditions, no LIMIT/OFFSET)
+		whereClause := " WHERE 1=1"
 		countArgs := []interface{}{}
-		countIndex := 1
-
+		ci := 1
 		if query != "" {
-			countQuery += fmt.Sprintf(" AND (original_title ILIKE $%d OR authors ILIKE $%d)", countIndex, countIndex+1)
-			countArgs = append(countArgs, "%"+query+"%", "%"+query+"%")
-			countIndex += 2
+			whereClause += fmt.Sprintf(` AND edition_id IN (
+				SELECT DISTINCT e.id FROM editions e
+				JOIN works w ON w.id = e.work_id
+				LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+				LEFT JOIN persons p ON p.id = wc.person_id
+				WHERE w.lower_original_title LIKE $%d OR p.lower_fio LIKE $%d
+			)`, ci, ci+1)
+			countArgs = append(countArgs, query, query)
+			ci += 2
 		}
 		if genre != "" {
-			countQuery += fmt.Sprintf(" AND genres ILIKE $%d", countIndex)
+			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", ci)
 			countArgs = append(countArgs, "%"+genre+"%")
-			countIndex++
+			ci++
 		}
 		if language != "" {
-			countQuery += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", countIndex, countIndex)
+			whereClause += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", ci, ci)
 			countArgs = append(countArgs, language)
-			countIndex++
+			ci++
 		}
 		if yearFrom != "" {
-			countQuery += fmt.Sprintf(" AND first_published >= $%d", countIndex)
+			whereClause += fmt.Sprintf(" AND first_published >= $%d", ci)
 			countArgs = append(countArgs, yearFrom)
-			countIndex++
+			ci++
 		}
 		if yearTo != "" {
-			countQuery += fmt.Sprintf(" AND first_published <= $%d", countIndex)
+			whereClause += fmt.Sprintf(" AND first_published <= $%d", ci)
 			countArgs = append(countArgs, yearTo)
-			countIndex++
+			ci++
 		}
 
 		var total int
-		err := db.QueryRow(countQuery, countArgs...).Scan(&total)
-		if err != nil {
+		if err := db.QueryRow("SELECT COUNT(*) FROM book_details"+whereClause, countArgs...).Scan(&total); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		sqlQuery += " ORDER BY original_title"
-		sqlQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIndex, argIndex+1)
+		sqlQuery += " ORDER BY original_title LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
 		args = append(args, limit, offset)
 
 		rows, err := db.Query(sqlQuery, args...)
@@ -405,7 +764,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 				&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
 				&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 				&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
-				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt,
+				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 				&book.OnShelf, &book.ShelfOrder,
 			); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -436,7 +795,7 @@ func getBook(db *sql.DB) gin.HandlerFunc {
 				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
 				series, series_number, quality, authors, translators, genres,
 				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date
 			FROM book_details
 			WHERE edition_id = $1
 		`, id).Scan(
@@ -444,7 +803,7 @@ func getBook(db *sql.DB) gin.HandlerFunc {
 			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
 			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
-			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt,
+			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 		)
 
 		if err != nil {
@@ -787,7 +1146,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
 				series, series_number, quality, authors, translators, genres,
 				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date
 			FROM book_details
 			WHERE edition_id = $1
 		`, editionID).Scan(
@@ -795,7 +1154,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
 			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
-			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt,
+			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 		)
 
 		if err != nil {
@@ -838,9 +1197,23 @@ func deleteBook(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Get work_id before deleting the edition
+		var workID int
+		err = tx.QueryRow("SELECT work_id FROM editions WHERE id = $1", id).Scan(&workID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
 		// Delete edition (will cascade to edition_files, reading_progress, etc.)
-		// Note: This will NOT delete the work or persons if they're used by other editions
 		_, err = tx.Exec("DELETE FROM editions WHERE id = $1", id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Clean up orphaned work (no remaining editions)
+		_, err = tx.Exec("DELETE FROM works WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM editions WHERE work_id = $1)", workID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -861,11 +1234,12 @@ type AuthorWithBooks struct {
 
 // BookWithFormats represents a book with its formats
 type BookWithFormats struct {
-	ID      int            `json:"id"`
-	Title   string         `json:"title"`
-	Year    *int           `json:"year"`
-	OnShelf bool           `json:"on_shelf"`
-	Formats []FormatInfo   `json:"formats"`
+	ID         int            `json:"id"`
+	Title      string         `json:"title"`
+	Year       *int           `json:"year"`
+	OnShelf    bool           `json:"on_shelf"`
+	UploadDate string         `json:"upload_date"`
+	Formats    []FormatInfo   `json:"formats"`
 }
 
 // FormatInfo represents format information
@@ -882,43 +1256,102 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		bookFilter := c.Query("book")
 		genreFilter := c.Query("genre")
 
-		// Build the query with filters
+		// Pagination
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		if page < 1 {
+			page = 1
+		}
+		if limit < 1 {
+			limit = 50
+		}
+
+		// Common WHERE clause
+		whereClause := " WHERE wc.role = 'author'"
+		whereArgs := []interface{}{}
+		argNum := 1
+
+		if authorFilter != "" {
+			whereClause += fmt.Sprintf(" AND p.lower_fio LIKE $%d", argNum)
+			whereArgs = append(whereArgs, "%"+normalizeQuery(authorFilter)+"%")
+			argNum++
+		}
+
+		if bookFilter != "" {
+			whereClause += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", argNum)
+			whereArgs = append(whereArgs, "%"+normalizeQuery(bookFilter)+"%")
+			argNum++
+		}
+
+		if genreFilter != "" {
+			whereClause += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d)", argNum)
+			whereArgs = append(whereArgs, "%"+strings.ToLower(genreFilter)+"%")
+			argNum++
+		}
+
+		// Count total
+		countQuery := `
+			SELECT COUNT(*) FROM (
+				SELECT p.id
+				FROM persons p
+				JOIN work_contributors wc ON wc.person_id = p.id
+				JOIN works w ON w.id = wc.work_id
+				JOIN editions e ON e.work_id = w.id
+		` + whereClause + " GROUP BY p.id) sub"
+		var total int
+		err := db.QueryRow(countQuery, whereArgs...).Scan(&total)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Count total distinct works matching filters
+		worksFrom := `
+			FROM works w
+			JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+			JOIN persons p ON p.id = wc.person_id
+			JOIN editions e ON e.work_id = w.id
+		` + whereClause
+		var totalWorks int
+		err = db.QueryRow("SELECT COUNT(DISTINCT w.id) "+worksFrom, whereArgs...).Scan(&totalWorks)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Count total distinct edition files matching filters
+		filesFrom := `
+			FROM edition_files ef
+			JOIN editions e ON e.id = ef.edition_id
+			JOIN works w ON w.id = e.work_id
+			JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+			JOIN persons p ON p.id = wc.person_id
+		` + whereClause
+		var totalEditions int
+		err = db.QueryRow("SELECT COUNT(DISTINCT ef.id) "+filesFrom, whereArgs...).Scan(&totalEditions)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Build the main query
 		query := `
 			SELECT 
 				p.id,
-				p.first_name,
+				COALESCE(p.first_name, '') as first_name,
 				p.last_name,
 				COUNT(DISTINCT w.id) as books_count
 			FROM persons p
 			JOIN work_contributors wc ON wc.person_id = p.id
 			JOIN works w ON w.id = wc.work_id
-			WHERE wc.role = 'author'
-		`
+			JOIN editions e ON e.work_id = w.id
+		` + whereClause + " GROUP BY p.id, p.first_name, p.last_name ORDER BY p.last_name, p.first_name" +
+			fmt.Sprintf(" LIMIT $%d OFFSET $%d", argNum, argNum+1)
 
-		args := []interface{}{}
-		argNum := 1
+		offset := (page - 1) * limit
+		queryArgs := append(whereArgs, limit, offset)
 
-		if authorFilter != "" {
-			query += fmt.Sprintf(" AND (LOWER(p.first_name) LIKE $%d OR LOWER(p.last_name) LIKE $%d OR LOWER(p.first_name || ' ' || p.last_name) LIKE $%d)", argNum, argNum, argNum)
-			args = append(args, "%"+strings.ToLower(authorFilter)+"%")
-			argNum++
-		}
-
-		if bookFilter != "" {
-			query += fmt.Sprintf(" AND LOWER(w.original_title) LIKE $%d", argNum)
-			args = append(args, "%"+strings.ToLower(bookFilter)+"%")
-			argNum++
-		}
-
-		if genreFilter != "" {
-			query += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d)", argNum)
-			args = append(args, "%"+strings.ToLower(genreFilter)+"%")
-			argNum++
-		}
-
-		query += " GROUP BY p.id, p.first_name, p.last_name ORDER BY p.last_name, p.first_name"
-
-		rows, err := db.Query(query, args...)
+		rows, err := db.Query(query, queryArgs...)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -939,7 +1372,8 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					e.id,
 					w.original_title,
 					e.year,
-					e.on_shelf
+					e.on_shelf,
+					e.upload_date
 				FROM works w
 				JOIN work_contributors wc ON wc.work_id = w.id
 				JOIN editions e ON e.work_id = w.id
@@ -950,8 +1384,8 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			bookArgNum := 2
 
 			if bookFilter != "" {
-				booksQuery += fmt.Sprintf(" AND LOWER(w.original_title) LIKE $%d", bookArgNum)
-				bookArgs = append(bookArgs, "%"+strings.ToLower(bookFilter)+"%")
+				booksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", bookArgNum)
+				bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
 			}
 
 			booksQuery += " ORDER BY w.original_title"
@@ -962,12 +1396,13 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 				return
 			}
 
-			var books []BookWithFormats
+			books := make([]BookWithFormats, 0)
 			for bookRows.Next() {
 				var book BookWithFormats
 				var year sql.NullInt64
 				var onShelf bool
-				if err := bookRows.Scan(&book.ID, &book.Title, &year, &onShelf); err != nil {
+				var uploadDate sql.NullString
+				if err := bookRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
 					bookRows.Close()
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
@@ -977,19 +1412,21 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					book.Year = &yearInt
 				}
 				book.OnShelf = onShelf
+				if uploadDate.Valid {
+					book.UploadDate = uploadDate.String
+				}
 
-				// Get formats for this book
-				formatQuery := `
-					SELECT 
-						f.name,
-						ef.file_path
-					FROM edition_files ef
-					JOIN formats f ON f.id = ef.format_id
-					JOIN editions e ON e.id = ef.edition_id
-					WHERE e.work_id = $1
-				`
+			// Get formats for this book
+			formatQuery := `
+				SELECT 
+					f.name,
+					ef.file_path
+				FROM edition_files ef
+				JOIN formats f ON f.id = ef.format_id
+				WHERE ef.edition_id = $1
+			`
 
-				formatRows, err := db.Query(formatQuery, book.ID)
+			formatRows, err := db.Query(formatQuery, book.ID)
 				if err != nil {
 					bookRows.Close()
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1014,6 +1451,9 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			}
 			bookRows.Close()
 
+			if books == nil {
+				books = []BookWithFormats{}
+			}
 			author.Books = books
 			authors = append(authors, author)
 		}
@@ -1023,7 +1463,14 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(http.StatusOK, authors)
+		c.JSON(http.StatusOK, gin.H{
+			"authors":       authors,
+			"total":         total,
+			"page":          page,
+			"limit":         limit,
+			"total_works":   totalWorks,
+			"total_editions": totalEditions,
+		})
 	}
 }
 
@@ -1074,6 +1521,7 @@ type EditionData struct {
 	Source        sql.NullString  `json:"source"`
 	IsComplete    bool            `json:"is_complete"`
 	Quality       sql.NullString  `json:"quality"`
+	UploadDate    string          `json:"upload_date"`
 }
 
 // AuthorData represents an author with role
@@ -1236,9 +1684,9 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 		// Get edition data
 		var edition EditionData
 		err = db.QueryRow(`
-			SELECT id, title, language, isbn, ean, udc, bbk, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality
+			SELECT id, title, language, isbn, ean, udc, bbk, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date
 			FROM editions WHERE id = $1
-		`, id).Scan(&edition.ID, &edition.Title, &edition.Language, &edition.ISBN, &edition.EAN, &edition.UDC, &edition.BBK, &edition.Publisher, &edition.Year, &edition.City, &edition.Pages, &edition.Series, &edition.SeriesNumber, &edition.Annotation, &edition.Source, &edition.IsComplete, &edition.Quality)
+		`, id).Scan(&edition.ID, &edition.Title, &edition.Language, &edition.ISBN, &edition.EAN, &edition.UDC, &edition.BBK, &edition.Publisher, &edition.Year, &edition.City, &edition.Pages, &edition.Series, &edition.SeriesNumber, &edition.Annotation, &edition.Source, &edition.IsComplete, &edition.Quality, &edition.UploadDate)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1247,7 +1695,7 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 
 		// Get authors
 		rows, err := db.Query(`
-			SELECT p.id, p.first_name, p.last_name, wc.role
+			SELECT p.id, COALESCE(p.first_name, ''), p.last_name, wc.role
 			FROM work_contributors wc
 			JOIN persons p ON p.id = wc.person_id
 			WHERE wc.work_id = $1
@@ -1596,7 +2044,7 @@ func getTags(db *sql.DB) gin.HandlerFunc {
 		}
 		defer rows.Close()
 
-		var tags []TagData
+		tags := make([]TagData, 0)
 		for rows.Next() {
 			var tag TagData
 			if err := rows.Scan(&tag.ID, &tag.Name); err != nil {
@@ -1635,7 +2083,7 @@ func createTag(db *sql.DB) gin.HandlerFunc {
 // getPersons returns all persons (authors, etc.)
 func getPersons(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, first_name, last_name FROM persons ORDER BY last_name, first_name")
+		rows, err := db.Query("SELECT id, COALESCE(first_name, ''), last_name FROM persons ORDER BY last_name, first_name")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1690,6 +2138,8 @@ func getLanguages(db *sql.DB) gin.HandlerFunc {
 // ImportBookFile handles single file upload
 func importBookFile(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		cfg := getConfig(c)
+
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
@@ -1700,7 +2150,7 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		filename := header.Filename
 		ext := strings.ToLower(filepath.Ext(filename))
 
-		tmpDir := "./tmpBookarch"
+		tmpDir := cfg.TempBookarchDir()
 		if err := os.MkdirAll(tmpDir, 0755); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create directory"})
 			return
@@ -1712,32 +2162,144 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		hash := sha256.Sum256(data)
-		hashStr := hex.EncodeToString(hash[:])
-
-		var existingFileID int
-		err = db.QueryRow("SELECT id FROM edition_files WHERE file_hash = $1", hashStr).Scan(&existingFileID)
-		if err == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"duplicate": true,
-				"message":   "File already exists",
-				"file_hash": hashStr,
-			})
-			return
-		}
-
-		var bookInfo *utils.FB2Book
-		var parseErr error
+	// Phase 1: extract content and native metadata (no LLM yet)
+	var bookContent []byte
+	var hashStr string
+	var bookInfo *utils.FB2Book
+	var parseErr error
+		var zipContentType utils.ZipContentType
 
 		switch ext {
-		case ".fb2":
-			bookInfo, parseErr = utils.ParseFB2FromBytes(data)
-		case ".fb2.zip", ".zip":
-			bookInfo, parseErr = utils.ParseFB2FromZip(filename)
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported file format: %s", ext)})
+	case ".fb2":
+		bookContent = data
+		bookInfo, parseErr = utils.ParseFB2FromBytes(data)
+	case ".zip":
+		zipResult, zipErr := utils.DetectZipContent(data)
+		if zipErr != nil {
+			logImportError(filename, "", "Failed to extract from zip: "+zipErr.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to extract book from archive"})
 			return
 		}
+		bookContent = zipResult.Content
+		zipContentType = zipResult.ContentType
+		if zipResult.ContentType == utils.ZipContentFB2 {
+			bookInfo, parseErr = utils.ParseFB2FromBytes(bookContent)
+		}
+	case ".epub":
+		bookContent = data
+		epubInfo, epubErr := utils.ParseEPUBFromBytes(data)
+		if epubErr == nil {
+			bookInfo = &utils.FB2Book{
+				Title:      epubInfo.Title,
+				Authors:    epubInfo.Authors,
+				Lang:       epubInfo.Lang,
+				Year:       epubInfo.Year,
+				ISBN:       epubInfo.ISBN,
+				Publisher:  epubInfo.Publisher,
+				Genres:     epubInfo.Genres,
+				Annotation: epubInfo.Annotation,
+				Sequence:   epubInfo.Sequence,
+			}
+		} else {
+			parseErr = epubErr
+		}
+	case ".pdf", ".docx", ".doc":
+		bookContent = data
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported file format: %s", ext)})
+		return
+	}
+
+	if bookContent == nil {
+		logImportError(filename, "", "Failed to extract book content")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to extract book content from archive"})
+		return
+	}
+
+	// Phase 2: duplicate check (hash before LLM)
+	hash := sha256.Sum256(bookContent)
+	hashStr = hex.EncodeToString(hash[:])
+
+	var existingFileID int
+	var existingTitle string
+	var existingAuthors string
+	err = db.QueryRow(`
+		SELECT ef.id, w.original_title,
+			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
+		FROM edition_files ef
+		JOIN editions e ON ef.edition_id = e.id
+		JOIN works w ON e.work_id = w.id
+		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
+		LEFT JOIN persons p ON wc.person_id = p.id
+		WHERE ef.file_hash = $1
+		GROUP BY ef.id, w.original_title
+	`, hashStr).Scan(&existingFileID, &existingTitle, &existingAuthors)
+	if err == nil {
+		if existingAuthors == "" {
+			existingAuthors = "Неизвестный автор"
+		}
+		log.Printf("Duplicate file detected: hash=%s, title='%s', authors='%s'", hashStr, existingTitle, existingAuthors)
+		c.JSON(http.StatusOK, gin.H{
+			"duplicate": true,
+			"message":   fmt.Sprintf("Книга уже существует в библиотеке: %s — %s", existingAuthors, existingTitle),
+			"file_hash": hashStr,
+			"title":     existingTitle,
+			"authors":   existingAuthors,
+		})
+		return
+	}
+
+	// Phase 3: LLM recognition for formats without native metadata
+	var llmResult *utils.LLMResult
+
+	needsLLM := ext == ".pdf" || ext == ".docx" || ext == ".doc"
+	if ext == ".zip" && zipContentType != utils.ZipContentFB2 {
+		needsLLM = true
+	}
+
+	if needsLLM {
+		switch ext {
+		case ".zip":
+			switch zipContentType {
+			case utils.ZipContentPDF:
+				text, textErr := utils.ExtractPDFText(bookContent, 3)
+				if textErr == nil {
+					llmResult = recognizeBook(text, cfg)
+				}
+			case utils.ZipContentDOCX:
+				text, textErr := utils.ExtractDOCXText(bookContent, 3)
+				if textErr == nil {
+					llmResult = recognizeBook(text, cfg)
+				}
+			case utils.ZipContentDOC:
+				text, textErr := utils.ExtractDOCText(bookContent, 3)
+				if textErr == nil {
+					llmResult = recognizeBook(text, cfg)
+				}
+			}
+		case ".pdf":
+			text, textErr := utils.ExtractPDFText(bookContent, 3)
+			if textErr == nil {
+				llmResult = recognizeBook(text, cfg)
+			}
+		case ".docx":
+			text, textErr := utils.ExtractDOCXText(bookContent, 3)
+			if textErr == nil {
+				llmResult = recognizeBook(text, cfg)
+			}
+		case ".doc":
+			var text string
+			var textErr error
+			if len(bookContent) > 2 && bookContent[0] == 0x50 && bookContent[1] == 0x4b {
+				text, textErr = utils.ExtractDOCXText(bookContent, 3)
+			} else {
+				text, textErr = utils.ExtractDOCText(bookContent, 3)
+			}
+			if textErr == nil {
+				llmResult = recognizeBook(text, cfg)
+			}
+		}
+	}
 
 		tmpPath := filepath.Join(tmpDir, filename)
 		tmpFile, err := os.Create(tmpPath)
@@ -1749,9 +2311,9 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		tmpFile.Write(data)
 		tmpFile.Close()
 
-		destDir := "./bookarch"
+		destDir := cfg.Directories.Bookarch
 		if err := os.MkdirAll(destDir, 0755); err != nil {
-			logImportError(filename, hashStr, "Failed to create directory: "+err.Error())
+			logImportError(filename, hashStr, "Failed to create directory: "+err.Error(), cfg)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create bookarch directory"})
 			return
 		}
@@ -1844,6 +2406,23 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		title := filename
 		if bookInfo != nil && bookInfo.Title != "" {
 			title = bookInfo.Title
+		} else if llmResult != nil && llmResult.Title != "" {
+			title = llmResult.Title
+		}
+
+		var authors []string
+		if bookInfo != nil {
+			authors = bookInfo.Authors
+		} else if llmResult != nil && len(llmResult.Authors) > 0 {
+			authors = llmResult.Authors
+		}
+		if len(authors) == 0 {
+			authors = []string{"Неизвестный автор"}
+		}
+
+		var existingWorkID int
+		if title != filename {
+			existingWorkID = findWorkByTitleAndAuthors(db, title, authors)
 		}
 
 		workType := "novel"
@@ -1869,75 +2448,99 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		}
 
 		var workID int
-		err = tx.QueryRow(`
-			INSERT INTO works (original_title, original_language, first_published, work_type, annotation)
-			VALUES ($1, $2, $3, $4, $5)
-			RETURNING id
-		`, title, langCode, year, workType, "").Scan(&workID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		var authors []string
-		if bookInfo != nil {
-			authors = bookInfo.Authors
-		}
-
-		for _, authorName := range authors {
-			firstName, lastName := utils.NormalizeAuthorName(authorName)
-			
-			var personID int
+		if existingWorkID > 0 {
+			workID = existingWorkID
+			log.Printf("Found existing work id=%d for title='%s'", workID, title)
+		} else {
 			err = tx.QueryRow(`
-				INSERT INTO persons (last_name, first_name)
-				VALUES ($1, $2)
-				ON CONFLICT (first_name, last_name) DO NOTHING
+				INSERT INTO works (original_title, original_language, first_published, work_type, annotation)
+				VALUES ($1, $2, $3, $4, $5)
 				RETURNING id
-			`, lastName, firstName).Scan(&personID)
+			`, title, langCode, year, workType, "").Scan(&workID)
 			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+
+		if existingWorkID == 0 {
+			for _, authorName := range authors {
+				firstName, lastName := utils.NormalizeAuthorName(authorName)
+
+				var personID int
 				err = tx.QueryRow(`
-					SELECT id FROM persons WHERE last_name = $1 AND (first_name = $2 OR (first_name IS NULL AND $2 = ''))
+					INSERT INTO persons (last_name, first_name)
+					VALUES ($1, $2)
+					ON CONFLICT (first_name, last_name) DO NOTHING
+					RETURNING id
 				`, lastName, firstName).Scan(&personID)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
+					err = tx.QueryRow(`
+						SELECT id FROM persons WHERE last_name = $1 AND (first_name = $2 OR (first_name IS NULL AND $2 = ''))
+					`, lastName, firstName).Scan(&personID)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					}
 				}
-			}
 
-			_, err = tx.Exec(`
-				INSERT INTO work_contributors (work_id, person_id, role)
-				VALUES ($1, $2, 'author')
-				ON CONFLICT DO NOTHING
-			`, workID, personID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-		}
-
-		if len(authors) == 0 {
-			var personID int
-			err = tx.QueryRow(`
-				INSERT INTO persons (last_name)
-				VALUES ($1)
-				ON CONFLICT (first_name, last_name) DO NOTHING
-				RETURNING id
-			`, "Неизвестный автор").Scan(&personID)
-			if err != nil {
-				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name = 'Неизвестный автор'`).Scan(&personID)
+				_, err = tx.Exec(`
+					INSERT INTO work_contributors (work_id, person_id, role)
+					VALUES ($1, $2, 'author')
+					ON CONFLICT DO NOTHING
+				`, workID, personID)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
 				}
 			}
 
-			_, err = tx.Exec(`
-				INSERT INTO work_contributors (work_id, person_id, role)
-				VALUES ($1, $2, 'author')
-			`, workID, personID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
+			if len(authors) == 0 {
+				var personID int
+				err = tx.QueryRow(`
+					INSERT INTO persons (last_name)
+					VALUES ($1)
+					ON CONFLICT (first_name, last_name) DO NOTHING
+					RETURNING id
+				`, "Неизвестный автор").Scan(&personID)
+				if err != nil {
+					err = tx.QueryRow(`SELECT id FROM persons WHERE last_name = 'Неизвестный автор'`).Scan(&personID)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					}
+				}
+
+				_, err = tx.Exec(`
+					INSERT INTO work_contributors (work_id, person_id, role)
+					VALUES ($1, $2, 'author')
+				`, workID, personID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+			}
+		}
+
+		if existingWorkID == 0 && bookInfo != nil {
+			for _, genreName := range bookInfo.Genres {
+				var genreID int
+				err = tx.QueryRow(`
+					INSERT INTO genres (name) VALUES ($1)
+					ON CONFLICT (name) DO NOTHING RETURNING id
+				`, genreName).Scan(&genreID)
+				if err != nil {
+					err = tx.QueryRow(`SELECT id FROM genres WHERE name = $1`, genreName).Scan(&genreID)
+					if err != nil {
+						continue
+					}
+				}
+				_, err = tx.Exec(`
+					INSERT INTO work_genres (work_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
+				`, workID, genreID)
+				if err != nil {
+					continue
+				}
 			}
 		}
 
@@ -1947,19 +2550,26 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		}
 
 		var editionID int
+		isbn := ""
+		if bookInfo != nil {
+			isbn = bookInfo.ISBN
+		}
 		err = tx.QueryRow(`
-			INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+			INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
 			RETURNING id
-		`, workID, title, langCode, publisher, year, "imported", "good").Scan(&editionID)
+		`, workID, title, langCode, publisher, year, "imported", "good", isbn).Scan(&editionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		var formatID int
-		formatName := "FB2.ZIP"
-		err = tx.QueryRow("SELECT id FROM formats WHERE name = $1", formatName).Scan(&formatID)
+	var formatID int
+	formatName := utils.GetFormatNameByExt(ext)
+	if ext == ".zip" {
+		formatName = utils.GetFormatNameFromZip(filename)
+	}
+	err = tx.QueryRow("SELECT id FROM formats WHERE name = $1", formatName).Scan(&formatID)
 		if err != nil {
 			formatID = 1
 		}
@@ -1970,7 +2580,7 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 			zipSize = fileInfo.Size()
 		}
 
-		relPath := filepath.Join("bookarch", subDir, zipName)
+		relPath := filepath.Join(filepath.Base(cfg.Directories.Bookarch), subDir, zipName)
 		_, err = tx.Exec(`
 			INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
 			VALUES ($1, $2, $3, $4, $5, $6)
@@ -1998,223 +2608,510 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 			if bookInfo.ISBN != "" {
 				result["isbn"] = bookInfo.ISBN
 			}
-		} else {
+		} else if parseErr != nil {
 			result["parsed"] = false
 			result["parse_error"] = parseErr.Error()
+		} else {
+			result["parsed"] = true
+			if llmResult != nil {
+				result["authors"] = llmResult.Authors
+			}
 		}
 
 		c.JSON(http.StatusCreated, result)
 	}
 }
 
-// ImportBooksFromDirectory handles batch import from directory
-func importBooksFromDirectory(db *sql.DB) gin.HandlerFunc {
+func importUploadFiles() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		dirPath := c.PostForm("directory")
-		if dirPath == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Directory path not provided"})
-			return
-		}
+		cfg := getConfig(c)
 
-		entries, err := os.ReadDir(dirPath)
+		form, err := c.MultipartForm()
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Cannot read directory: %v", err)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No files provided"})
 			return
 		}
 
-		var results []gin.H
-		successCount := 0
-		errorCount := 0
+		files := form.File["files"]
+		if len(files) == 0 {
+			files = form.File["file"]
+		}
+		if len(files) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No files provided"})
+			return
+		}
 
-		for _, entry := range entries {
-			if entry.IsDir() {
+		tmpDir := filepath.Join(cfg.Directories.Temp, fmt.Sprintf("upload_%d", time.Now().UnixNano()))
+		if err := os.MkdirAll(tmpDir, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot create temp directory"})
+			return
+		}
+
+		var savedFiles []string
+		for _, fh := range files {
+			if !isSupportedFile(fh.Filename) {
 				continue
 			}
-
-			filename := entry.Name()
-			ext := strings.ToLower(filepath.Ext(filename))
-
-			if ext != ".fb2" && ext != ".fb2.zip" && ext != ".epub" && ext != ".zip" {
-				continue
-			}
-
-			filePath := filepath.Join(dirPath, filename)
-
-			file, err := os.Open(filePath)
+			f, err := fh.Open()
 			if err != nil {
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "Cannot open file"})
 				continue
 			}
-
-			data, err := io.ReadAll(file)
-			file.Close()
+			data, err := io.ReadAll(f)
+			f.Close()
 			if err != nil {
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "Cannot read file"})
 				continue
 			}
-
-			var bookInfo *utils.FB2Book
-			if ext == ".fb2" || ext == ".fb2.zip" {
-				if ext == ".fb2.zip" || strings.HasSuffix(filename, ".zip") {
-					bookInfo, _ = utils.ParseFB2FromZip(filePath)
-				} else {
-					bookInfo, _ = utils.ParseFB2FromBytes(data)
-				}
-			}
-
-			title := filename
-			if bookInfo != nil && bookInfo.Title != "" {
-				title = bookInfo.Title
-			}
-
-			destDir := "./bookarch"
-			os.MkdirAll(destDir, 0755)
-			destPath := filepath.Join(destDir, filename)
-			
+			destPath := filepath.Join(tmpDir, fh.Filename)
 			if err := os.WriteFile(destPath, data, 0644); err != nil {
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "Cannot save file"})
 				continue
 			}
+			savedFiles = append(savedFiles, fh.Filename)
+		}
 
-			tx, err := db.Begin()
-			if err != nil {
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "Database error"})
-				continue
-			}
+		if len(savedFiles) == 0 {
+			os.RemoveAll(tmpDir)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No supported files found"})
+			return
+		}
 
-			langCode := "eng"
-			if bookInfo != nil && bookInfo.Lang != "" {
-				langCode = utils.NormalizeLanguage(bookInfo.Lang)
-			}
-
-			workType := "novel"
-			var year *int
-			if bookInfo != nil && bookInfo.Year != "" {
-				if y, parseErr := strconv.Atoi(bookInfo.Year); parseErr == nil {
-					year = &y
-				}
-			}
-
-			var workID int
-			err = tx.QueryRow(`
-				INSERT INTO works (original_title, original_language, first_published, work_type)
-				VALUES ($1, $2, $3, $4)
-				RETURNING id
-			`, title, langCode, year, workType).Scan(&workID)
-			if err != nil {
-				tx.Rollback()
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": err.Error()})
-				continue
-			}
-
-			var authors []string
-			if bookInfo != nil {
-				authors = bookInfo.Authors
-			}
-
-			if len(authors) == 0 {
-				authors = []string{"Неизвестный автор"}
-			}
-
-			for _, authorName := range authors {
-				firstName, lastName := utils.NormalizeAuthorName(authorName)
-				
-				var personID int
-				err = tx.QueryRow(`
-					INSERT INTO persons (last_name, first_name)
-					VALUES ($1, $2)
-					ON CONFLICT (first_name, last_name) DO NOTHING
-					RETURNING id
-				`, lastName, firstName).Scan(&personID)
-				if err != nil {
-					err = tx.QueryRow(`
-						SELECT id FROM persons WHERE last_name = $1 AND (first_name = $2 OR (first_name IS NULL AND $2 = ''))
-					`, lastName, firstName).Scan(&personID)
-					if err != nil {
-						tx.Rollback()
-						errorCount++
-						results = append(results, gin.H{"file": filename, "error": "Author error"})
-						continue
-					}
-				}
-
-				_, err = tx.Exec(`
-					INSERT INTO work_contributors (work_id, person_id, role)
-					VALUES ($1, $2, 'author')
-					ON CONFLICT DO NOTHING
-				`, workID, personID)
-				if err != nil {
-					tx.Rollback()
-					errorCount++
-					results = append(results, gin.H{"file": filename, "error": "Contributor error"})
-					continue
-				}
-			}
-
-			var editionID int
-			err = tx.QueryRow(`
-				INSERT INTO editions (work_id, title, language, year, source, quality, upload_date)
-				VALUES ($1, $2, $3, $4, $5, $6, NOW())
-				RETURNING id
-			`, workID, title, langCode, year, "imported", "good").Scan(&editionID)
-			if err != nil {
-				tx.Rollback()
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "Edition error"})
-				continue
-			}
-
-			formatName := strings.ToUpper(strings.TrimPrefix(ext, "."))
-			if formatName == "ZIP" {
-				formatName = "FB2.ZIP"
-			}
-
-			var formatID int
-			err = tx.QueryRow("SELECT id FROM formats WHERE name = $1", formatName).Scan(&formatID)
-			if err != nil {
-				formatID = 1
-			}
-
-			relPath := filepath.Join("bookarch", filename)
-			_, err = tx.Exec(`
-				INSERT INTO edition_files (edition_id, format_id, file_path, file_size, is_primary)
-				VALUES ($1, $2, $3, $4, $5)
-			`, editionID, formatID, relPath, len(data), true)
-			if err != nil {
-				tx.Rollback()
-				errorCount++
-				results = append(results, gin.H{"file": filename, "error": "File entry error"})
-				continue
-			}
-
-			tx.Commit()
-			successCount++
-			results = append(results, gin.H{
-				"file":        filename,
-				"success":     true,
-				"work_id":     workID,
-				"edition_id":  editionID,
-				"title":       title,
-			})
+		err = importManager.Start(tmpDir, savedFiles)
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"total":       len(results),
-			"success":     successCount,
-			"errors":      errorCount,
-			"results":     results,
+			"started": true,
+			"total":   len(savedFiles),
+			"tmp_dir": tmpDir,
 		})
 	}
 }
 
-func logImportError(filename, hash, errorMsg string) {
-	os.MkdirAll("./logs", 0755)
-	logFile := fmt.Sprintf("./logs/import_errors_%s.log", time.Now().Format("2006-01-02"))
+func processDirectoryImport(ctx context.Context, dirPath string, db *sql.DB, cfg *config.Config, items []ImportItem, updateFn func(int, string, string, string)) {
+	for i := range items {
+		select {
+		case <-ctx.Done():
+			updateFn(i, "cancelled", "", "")
+			return
+		default:
+		}
+		updateFn(i, "processing", "", "")
+		importOneFile(ctx, dirPath, items[i].File, i, db, cfg, updateFn)
+	}
+}
+
+func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *sql.DB, cfg *config.Config, updateFn func(int, string, string, string)) {
+	filePath := filepath.Join(dirPath, filename)
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		updateFn(idx, "error", "", "Cannot open file")
+		return
+	}
+	data, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		updateFn(idx, "error", "", "Cannot read file")
+		return
+	}
+
+	var bookContent []byte
+	var bookInfo *utils.FB2Book
+	var zipContentType utils.ZipContentType
+
+	switch ext {
+	case ".fb2":
+		bookContent = data
+		bookInfo, _ = utils.ParseFB2FromBytes(data)
+	case ".zip":
+		zipResult, zipErr := utils.DetectZipContent(data)
+		if zipErr != nil {
+			updateFn(idx, "error", "", "Cannot extract from zip")
+			return
+		}
+		bookContent = zipResult.Content
+		zipContentType = zipResult.ContentType
+		if zipResult.ContentType == utils.ZipContentFB2 {
+			bookInfo, _ = utils.ParseFB2FromBytes(bookContent)
+		} else if zipResult.ContentType == utils.ZipContentEPUB {
+			epubInfo, _ := utils.ParseEPUBFromBytes(bookContent)
+			if epubInfo != nil {
+				bookInfo = &utils.FB2Book{
+					Title: epubInfo.Title, Authors: epubInfo.Authors,
+					Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
+					Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
+					Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
+				}
+			}
+		}
+	case ".epub":
+		bookContent = data
+		epubInfo, _ := utils.ParseEPUBFromBytes(data)
+		if epubInfo != nil {
+			bookInfo = &utils.FB2Book{
+				Title: epubInfo.Title, Authors: epubInfo.Authors,
+				Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
+				Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
+				Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
+			}
+		}
+	case ".pdf", ".docx", ".doc":
+		bookContent = data
+	}
+
+	if bookContent == nil {
+		updateFn(idx, "error", "", "Cannot extract book content")
+		return
+	}
+
+	hash := sha256.Sum256(bookContent)
+	hashStr := hex.EncodeToString(hash[:])
+
+	var existingTitle, existingAuthors string
+	err = db.QueryRow(`
+		SELECT w.original_title,
+			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
+		FROM edition_files ef
+		JOIN editions e ON ef.edition_id = e.id
+		JOIN works w ON e.work_id = w.id
+		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
+		LEFT JOIN persons p ON wc.person_id = p.id
+		WHERE ef.file_hash = $1
+		GROUP BY w.original_title
+	`, hashStr).Scan(&existingTitle, &existingAuthors)
+	if err == nil {
+		if existingAuthors == "" {
+			existingAuthors = "Неизвестный автор"
+		}
+		log.Printf("Duplicate file: hash=%s, title='%s'", hashStr, existingTitle)
+		updateFn(idx, "skipped", existingTitle, "")
+		return
+	}
+
+	var llmResult *utils.LLMResult
+	needsLLM := ext == ".pdf" || ext == ".docx" || ext == ".doc"
+	if ext == ".zip" && zipContentType != utils.ZipContentFB2 {
+		needsLLM = true
+	}
+	if needsLLM {
+		var text string
+		var textErr error
+		switch ext {
+		case ".zip":
+			switch zipContentType {
+			case utils.ZipContentPDF:
+				text, textErr = utils.ExtractPDFText(bookContent, 3)
+			case utils.ZipContentDOCX:
+				text, textErr = utils.ExtractDOCXText(bookContent, 3)
+			case utils.ZipContentDOC:
+				text, textErr = utils.ExtractDOCText(bookContent, 3)
+			}
+		case ".pdf":
+			text, textErr = utils.ExtractPDFText(bookContent, 3)
+		case ".docx":
+			text, textErr = utils.ExtractDOCXText(bookContent, 3)
+		case ".doc":
+			if len(bookContent) > 2 && bookContent[0] == 0x50 && bookContent[1] == 0x4b {
+				text, textErr = utils.ExtractDOCXText(bookContent, 3)
+			} else {
+				text, textErr = utils.ExtractDOCText(bookContent, 3)
+			}
+		}
+		if textErr == nil && text != "" && cfg.LLM.BaseURL != "" {
+			llmResult = recognizeBook(text, cfg)
+		}
+	}
+
+	title := filename
+	if bookInfo != nil && bookInfo.Title != "" {
+		title = bookInfo.Title
+	} else if llmResult != nil && llmResult.Title != "" {
+		title = llmResult.Title
+	}
+
+	var authors []string
+	if bookInfo != nil && len(bookInfo.Authors) > 0 {
+		authors = bookInfo.Authors
+	} else if llmResult != nil && len(llmResult.Authors) > 0 {
+		authors = llmResult.Authors
+	}
+	if len(authors) == 0 {
+		authors = []string{"Неизвестный автор"}
+	}
+
+	var existingWorkID int
+	if title != filename {
+		existingWorkID = findWorkByTitleAndAuthors(db, title, authors)
+	}
+
+	destDir := cfg.Directories.Bookarch
+	os.MkdirAll(destDir, 0755)
+
+	subDir := getNextSubdir(destDir)
+	if err := os.MkdirAll(filepath.Join(destDir, subDir), 0755); err != nil {
+		updateFn(idx, "error", "", "Cannot create subdirectory")
+		return
+	}
+
+	baseName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	zipName := baseName + ".zip"
+	destPath := filepath.Join(destDir, subDir, zipName)
+
+	idxUnique := 1
+	for {
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			break
+		}
+		zipName = fmt.Sprintf("%s_%d.zip", baseName, idxUnique)
+		destPath = filepath.Join(destDir, subDir, zipName)
+		idxUnique++
+	}
+
+	zipFile, err := os.Create(destPath)
+	if err != nil {
+		updateFn(idx, "error", "", "Cannot create zip file")
+		return
+	}
+
+	zipWriter := zip.NewWriter(zipFile)
+	fw, err := zipWriter.Create(filepath.Base(filename))
+	if err != nil {
+		zipWriter.Close()
+		zipFile.Close()
+		updateFn(idx, "error", "", "Cannot create zip entry")
+		return
+	}
+
+	if _, err := fw.Write(data); err != nil {
+		zipWriter.Close()
+		zipFile.Close()
+		updateFn(idx, "error", "", "Cannot write to zip")
+		return
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		zipFile.Close()
+		updateFn(idx, "error", "", "Cannot close zip writer")
+		return
+	}
+
+	if err := zipFile.Close(); err != nil {
+		updateFn(idx, "error", "", "Cannot close zip file")
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		updateFn(idx, "error", "", "Database error")
+		return
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	langCode := "eng"
+	if bookInfo != nil && bookInfo.Lang != "" {
+		langCode = utils.NormalizeLanguage(bookInfo.Lang)
+	}
+
+	var langExists bool
+	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", langCode).Scan(&langExists)
+	if err != nil || !langExists {
+		langCode = "eng"
+	}
+
+	workType := "novel"
+	var year *int
+	if bookInfo != nil && bookInfo.Year != "" {
+		if y, parseErr := strconv.Atoi(bookInfo.Year); parseErr == nil {
+			year = &y
+		}
+	}
+
+	var workID int
+	var createdWork bool
+	if existingWorkID > 0 {
+		workID = existingWorkID
+		log.Printf("Found existing work id=%d for title='%s'", workID, title)
+	} else {
+		createdWork = true
+		err = tx.QueryRow(`
+			INSERT INTO works (original_title, original_language, first_published, work_type)
+			VALUES ($1, $2, $3, $4) RETURNING id
+		`, title, langCode, year, workType).Scan(&workID)
+		if err != nil {
+			updateFn(idx, "error", "", err.Error())
+			return
+		}
+	}
+
+	if createdWork {
+		for _, authorName := range authors {
+			firstName, lastName := utils.NormalizeAuthorName(authorName)
+			var personID int
+			err = tx.QueryRow(`
+				INSERT INTO persons (last_name, first_name)
+				VALUES ($1, $2) ON CONFLICT (first_name, last_name) DO NOTHING RETURNING id
+			`, lastName, firstName).Scan(&personID)
+			if err != nil {
+				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name=$1 AND (first_name=$2 OR (first_name IS NULL AND $2=''))`,
+					lastName, firstName).Scan(&personID)
+				if err != nil {
+					updateFn(idx, "error", "", "Author error")
+					return
+				}
+			}
+			_, err = tx.Exec(`INSERT INTO work_contributors (work_id, person_id, role) VALUES ($1,$2,'author') ON CONFLICT DO NOTHING`,
+				workID, personID)
+			if err != nil {
+				updateFn(idx, "error", "", "Contributor error")
+				return
+			}
+		}
+	}
+
+	if createdWork && bookInfo != nil {
+		for _, genreName := range bookInfo.Genres {
+			var genreID int
+			err = tx.QueryRow(`
+				INSERT INTO genres (name) VALUES ($1)
+				ON CONFLICT (name) DO NOTHING RETURNING id
+			`, genreName).Scan(&genreID)
+			if err != nil {
+				err = tx.QueryRow(`SELECT id FROM genres WHERE name = $1`, genreName).Scan(&genreID)
+				if err != nil {
+					continue
+				}
+			}
+			_, err = tx.Exec(`
+				INSERT INTO work_genres (work_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
+			`, workID, genreID)
+			if err != nil {
+				continue
+			}
+		}
+	}
+
+	var editionID int
+	publisher := ""
+	isbn := ""
+	if bookInfo != nil {
+		publisher = bookInfo.Publisher
+		isbn = bookInfo.ISBN
+	}
+	err = tx.QueryRow(`
+		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8) RETURNING id
+	`, workID, title, langCode, publisher, year, "imported", "good", isbn).Scan(&editionID)
+	if err != nil {
+		updateFn(idx, "error", "", "Edition error")
+		return
+	}
+
+	formatName := utils.GetFormatNameByExt(ext)
+	if ext == ".zip" {
+		if zipContentType != utils.ZipContentUnknown {
+			formatName = utils.ZipContentTypeToFormatName(zipContentType)
+		} else {
+			formatName = utils.GetFormatNameFromZip(filename)
+		}
+	}
+	var formatID int
+	err = tx.QueryRow("SELECT id FROM formats WHERE name=$1", formatName).Scan(&formatID)
+	if err != nil {
+		formatID = 1
+	}
+
+	relPath := filepath.Join(filepath.Base(cfg.Directories.Bookarch), subDir, zipName)
+	_, err = tx.Exec(`
+		INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, editionID, formatID, relPath, len(bookContent), hashStr, true)
+	if err != nil {
+		updateFn(idx, "error", "", "File entry error")
+		return
+	}
+
+	updateFn(idx, "done", title, "")
+}
+
+func findWorkByTitleAndAuthors(db *sql.DB, title string, authors []string) int {
+	rows, err := db.Query(`
+		SELECT DISTINCT w.id
+		FROM works w
+		JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+		JOIN persons p ON p.id = wc.person_id
+		WHERE LOWER(w.original_title) = LOWER($1)
+	`, title)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+
+	authorSet := make(map[string]bool)
+	for _, a := range authors {
+		_, lastName := utils.NormalizeAuthorName(a)
+		authorSet[strings.ToLower(lastName)] = true
+	}
+
+	for rows.Next() {
+		var workID int
+		if err := rows.Scan(&workID); err != nil {
+			continue
+		}
+
+		authorRows, err := db.Query(`
+			SELECT p.last_name
+			FROM work_contributors wc
+			JOIN persons p ON p.id = wc.person_id
+			WHERE wc.work_id = $1 AND wc.role = 'author'
+		`, workID)
+		if err != nil {
+			continue
+		}
+
+		match := true
+		found := make(map[string]bool)
+		for authorRows.Next() {
+			var lastName string
+			authorRows.Scan(&lastName)
+			found[strings.ToLower(lastName)] = true
+		}
+		authorRows.Close()
+
+		for k := range authorSet {
+			if !found[k] {
+				match = false
+				break
+			}
+		}
+		for k := range found {
+			if !authorSet[k] {
+				match = false
+				break
+			}
+		}
+
+		if match {
+			return workID
+		}
+	}
+	return 0
+}
+
+func logImportError(filename, hash, errorMsg string, cfg ...*config.Config) {
+	logsDir := "./logs"
+	if len(cfg) > 0 && cfg[0] != nil {
+		logsDir = cfg[0].Directories.Logs
+	}
+	os.MkdirAll(logsDir, 0755)
+	logFile := fmt.Sprintf("%s/import_errors_%s.log", logsDir, time.Now().Format("2006-01-02"))
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Failed to log import error: %v", err)
@@ -2276,8 +3173,66 @@ func getNextSubdir(baseDir string) string {
 	return fmt.Sprintf("%05d", maxDir)
 }
 
+func startImport() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		dirPath := c.PostForm("directory")
+		if dirPath == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Directory path not provided"})
+			return
+		}
+
+		var files []string
+		err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			relPath, _ := filepath.Rel(dirPath, path)
+			if !isSupportedFile(relPath) {
+				return nil
+			}
+			files = append(files, relPath)
+			return nil
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot walk directory: " + err.Error()})
+			return
+		}
+
+		if len(files) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No supported files found in directory"})
+			return
+		}
+
+		err = importManager.Start(dirPath, files)
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"started": true, "total": len(files)})
+	}
+}
+
+func getImportStatus() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, importManager.Status())
+	}
+}
+
+func cancelImport() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		importManager.Cancel()
+		c.JSON(http.StatusOK, gin.H{"cancelled": true})
+	}
+}
+
 func downloadBook(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		cfg := getConfig(c)
+
 		editionID := c.Param("id")
 
 		var filePath, title string
@@ -2303,7 +3258,7 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		tmpDir := "./tempfld"
+		tmpDir := cfg.Directories.Temp
 		os.MkdirAll(tmpDir, 0755)
 
 		safeName := fmt.Sprintf("%s_%s.zip", sanitizeFilename(title), editionID)
@@ -2541,5 +3496,14 @@ func getShelfCount(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"count": count})
+	}
+}
+
+func getAppConfig() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		c.JSON(http.StatusOK, gin.H{
+			"enable_delete": cfg.Server.EnableDelete,
+		})
 	}
 }

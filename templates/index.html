@@ -8,17 +8,16 @@
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>Домашняя библиотека</h1>
-            <button id="loadBooksBtn" class="btn">Загрузить книги</button>
-            <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
-        </header>
+
 
         <nav class="tabs">
             <button class="tab active" data-tab="authors">Авторы</button>
             <button class="tab" data-tab="books">Книги</button>
-            <button class="tab" data-tab="genres">Жанры</button>
-            <button class="tab" data-tab="import">Импорт</button>
+            <button class="tab" data-tab="genres" style="display:none">Жанры</button>
+            <button class="tab" data-tab="import" style="display:none">Импорт</button>
+            <span class="tabs-spacer"></span>
+            <button id="loadBooksBtn" class="btn load-books-btn">Загрузить книги</button>
+            <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
         </nav>
 
         <main>
@@ -26,34 +25,67 @@
             <div id="authors" class="tab-content active">
                 <div class="filters">
                     <div class="filter-group">
-                        <label for="authorFilter">ФИО автора:</label>
                         <input type="text" id="authorFilter" placeholder="Поиск по автору...">
                     </div>
                     <div class="filter-group">
-                        <label for="bookFilter">Название книги:</label>
                         <input type="text" id="bookFilter" placeholder="Поиск по книге...">
                     </div>
                     <div class="filter-group">
-                        <label for="genreFilter">Жанр:</label>
                         <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
                     </div>
                     <button id="applyFilters" class="btn">Применить</button>
                     <button id="clearFilters" class="btn btn-secondary">Очистить</button>
                     <span class="shelf-link">
-                        <a href="/shelf/" class="shelf-link">📚 Полка<span id="shelfCount">(0)</span></a>
+                        <a href="/shelf/" class="shelf-link">📚 Полка<span class="shelf-count">(0)</span></a>
                         <button id="addToShelfBtn" class="btn btn-small">Добавить на полку</button>
                         <button id="clearShelfBtn" class="btn btn-small btn-secondary">Очистить полку</button>
                     </span>
                 </div>
 
+                <div class="pagination" id="authorsPagination"></div>
                 <div class="tree-view" id="authorsTree">
                     <div class="loading">Загрузка...</div>
                 </div>
+                <div class="pagination" id="authorsPaginationBottom"></div>
             </div>
 
             <!-- Вкладка Книги -->
             <div id="books" class="tab-content">
-                <div class="coming-soon">Раздел в разработке</div>
+                <div class="filters">
+                    <div class="filter-group">
+                        <input type="text" id="bookAuthorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="bookTitleFilter" placeholder="Поиск по названию...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="bookGenreFilter" placeholder="Поиск по жанру...">
+                    </div>
+                    <div class="filter-date-row">
+                        <div class="filter-group">
+                            <label for="bookDateFrom">Дата загрузки с: ДД.ММ.ГГГГ</label>
+                            <input type="date" id="bookDateFrom">
+                        </div>
+                        <div class="filter-group">
+                            <label for="bookDateTo">Дата загрузки по: ДД.ММ.ГГГГ</label>
+                            <input type="date" id="bookDateTo">
+                        </div>
+                        <span class="filter-date-actions">
+                            <button id="applyBookFilters" class="btn">Применить</button>
+                            <button id="clearBookFilters" class="btn btn-secondary">Очистить</button>
+                        </span>
+                    </div>
+                    <span class="shelf-link">
+                        <a href="/shelf/" class="shelf-link">📚 Полка<span class="shelf-count">(0)</span></a>
+                        <button id="clearShelfBooksBtn" class="btn btn-small btn-secondary">Очистить полку</button>
+                    </span>
+                </div>
+
+                <div class="pagination" id="booksPagination"></div>
+                <div id="booksTableContainer">
+                    <div class="loading">Загрузка...</div>
+                </div>
+                <div class="pagination" id="booksPaginationBottom"></div>
             </div>
 
             <!-- Вкладка Жанры -->

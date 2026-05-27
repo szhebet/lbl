@@ -1,0 +1,29 @@
+[server]
+port = 9091
+bind = "0.0.0.0"
+enable_delete = true
+log_level = "info"
+
+[directories]
+bookarch = "bookarch"
+temp = "tempfld"
+logs = "logs"
+templates = "templates"
+static = "static"
+
+[database]
+host = "localhost"
+port = 5432
+name = "library"
+user = "postgres"
+password = "postgres"
+sslmode = "disable"
+pgdata = "/var/lib/postgresql/data"
+
+[llm]
+base_url = "http://192.168.1.2:11434"
+model = "phi4:latest"
+token = ""
+timeout = 60
+prompt = "По тексту первых страниц книги определи автора и название. Ответь строго в две строки на русском языке:\nAUTHOR: Имя автора1, Имя автора2\nBOOKNAME: Полное название книги. Если авторов несколько - раздели их ФИО запятой"
+prompt2= "По фрагменту текста определи автора и название книги. Ответь строго в две строки на русском языке:\nAUTHOR: Имя автора\nBOOKNAME: Полное название книги. Если авторов несколько - раздели их ФИО запятой"

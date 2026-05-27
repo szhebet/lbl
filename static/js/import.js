@@ -1,26 +1,24 @@
 if (typeof API_BASE === 'undefined') {
-    const API_BASE = '/api/v1';
+    var API_BASE = '/api/v1';
 }
 
+var importPollTimer = null;
+var oldDirectoryHandler = null;
+
 document.addEventListener('DOMContentLoaded', function() {
-    const uploadForm = document.getElementById('uploadForm');
-    const directoryForm = document.getElementById('directoryForm');
-    const bookFile = document.getElementById('bookFile');
-    const uploadPreview = document.getElementById('uploadPreview');
-    const uploadResult = document.getElementById('uploadResult');
-    const directoryResult = document.getElementById('directoryResult');
+    var uploadForm = document.getElementById('uploadForm');
+    var directoryForm = document.getElementById('directoryForm');
+    var bookFile = document.getElementById('bookFile');
+    var uploadPreview = document.getElementById('uploadPreview');
+    var uploadResult = document.getElementById('uploadResult');
+    var directoryResult = document.getElementById('directoryResult');
 
     if (bookFile) {
         bookFile.addEventListener('change', function(e) {
-            const file = e.target.files[0];
+            var file = e.target.files[0];
             if (file) {
-                const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-                uploadPreview.innerHTML = `
-                    <div class="preview-item">
-                        <strong>${escapeHtml(file.name)}</strong>
-                        <span>${sizeMB} МБ</span>
-                    </div>
-                `;
+                var sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                uploadPreview.innerHTML = '<div class="preview-item"><strong>' + escapeHtml(file.name) + '</strong><span>' + sizeMB + ' MB</span></div>';
                 uploadPreview.style.display = 'block';
             }
         });
@@ -29,121 +27,256 @@ document.addEventListener('DOMContentLoaded', function() {
     if (uploadForm) {
         uploadForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
-            const fileInput = document.getElementById('bookFile');
-            const file = fileInput.files[0];
-            
+            var fileInput = document.getElementById('bookFile');
+            var file = fileInput.files[0];
             if (!file) {
-                uploadResult.innerHTML = '<div class="error">Выберите файл</div>';
+                uploadResult.innerHTML = '<div class="error">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b</div>';
                 return;
             }
-
-            uploadResult.innerHTML = '<div class="loading">Загрузка...</div>';
-
-            const formData = new FormData();
+            uploadResult.innerHTML = '<div class="loading">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
+            var formData = new FormData();
             formData.append('file', file);
-
             try {
-                const response = await fetch(`${API_BASE}/import/file`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-
+                var response = await fetch(API_BASE + '/import/file', { method: 'POST', body: formData });
+                var data = await response.json();
                 if (response.ok) {
-                    uploadResult.innerHTML = `
-                        <div class="success">
-                            <h4>Книга успешно импортирована!</h4>
-                            <ul>
-                                <li><strong>Название:</strong> ${escapeHtml(data.title || 'N/A')}</li>
-                                <li><strong>Авторы:</strong> ${escapeHtml((data.authors || []).join(', ') || 'N/A')}</li>
-                                <li><strong>Год:</strong> ${data.year || 'N/A'}</li>
-                                <li><strong>ISBN:</strong> ${data.isbn || 'N/A'}</li>
-                                <li><strong>Язык:</strong> ${data.language || 'N/A'}</li>
-                                <li><strong>Файл:</strong> ${escapeHtml(data.file_path || 'N/A')}</li>
-                            </ul>
-                            <p>Parsed: ${data.parsed ? '✓ Метаданные извлечены' : '⚠ Метаданные не найдены'}</p>
-                        </div>
-                    `;
+                    var html = '<div class="success"><h4>\u041a\u043d\u0438\u0433\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0430!</h4><ul>';
+                    html += '<li><strong>\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435:</strong> ' + escapeHtml(data.title || 'N/A') + '</li>';
+                    html += '<li><strong>\u0410\u0432\u0442\u043e\u0440\u044b:</strong> ' + escapeHtml((data.authors || []).join(', ') || 'N/A') + '</li>';
+                    html += '<li><strong>\u042f\u0437\u044b\u043a:</strong> ' + (data.language || 'N/A') + '</li>';
+                    html += '</ul></div>';
+                    uploadResult.innerHTML = html;
                     fileInput.value = '';
                     uploadPreview.style.display = 'none';
                     if (typeof loadAuthorsWithState === 'function') {
                         loadAuthorsWithState(saveExpandedState());
                     }
                 } else {
-                    uploadResult.innerHTML = `<div class="error">Ошибка: ${escapeHtml(data.error || 'Неизвестная ошибка')}</div>`;
+                    uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430: ' + escapeHtml(data.error || '\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043e\u0448\u0438\u0431\u043a\u0430') + '</div>';
                 }
             } catch (error) {
-                uploadResult.innerHTML = `<div class="error">Ошибка загрузки: ${escapeHtml(error.message)}</div>`;
+                uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438: ' + escapeHtml(error.message) + '</div>';
             }
         });
     }
 
     if (directoryForm) {
-        directoryForm.addEventListener('submit', async function(e) {
+        if (oldDirectoryHandler) {
+            directoryForm.removeEventListener('submit', oldDirectoryHandler);
+        }
+        oldDirectoryHandler = async function(e) {
             e.preventDefault();
-            
-            const dirPath = document.getElementById('directoryPath').value.trim();
-            
+            var dirPath = document.getElementById('directoryPath').value.trim();
             if (!dirPath) {
-                directoryResult.innerHTML = '<div class="error">Введите путь к папке</div>';
+                directoryResult.innerHTML = '<div class="error">\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0443\u0442\u044c \u043a \u043f\u0430\u043f\u043a\u0435</div>';
                 return;
             }
-
-            directoryResult.innerHTML = '<div class="loading">Импорт книг из папки...</div>';
-
+            directoryResult.innerHTML = '<div class="loading">\u0418\u043c\u043f\u043e\u0440\u0442 \u0437\u0430\u043f\u0443\u0449\u0435\u043d...</div>';
+            var formData = new FormData();
+            formData.append('directory', dirPath);
             try {
-                const formData = new FormData();
-                formData.append('directory', dirPath);
-
-                const response = await fetch(`${API_BASE}/import/directory`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    let html = `
-                        <div class="success">
-                            <h4>Импорт завершен</h4>
-                            <p><strong>Всего файлов:</strong> ${data.total || 0}</p>
-                            <p><strong>Успешно:</strong> ${data.success || 0}</p>
-                            <p><strong>Ошибок:</strong> ${data.errors || 0}</p>
-                        </div>
-                    `;
-
-                    if (data.results && data.results.length > 0) {
-                        html += '<div class="results-list"><h4>Результаты:</h4><ul>';
-                        data.results.forEach(function(item) {
-                            if (item.success) {
-                                html += `<li class="success-item">✓ ${escapeHtml(item.title || item.file)} - импортирована</li>`;
-                            } else {
-                                html += `<li class="error-item">✗ ${escapeHtml(item.file)} - ${escapeHtml(item.error || 'ошибка')}</li>`;
-                            }
-                        });
-                        html += '</ul></div>';
-                    }
-
-                    directoryResult.innerHTML = html;
-
-                    if (typeof loadAuthorsWithState === 'function') {
-                        loadAuthorsWithState(saveExpandedState());
-                    }
+                var response = await fetch(API_BASE + '/import/directory', { method: 'POST', body: formData });
+                var data = await response.json();
+                if (response.ok && data.started) {
+                    showImportProgress(dirPath, data.total);
                 } else {
-                    directoryResult.innerHTML = `<div class="error">Ошибка: ${escapeHtml(data.error || 'Неизвестная ошибка')}</div>`;
+                    directoryResult.innerHTML = '<div class="error">' + escapeHtml(data.error || '\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0438\u043c\u043f\u043e\u0440\u0442\u0430') + '</div>';
                 }
             } catch (error) {
-                directoryResult.innerHTML = `<div class="error">Ошибка загрузки: ${escapeHtml(error.message)}</div>`;
+                directoryResult.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
+            }
+        };
+        directoryForm.addEventListener('submit', oldDirectoryHandler);
+    }
+
+    checkImportOnLoad();
+});
+
+function switchToImportTab() {
+    var tabs = document.querySelectorAll('.tab');
+    var contents = document.querySelectorAll('.tab-content');
+    tabs.forEach(function(t) { t.classList.remove('active'); });
+    contents.forEach(function(c) { c.classList.remove('active'); });
+    var importTab = document.querySelector('.tab[data-tab="import"]');
+    var importContent = document.getElementById('import');
+    if (importTab) importTab.classList.add('active');
+    if (importContent) importContent.classList.add('active');
+}
+
+function showImportProgress(dirPath, total) {
+    switchToImportTab();
+    var container = document.getElementById('directoryResult');
+    var panel = document.createElement('div');
+    panel.className = 'import-progress-panel';
+    panel.id = 'importProgressPanel';
+    panel.innerHTML = '<div class="import-progress-header">' +
+        '<h4>\u0418\u043c\u043f\u043e\u0440\u0442 \u043a\u043d\u0438\u0433</h4>' +
+        '<span id="importProgressCount">0 / ' + total + '</span></div>' +
+        '<div class="import-progress-bar"><div id="importProgressFill" class="import-progress-fill" style="width:0%"></div></div>' +
+        '<div id="importCurrentFile" class="import-current-file"></div>' +
+        '<div id="importResults" class="import-results"></div>' +
+        '<button id="cancelImportBtn" class="btn btn-danger" style="display:none">\u041f\u0440\u0435\u0440\u0432\u0430\u0442\u044c \u0438\u043c\u043f\u043e\u0440\u0442</button>' +
+        '<div id="importFinalSummary" style="display:none"></div>';
+    container.innerHTML = '';
+    container.appendChild(panel);
+
+    document.getElementById('cancelImportBtn').addEventListener('click', async function() {
+        try {
+            await fetch(API_BASE + '/import/cancel', { method: 'POST' });
+        } catch (e) {}
+    });
+
+    startImportPolling();
+}
+
+function startImportPolling() {
+    if (importPollTimer) {
+        clearInterval(importPollTimer);
+    }
+    importPollTimer = setInterval(pollImportStatus, 1000);
+    pollImportStatus();
+}
+
+function pollImportStatus() {
+    fetch(API_BASE + '/import/status')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+            updateImportUI(state);
+            if (!state.running) {
+                if (importPollTimer) {
+                    clearInterval(importPollTimer);
+                    importPollTimer = null;
+                }
+                finishImportUI(state);
+            }
+        })
+        .catch(function() {
+            if (importPollTimer) {
+                clearInterval(importPollTimer);
+                importPollTimer = null;
             }
         });
+}
+
+function updateImportUI(state) {
+    var panel = document.getElementById('importProgressPanel');
+    if (!panel) return;
+
+    var countEl = document.getElementById('importProgressCount');
+    var fillEl = document.getElementById('importProgressFill');
+    var currentEl = document.getElementById('importCurrentFile');
+    var resultsEl = document.getElementById('importResults');
+    var cancelBtn = document.getElementById('cancelImportBtn');
+
+    if (countEl) {
+        countEl.textContent = (state.completed + state.errors) + ' / ' + state.total;
     }
-});
+    if (fillEl && state.total > 0) {
+        var pct = Math.round(((state.completed + state.errors) / state.total) * 100);
+        fillEl.style.width = pct + '%';
+    }
+
+    if (resultsEl) {
+        var html = '';
+        if (state.items && state.items.length > 0) {
+            var lastItems = state.items.slice(-20);
+            html = '<div class="import-items-list">';
+            for (var i = 0; i < lastItems.length; i++) {
+                var item = lastItems[i];
+                var icon = '';
+                var label = '';
+                if (item.status === 'pending') { icon = '\u23F3'; label = '\u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u0438'; }
+                else if (item.status === 'processing') { icon = '\u23F3'; label = '\u043e\u0431\u0440\u0430\u0431\u0430\u0442\u044b\u0432\u0430\u0435\u0442\u0441\u044f'; }
+                else if (item.status === 'done') { icon = '\u2713'; label = '\u0433\u043e\u0442\u043e\u0432\u043e'; }
+                else if (item.status === 'error') { icon = '\u2717'; label = '\u043e\u0448\u0438\u0431\u043a\u0430'; }
+                else if (item.status === 'skipped') { icon = '\u21BA'; label = '\u0434\u0443\u0431\u043b\u0438\u043a\u0430\u0442'; }
+                else if (item.status === 'cancelled') { icon = '\u26A0'; label = '\u043E\u0442\u043C\u0435\u043D\u0435\u043D'; }
+                html += '<div class="import-item import-item-' + item.status + '">' +
+                    '<span class="import-icon">' + icon + '</span> ' +
+                    escapeHtml(item.title || item.file || '') +
+                    ' <span class="import-label">' + label + '</span></div>';
+            }
+            html += '</div>';
+        }
+        resultsEl.innerHTML = html;
+    }
+
+    if (currentEl) {
+        if (state.running) {
+            var processing = (state.items || []).filter(function(it) { return it.status === 'processing'; });
+            if (processing.length > 0) {
+                currentEl.textContent = '\u041E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u0435\u0442\u0441\u044F: ' + escapeHtml(processing[0].title || processing[0].file || '');
+            } else {
+                currentEl.textContent = '';
+            }
+        } else {
+            currentEl.textContent = '';
+        }
+    }
+
+    if (cancelBtn && state.running) {
+        cancelBtn.style.display = 'inline-block';
+    } else if (cancelBtn) {
+        cancelBtn.style.display = 'none';
+    }
+}
+
+function finishImportUI(state) {
+    var panel = document.getElementById('importProgressPanel');
+    if (!panel) return;
+
+    var cancelBtn = document.getElementById('cancelImportBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+
+    var summaryEl = document.getElementById('importFinalSummary');
+    if (summaryEl) {
+        var done = (state.items || []).filter(function(it) { return it.status === 'done'; }).length;
+        var skipped = (state.items || []).filter(function(it) { return it.status === 'skipped'; }).length;
+        var errors = (state.items || []).filter(function(it) { return it.status === 'error'; }).length;
+        var cancelled = (state.items || []).filter(function(it) { return it.status === 'cancelled'; }).length;
+        var html = '<div class="import-summary">' +
+            '<h4>\u0418\u043c\u043f\u043e\u0440\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d</h4>' +
+            '<p>\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043D\u043E: ' + done + '</p>' +
+            '<p>\u0414\u0443\u0431\u043B\u0438\u043A\u0430\u0442\u043E\u0432: ' + skipped + '</p>' +
+            '<p>\u041E\u0448\u0438\u0431\u043E\u043A: ' + errors + '</p>';
+        if (cancelled > 0) {
+            html += '<p>\u041F\u0440\u0435\u0440\u0432\u0430\u043D\u043E: ' + cancelled + '</p>';
+        }
+        html += '</div>';
+        summaryEl.innerHTML = html;
+        summaryEl.style.display = 'block';
+    }
+
+    if (typeof loadAuthorsWithState === 'function') {
+        loadAuthorsWithState(saveExpandedState());
+    }
+}
+
+function checkImportOnLoad() {
+    fetch(API_BASE + '/import/status')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+            if (state.running || (state.items && state.items.length > 0 && !state.running)) {
+                if (state.running) {
+                    showImportProgress('', state.total);
+                    updateImportUI(state);
+                    startImportPolling();
+                } else {
+                    var container = document.getElementById('directoryResult');
+                    if (container) {
+                        showImportProgress('', state.total);
+                        updateImportUI(state);
+                        finishImportUI(state);
+                    }
+                }
+            }
+        })
+        .catch(function() {});
+}
 
 function escapeHtml(text) {
     if (!text) return '';
-    const div = document.createElement('div');
+    var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }

@@ -20,6 +20,17 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";      -- нечёткий поиск
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";    -- генерация UUID
 
 -- ============================================================
+-- ВЕРСИЯ БАЗЫ ДАННЫХ
+-- ============================================================
+
+CREATE TABLE db_version (
+    version     VARCHAR(20) NOT NULL,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO db_version (version) VALUES ('1.0');
+
+-- ============================================================
 -- ТАБЛИЦЫ АУТЕНТИФИКАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
 -- ============================================================
 
@@ -33,33 +44,8 @@ CREATE TABLE users (
     updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_users_email ON users(email);
-
--- ============================================================
--- ТАБЛИЦА ЧТЕНИЯ И ПРОГРЕССА
--- ============================================================
-
-CREATE TABLE reading_progress (
-    id          SERIAL PRIMARY KEY,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    edition_id  INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
-    progress    INTEGER DEFAULT 0,
-    finished    BOOLEAN DEFAULT false,
-    rating      INTEGER,
-    notes       TEXT,
-    started_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    finished_at TIMESTAMP,
-    UNIQUE(user_id, edition_id)
-);
-
-CREATE INDEX idx_reading_progress_user ON reading_progress(user_id);
-CREATE INDEX idx_reading_progress_edition ON reading_progress(edition_id);
-
--- Создание тестовых пользователей (пароль: test123)
-INSERT INTO users (username, password_hash, email, role) VALUES
-('admin', '$2a$10$YQGZxJq0hS0K5kZ.qZ0rQO8nY8v1r5n1qJ1k1Z1k1Z1k1Z1k1Z1k1', 'admin@test.com', 'admin'),
-('editor', '$2a$10$YQGZxJq0hS0K5kZ.qZ0rQO8nY8v1r5n1qJ1k1Z1k1Z1k1Z1k1Z1k1', 'editor@test.com', 'editor');
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 -- ============================================================
 -- ТАБЛИЦЫ АУТЕНТИФИКАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
@@ -127,9 +113,12 @@ CREATE TABLE works (
     work_type         VARCHAR(50) DEFAULT 'novel',  -- novel, story, poem, collection, article
     annotation        TEXT,                   -- описание произведения, общее для всех изданий
     word_count        INTEGER,                -- примерное число слов
-    created_at        TIMESTAMP DEFAULT NOW(),
-    updated_at        TIMESTAMP DEFAULT NOW()
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW(),
+    lower_original_title    TEXT
 );
+
+CREATE INDEX idx_works_lower_title ON works USING gin (lower_original_title gin_trgm_ops);
 
 -- Персоны (авторы, переводчики, редакторы и т.д.)
 CREATE TABLE persons (
@@ -143,8 +132,11 @@ CREATE TABLE persons (
     biography   TEXT,
     photo_url   TEXT,
     created_at  TIMESTAMP DEFAULT NOW(),
+    lower_fio   VARCHAR(510),
     UNIQUE (first_name, last_name)
 );
+
+CREATE INDEX idx_persons_lower_fio ON persons USING gin (lower_fio gin_trgm_ops);
 
 -- Роли персон
 CREATE TYPE contributor_role AS ENUM (
@@ -205,11 +197,18 @@ CREATE TABLE editions (
     source        VARCHAR(255),               -- откуда получено (libgen, flibusta, самодел)
     is_complete   BOOLEAN DEFAULT true,       -- полное издание или фрагмент
     quality       VARCHAR(20) DEFAULT 'good', -- excellent, good, poor
+    on_shelf      BOOLEAN DEFAULT false,
+    shelf_order   INTEGER DEFAULT 0,
     
     -- Служебное
     created_at    TIMESTAMP DEFAULT NOW(),
-    updated_at    TIMESTAMP DEFAULT NOW()
+    updated_at    TIMESTAMP DEFAULT NOW(),
+    upload_date   TIMESTAMP DEFAULT NOW(),
+    cover_path    TEXT,
+    lower_title   TEXT
 );
+
+CREATE INDEX idx_editions_lower_title ON editions USING gin (lower_title gin_trgm_ops);
 
 -- Конкретные файлы изданий (одно издание может быть в нескольких форматах)
 CREATE TABLE edition_files (
@@ -369,35 +368,35 @@ CREATE TABLE conversion_log (
 -- ============================================================
 
 -- Триграмные индексы для нечёткого поиска названий и авторов
-CREATE INDEX idx_works_title_trgm      ON works      USING gin (original_title gin_trgm_ops);
-CREATE INDEX idx_editions_title_trgm   ON editions   USING gin (title gin_trgm_ops);
-CREATE INDEX idx_persons_last_trgm     ON persons    USING gin (last_name gin_trgm_ops);
-CREATE INDEX idx_persons_first_trgm    ON persons    USING gin (first_name gin_trgm_ops);
-CREATE INDEX idx_series_trgm           ON editions   USING gin (series gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_works_title_trgm      ON works      USING gin (original_title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_editions_title_trgm   ON editions   USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_persons_last_trgm     ON persons    USING gin (last_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_persons_first_trgm    ON persons    USING gin (first_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_series_trgm           ON editions   USING gin (series gin_trgm_ops);
 
 -- Полнотекстовый поиск
 ALTER TABLE editions ADD COLUMN IF NOT EXISTS search_vector tsvector;
-CREATE INDEX idx_editions_fts ON editions USING gin(search_vector);
+CREATE INDEX IF NOT EXISTS idx_editions_fts ON editions USING gin(search_vector);
 
 ALTER TABLE works ADD COLUMN IF NOT EXISTS search_vector tsvector;
-CREATE INDEX idx_works_fts ON works USING gin(search_vector);
+CREATE INDEX IF NOT EXISTS idx_works_fts ON works USING gin(search_vector);
 
 -- Индексы для FK и частых запросов
-CREATE INDEX idx_editions_work        ON editions(work_id);
-CREATE INDEX idx_editions_language    ON editions(language);
-CREATE INDEX idx_editions_year        ON editions(year);
-CREATE INDEX idx_editions_isbn        ON editions(isbn) WHERE isbn IS NOT NULL;
-CREATE INDEX idx_edition_files_edition ON edition_files(edition_id);
-CREATE INDEX idx_edition_files_format  ON edition_files(format_id);
-CREATE INDEX idx_edition_files_hash    ON edition_files(file_hash) WHERE file_hash IS NOT NULL;
-CREATE INDEX idx_work_contributors_work   ON work_contributors(work_id);
-CREATE INDEX idx_work_contributors_person ON work_contributors(person_id);
-CREATE INDEX idx_toc_edition           ON toc_entries(edition_id);
-CREATE INDEX idx_reading_progress_rating ON reading_progress(rating) WHERE rating IS NOT NULL;
-CREATE INDEX idx_duplicate_candidates_unconfirmed ON duplicate_candidates(edition_id_1) WHERE is_confirmed = false;
+CREATE INDEX IF NOT EXISTS idx_editions_work        ON editions(work_id);
+CREATE INDEX IF NOT EXISTS idx_editions_language    ON editions(language);
+CREATE INDEX IF NOT EXISTS idx_editions_year        ON editions(year);
+CREATE INDEX IF NOT EXISTS idx_editions_isbn        ON editions(isbn) WHERE isbn IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_edition_files_edition ON edition_files(edition_id);
+CREATE INDEX IF NOT EXISTS idx_edition_files_format  ON edition_files(format_id);
+CREATE INDEX IF NOT EXISTS idx_edition_files_hash    ON edition_files(file_hash) WHERE file_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_contributors_work   ON work_contributors(work_id);
+CREATE INDEX IF NOT EXISTS idx_work_contributors_person ON work_contributors(person_id);
+CREATE INDEX IF NOT EXISTS idx_toc_edition           ON toc_entries(edition_id);
+CREATE INDEX IF NOT EXISTS idx_reading_progress_rating ON reading_progress(rating) WHERE rating IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_duplicate_candidates_unconfirmed ON duplicate_candidates(edition_id_1) WHERE is_confirmed = false;
 
 -- Для полнотекстового поиска по toc
-CREATE INDEX idx_toc_title_trgm ON toc_entries USING gin(title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_toc_title_trgm ON toc_entries USING gin(title gin_trgm_ops);
 
 -- ============================================================
 -- ТРИГГЕРЫ ДЛЯ АВТОМАТИЗАЦИИ
@@ -412,28 +411,38 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_works_updated ON works;
 CREATE TRIGGER trg_works_updated    BEFORE UPDATE ON works    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+DROP TRIGGER IF EXISTS trg_editions_updated ON editions;
 CREATE TRIGGER trg_editions_updated BEFORE UPDATE ON editions FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+DROP TRIGGER IF EXISTS trg_files_updated ON edition_files;
 CREATE TRIGGER trg_files_updated    BEFORE UPDATE ON edition_files FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
--- Автоматическое определение format_id по расширению файла
-CREATE OR REPLACE FUNCTION detect_format_by_extension()
+-- Функция для заполнения полей поиска в нижнем регистре (ё→е)
+CREATE OR REPLACE FUNCTION normalize_search_field()
 RETURNS TRIGGER AS $$
-DECLARE
-    ext TEXT;
 BEGIN
-    IF NEW.format_id IS NULL AND NEW.file_path IS NOT NULL THEN
-        ext := LOWER(SUBSTRING(NEW.file_path FROM '\.([^.]+)$'));
-        SELECT id INTO NEW.format_id FROM formats WHERE extension = ext;
+    IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+        IF TG_TABLE_NAME = 'persons' THEN
+            NEW.lower_fio := REPLACE(LOWER(COALESCE(NEW.last_name, '') || ' ' || COALESCE(NEW.first_name, '')), 'ё', 'е');
+        ELSIF TG_TABLE_NAME = 'works' THEN
+            NEW.lower_original_title := REPLACE(LOWER(NEW.original_title), 'ё', 'е');
+        ELSIF TG_TABLE_NAME = 'editions' THEN
+            NEW.lower_title := REPLACE(LOWER(NEW.title), 'ё', 'е');
+        END IF;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_detect_format
-    BEFORE INSERT ON edition_files
-    FOR EACH ROW
-    EXECUTE FUNCTION detect_format_by_extension();
+DROP TRIGGER IF EXISTS trg_persons_normalize ON persons;
+CREATE TRIGGER trg_persons_normalize BEFORE INSERT OR UPDATE ON persons FOR EACH ROW EXECUTE FUNCTION normalize_search_field();
+
+DROP TRIGGER IF EXISTS trg_works_normalize ON works;
+CREATE TRIGGER trg_works_normalize BEFORE INSERT OR UPDATE ON works FOR EACH ROW EXECUTE FUNCTION normalize_search_field();
+
+DROP TRIGGER IF EXISTS trg_editions_normalize ON editions;
+CREATE TRIGGER trg_editions_normalize BEFORE INSERT OR UPDATE ON editions FOR EACH ROW EXECUTE FUNCTION normalize_search_field();
 
 -- ============================================================
 -- ПРЕДСТАВЛЕНИЯ ДЛЯ УДОБСТВА
@@ -457,6 +466,8 @@ SELECT
     e.series,
     e.series_number,
     e.quality,
+    e.on_shelf,
+    e.shelf_order,
     -- Авторы
     (SELECT STRING_AGG(p.last_name || ' ' || p.first_name, ', ')
      FROM work_contributors wc
@@ -488,6 +499,7 @@ SELECT
     rp.percentage       AS reading_progress,
     rp.rating,
     rp.finished_at,
+    e.upload_date,
     e.created_at,
     e.updated_at
 FROM works w
@@ -508,36 +520,6 @@ FROM formats f
 LEFT JOIN edition_files ef ON ef.format_id = f.id
 GROUP BY f.id, f.name, f.extension, f.category
 ORDER BY file_count DESC;
-
--- ============================================================
--- ДОПОЛНИТЕЛЬНЫЕ ИНДЕКСЫ ДЛЯ ПРОИЗВОДИТЕЛЬНОСТИ
--- ============================================================
-
--- Индексы для поиска
-CREATE INDEX idx_works_title_trgm ON works USING gin(original_title gin_trgm_ops);
-CREATE INDEX idx_works_first_published ON works(first_published);
-CREATE INDEX idx_editions_title_trgm ON editions USING gin(title gin_trgm_ops);
-
--- Индексы для авторов
-CREATE INDEX idx_work_authors_work ON work_authors(work_id);
-CREATE INDEX idx_work_authors_author ON work_authors(author_id);
-
--- Индексы для жанров
-CREATE INDEX idx_work_genres_work ON work_genres(work_id);
-CREATE INDEX idx_work_genres_genre ON work_genres(genre_id);
-
--- Индексы для файлов
-CREATE INDEX idx_edition_files_edition ON edition_files(edition_id);
-CREATE INDEX idx_edition_files_format ON edition_files(format_id);
-
--- Индексы для издательств
-CREATE INDEX idx_publishers_name_trgm ON publishers USING gin(name gin_trgm_ops);
-
--- Триграммные индексы для авторов (тоже)
-CREATE INDEX idx_authors_name_trgm ON authors USING gin(name gin_trgm_ops);
-
--- Индекс для языков
-CREATE INDEX idx_languages_code ON languages(code);
 
 -- ============================================================
 -- ТЕСТОВЫЕ ДАННЫЕ

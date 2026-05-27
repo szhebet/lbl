@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -320,6 +321,7 @@ func opdsSearch(db *sql.DB) gin.HandlerFunc {
 
 		baseURL := getBaseURL(c)
 
+		searchQ := "%" + strings.ToLower(strings.ReplaceAll(query, "ё", "е")) + "%"
 		rows, err := db.Query(`
 			SELECT 
 				e.id, e.title, e.updated_at,
@@ -333,11 +335,11 @@ func opdsSearch(db *sql.DB) gin.HandlerFunc {
 			LEFT JOIN work_genres wg ON wg.work_id = w.id
 			LEFT JOIN genres g ON g.id = wg.genre_id
 			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
-			WHERE w.original_title ILIKE $1 OR e.title ILIKE $1 OR p.last_name ILIKE $1
+			WHERE w.lower_original_title LIKE $1 OR e.lower_title LIKE $1 OR p.lower_fio LIKE $1
 			GROUP BY e.id, e.title, e.updated_at, ef.file_path
 			ORDER BY e.title
 			LIMIT 100
-		`, "%"+query+"%")
+		`, searchQ)
 		if err != nil {
 			c.String(http.StatusInternalServerError, "Database error")
 			return
@@ -401,7 +403,7 @@ func opdsDownload(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		fullPath := "./" + filePath
+		fullPath := filepath.Join(".", filePath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			c.String(http.StatusNotFound, "File not found on disk")
 			return

@@ -61,6 +61,14 @@ header h1 {
     color: #666;
 }
 
+.tabs-spacer {
+    flex: 1;
+}
+
+.load-books-btn {
+    margin-left: auto;
+}
+
 .tab:hover {
     background: #e0e0e0;
 }
@@ -114,9 +122,99 @@ header h1 {
     font-size: 14px;
 }
 
+.filter-date-row {
+    flex: 0 0 100%;
+    display: flex;
+    gap: 15px;
+}
+
+.filter-date-row .filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    min-width: auto;
+}
+
+.filter-date-row .filter-group label {
+    display: inline;
+    margin-bottom: 0;
+    white-space: nowrap;
+}
+
+.filter-date-row .filter-group input {
+    width: 160px;
+}
+
+.filter-date-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
 .filter-group input:focus {
     outline: none;
     border-color: #3498db;
+}
+
+/* Pagination */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+}
+
+.pagination button {
+    padding: 6px 14px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.pagination button:hover:not(:disabled) {
+    background: #e9ecef;
+}
+
+.pagination button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.pagination button.active {
+    background: #3498db;
+    color: #fff;
+    border-color: #3498db;
+}
+
+.pagination .page-info {
+    color: #666;
+    font-size: 13px;
+    margin: 0 8px;
+}
+
+/* Summary Row */
+.summary-row {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    padding: 12px 15px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #555;
+}
+
+.summary-row span {
+    white-space: nowrap;
+}
+
+.summary-row strong {
+    color: #333;
 }
 
 .btn {
@@ -317,6 +415,24 @@ header h1 {
 .edit-btn::before {
     content: "✏️";
     margin-right: 4px;
+}
+
+.delete-btn {
+    padding: 4px 10px;
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-left: 4px;
+    transition: background 0.3s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.delete-btn:hover {
+    background: #c0392b;
 }
 
 .download-btn {
@@ -553,4 +669,225 @@ header h1 {
 .error-item {
     background: #f8d7da;
     color: #721c24;
+}
+
+.import-progress-panel {
+    padding: 20px;
+    background: #fff;
+    border: 2px solid #3498db;
+    border-radius: 8px;
+    margin-top: 15px;
+}
+
+.import-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.import-progress-header h4 {
+    margin: 0;
+    color: #2c3e50;
+}
+
+.import-progress-bar {
+    height: 8px;
+    background: #ecf0f1;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.import-progress-fill {
+    height: 100%;
+    background: #3498db;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.import-current-file {
+    color: #666;
+    font-size: 13px;
+    margin-bottom: 10px;
+    font-style: italic;
+}
+
+.import-results {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+}
+
+.import-items-list {
+    font-size: 13px;
+}
+
+.import-item {
+    padding: 4px 8px;
+    border-radius: 3px;
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.import-icon {
+    width: 18px;
+    text-align: center;
+}
+
+.import-label {
+    color: #888;
+    font-size: 11px;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.import-item-processing {
+    background: #fff3cd;
+}
+
+.import-item-done {
+    background: #d4edda;
+}
+
+.import-item-error {
+    background: #f8d7da;
+}
+
+.import-item-skipped {
+    background: #e2e3f5;
+}
+
+.import-item-cancelled {
+    background: #f8d7da;
+}
+
+.import-summary {
+    padding: 15px;
+    background: #d4edda;
+    color: #155724;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+.import-summary h4 {
+    margin-bottom: 10px;
+}
+
+.import-summary p {
+    margin: 5px 0;
+}
+
+.btn-danger {
+    padding: 8px 16px;
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.3s ease;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+}
+
+/* Books table */
+.books-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.books-table th {
+    background: #f5f6fa;
+    padding: 10px 8px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid #ddd;
+    white-space: nowrap;
+}
+
+.books-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.books-table th.sortable:hover {
+    background: #e8e9f0;
+}
+
+.books-table td {
+    padding: 8px;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+}
+
+.books-table tr:hover {
+    background: #fafbfc;
+}
+
+.books-table .col-num {
+    width: 40px;
+    text-align: center;
+    color: #999;
+}
+
+.books-table .col-date {
+    width: 110px;
+    white-space: nowrap;
+}
+
+.books-table .col-title {
+    min-width: 180px;
+}
+
+.books-table .col-author {
+    min-width: 150px;
+}
+
+.books-table .col-format {
+    width: 80px;
+    text-align: center;
+}
+
+.books-table .col-shelf {
+    width: 50px;
+    text-align: center;
+}
+
+.books-table .col-actions {
+    width: 80px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.books-table .shelf-toggle {
+    text-decoration: none;
+    font-size: 18px;
+    color: #f39c12;
+    cursor: pointer;
+}
+
+.books-table .shelf-toggle:hover {
+    color: #e67e22;
+}
+
+.books-table .book-title-link {
+    color: #2980b9;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.books-table .book-title-link:hover {
+    text-decoration: underline;
+}
+
+.empty {
+    text-align: center;
+    padding: 40px;
+    color: #999;
 }

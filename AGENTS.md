@@ -1,30 +1,54 @@
 # Project Structure and Guidance
 
 ## Project Overview
-This is a home library management application (website) built with Go and PostgreSQL.
-The application is designed to run in a container on a Raspberry Pi.
-It provides a RESTful API for managing a collection of books.
+Home library management web application built with Go and PostgreSQL.
+Provides a RESTful API + OPDS catalog for managing a personal book collection.
+Runs on a Raspberry Pi.
 
 ## Directory Structure
 ```
 lbl/
-├── bookarch/         # Directory for storing book archives (e.g., PDF, EPUB)
-├── db/               # Database-related files
-│   └── scripts/      # SQL scripts for database initialization and migrations
+├── bookarch/         # Book archive files (ZIP format)
+├── db/
+│   └── scripts/
+│       └── init_db.sql   # Database schema (authors, works, editions, etc.)
+├── logs/             # Application logs
 ├── src/              # Go source code
-│   ├── main.go       # Application entry point
-│   ├── handlers/     # HTTP request handlers
-│   ├── models/       # Data models and database interactions
-│   ├── routes/       # Route definitions
-│   ├── middleware/   # Custom middleware
-│   ├── utils/        # Utility functions
-│   └── config/       # Configuration files
-├── tempfld/          # Temporary folder for file processing (upload, unpack, publish)
-├── testdata/         # Sample book data for testing
-├── Dockerfile        # Docker container definition
-├── go.mod            # Go module dependencies
-├── go.sum            # Go module dependency checksums
-└── AGENTS.md         # This file: project guidance and structure
+│   ├── main.go       # Entry point, all handlers, routes
+│   ├── auth.go       # Auth handlers (unused)
+│   ├── export.go     # Export/import handlers (unused)
+│   ├── jwt.go        # JWT helpers (unused)
+│   ├── opds.go       # OPDS XML catalog
+│   ├── reading.go    # Reading progress (unused)
+│   ├── recommendations.go  # Recommendations (unused)
+│   ├── main_test.go  # Tests
+│   ├── config/
+│   │   └── config.go      # TOML config struct, Load(), DefaultConfig()
+│   └── utils/
+│       ├── llm_client.go   # OpenAI-compatible LLM client (title/author recognition)
+│       ├── pdf_extract.go  # PDF text extraction
+│       ├── docx_extract.go # DOCX text extraction
+│       ├── doc_extract.go  # Binary DOC text extraction (OLE2)
+│       ├── epub.go         # EPUB metadata parsing
+│       ├── fb2.go          # FB2 metadata parsing
+│       ├── fb2_test.go     # FB2 tests
+│       ├── epub_test.go    # EPUB tests
+│       └── zip_extract.go  # ZIP content type detection
+├── static/           # Frontend assets
+│   ├── css/style.css
+│   ├── js/app.js
+│   ├── js/import.js
+│   └── favicon.ico
+├── templates/
+│   └── index.html    # SPA page
+├── tempfld/          # Upload processing
+├── testdata/         # Sample books for testing
+├── config.toml.example   # Config template
+├── Dockerfile            # Multi-stage build
+├── Dockerfile.all-in-one # All-in-one (app + DB)
+├── go.mod / go.sum       # Go module
+├── startup.sh            # Container entrypoint
+└── AGENTS.md / README.md
 ```
 
 ## Technology Stack
@@ -32,122 +56,156 @@ lbl/
 - **Web Framework**: Gin-Gonic
 - **Database**: PostgreSQL 17
 - **Driver**: github.com/lib/pq
-- **Containerization**: Docker
-- **Target Platform**: Raspberry Pi (ARM/Linux)
+- **Config**: TOML (github.com/BurntSushi/toml)
+- **PDF**: github.com/ledongthuc/pdf
+- **DOC**: github.com/richardlehane/mscfb
+- **Frontend**: Vanilla JS, no frameworks
+- **Meta recognition**: Ollama / OpenAI-compatible LLM
+- **Target**: Raspberry Pi (ARM/Linux)
 
-## Setup Instructions
+## Configuration (config.toml)
+The app reads `config.toml` from the current directory (or `CONFIG_PATH` env var).
+See `config.toml.example` for all options. Key sections:
+- `[server]` — port, bind, enable_delete, log_level
+- `[directories]` — bookarch, temp, logs, templates, static paths
+- `[database]` — host, port, name, user, password, sslmode
+- `[llm]` — base_url, model, token, prompt, prompt2, timeout
 
-### Prerequisites
-1. Go 1.25+ installed
-2. PostgreSQL 17+ installed and running
-3. (Optional) Docker for containerization
-
-### Local Development
-1. Clone the repository (or copy the project files)
-2. Initialize the database:
-   ```bash
-   # Connect to PostgreSQL
-   sudo -u postgres psql
-   # Then, in the psql prompt:
-   \i /path/to/lbl/db/scripts/init_db.sql
-   ```
-3. Set environment variables (optional, defaults are provided):
-   ```bash
-   export DATABASE_URL="host=localhost port=5432 user=postgres password=postgres dbname=librarydb sslmode=disable"
-   export PORT="8080"
-   ```
-4. Run the application:
-   ```bash
-   go run src/main.go
-   ```
-5. Access the API at `http://localhost:8080/api/v1/books`
-
-### Running with Docker
-1. Build the Docker image:
-   ```bash
-   docker build -t library-app .
-   ```
-2. Run the container:
-   ```bash
-   docker run -p 8080:8080 \
-     -e DATABASE_URL="host=host.docker.internal port=5432 user=postgres password=postgres dbname=librarydb sslmode=disable" \
-     library-app
-   ```
-   Note: For PostgreSQL running on the host, use `host.docker.internal` as the host from within the container.
+Overrides via environment: `DATABASE_URL`, `PORT`.
 
 ## API Endpoints
-| Method | Endpoint           | Description         |
-|--------|--------------------|---------------------|
-| GET    | `/api/v1/books`    | List all books      |
-| POST   | `/api/v1/books`    | Create a new book   |
-| GET    | `/api/v1/books/:id`| Get a specific book |
-| PUT    | `/api/v1/books/:id`| Update a book       |
-| DELETE | `/api/v1/books/:id`| Delete a book       |
 
-## Development Workflow
-1. Make changes to the Go source code in `src/`
-2. Test locally by running `go run src/main.go`
-3. Update database schema in `db/scripts/init_db.sql` as needed
-4. For Docker changes, rebuild the image and test
-5. Follow Go best practices: write tests, maintain clean code
+### Books & Metadata
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/books` | List books (?author=, ?book=, ?genre=, ?date_from=, ?date_to=, ?sort_by=, ?sort_order=, ?limit=, ?offset=) |
+| GET | `/api/v1/books/search` | Search books |
+| POST | `/api/v1/books` | Create book |
+| GET | `/api/v1/books/:id` | Get book |
+| PUT | `/api/v1/books/:id` | Update book |
+| DELETE | `/api/v1/books/:id` | Delete book + orphaned work |
+| GET | `/api/v1/books/:id/extended` | Extended info (ISBN, annotation, publisher, etc.) |
+| PUT | `/api/v1/books/:id/extended` | Update extended info |
+| PUT | `/api/v1/books/:id/shelf` | Toggle shelf (favorites) |
+| GET | `/api/v1/books/:id/download` | Download book file (ZIP) |
+| POST | `/api/v1/books/:id/cover` | Upload cover image |
 
-## Future Enhancements
-- Add authentication and authorization
-- Implement file upload for book archives (store in `bookarch/`)
-- Add search functionality
-- Create a web frontend (HTML/CSS/JS)
-- Implement book metadata extraction from files
-- Add user profiles and reading lists
-- Export/import functionality
+### Authors & Genres & Tags
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/authors` | List authors with book tree |
+| GET | `/api/v1/genres` | List genres |
+| POST | `/api/v1/genres` | Create genre |
+| GET | `/api/v1/tags` | List tags |
+| POST | `/api/v1/tags` | Create tag |
+| GET | `/api/v1/persons` | List all persons |
+| PUT | `/api/v1/persons/:id` | Update person name |
+| GET | `/api/v1/languages` | List languages |
 
-## Notes for Raspberry Pi Deployment
-1. Use the `golang:1.25-alpine` builder image for cross-compilation if needed
-2. The final Docker image uses `alpine:latest` for minimal size
-3. Ensure the container has access to persistent storage for:
-   - Database (consider using a volume for PostgreSQL data)
-   - Book archives (`bookarch/` directory)
-   - Temporary processing (`tempfld/` directory)
-## Testing
-1. Always leave server running after testing for human check
-2. Run application in service mode so it stays running after agent exits
+### Import (async)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/import/upload` | Upload files (multipart) → async import |
+| POST | `/api/v1/import/directory` | Import from server directory |
+| GET | `/api/v1/import/status` | Poll import progress |
+| POST | `/api/v1/import/cancel` | Cancel running import |
+| POST | `/api/v1/import/file` | Import single file (sync) |
 
-## Running Server Persistently
-To ensure the server remains running after agent session ends, use one of these methods:
+### Shelf
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/shelf/count` | Books on shelf count |
+| PUT | `/api/v1/shelf/clear` | Clear shelf |
 
-### Using nohup (recommended for local development)
+### Other
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/config` | App config (enable_delete flag) |
+| GET | `/debug/goroutines` | Goroutine dump |
+| GET | `/api/v1/opds/catalog.xml` | OPDS root catalog |
+| GET | `/api/v1/opds/latest.xml` | OPDS latest books |
+| GET | `/api/v1/opds/genres.xml` | OPDS genres |
+| GET | `/api/v1/opds/genre/:id.xml` | OPDS books by genre |
+| GET | `/api/v1/opds/search.xml?q=` | OPDS search |
+| GET | `/api/v1/opds/book/:id` | OPDS download |
+
+## Frontend Pages (SPA)
+
+### Вкладка Авторы
+- Hierarchical tree view: author → work → edition
+- Pagination (50 per page), summary row (authors, works, editions)
+- Filters: by author name, book title, genre (with ё→е normalization)
+- Shelf checkboxes per edition, "Добавить на полку" (all expanded), "Очистить полку"
+- Edit author/book modal, delete book
+- Download edition button
+
+### Вкладка Книги
+- Flat table: №, upload date, title, author, format (download link), shelf toggle, edit
+- Filters: by author, title, genre (text), date range (from/to with date inputs)
+- Column sorting: title, upload date, author, format (click headers)
+- Pagination (50 per page)
+- Shelf count, clear shelf button
+
+### Вкладка Импорт
+- Upload file form (FB2, EPUB, ZIP)
+- Import from server directory
+- Async progress polling with cancel button
+
+## LLM Book Recognition
+- Extracts first 3 pages (up to 2000 chars) from PDF/DOC/DOCX
+- Sends to OpenAI-compatible LLM (Ollama/llama.cpp)
+- Prompt asks for `AUTHOR:` and `BOOKNAME:` in response
+- Multiple authors supported (comma-separated in LLM response)
+- All LLM calls are serialized via sync.Mutex
+- Retry with prompt2 if first call returns empty
+- Falls back to filename if LLM is unavailable or times out
+- Always logged regardless of log_level
+
+## Import Flow
+1. Files uploaded via `/import/upload` → saved to `tempfld/`
+2. Async goroutine processes each file:
+   - SHA-256 hash duplicate check (blocks duplicate BEFORE LLM call)
+   - Format detection (FB2/EPUB have native metadata, PDF/DOC/DOCX need LLM)
+   - LLM recognition (if needed)
+   - Save as ZIP archive in `bookarch/XXXXX/`
+   - Insert into DB (works → editions → edition_files, with ISBN + genres)
+3. Progress polled via `/import/status`
+4. Cancel via `/import/cancel`
+5. Temp directories cleaned up on completion
+
+## Supported Formats
+- **FB2** — native metadata (title, authors, genres, annotation, cover, ISBN)
+- **EPUB** — native metadata (title, authors, language, ISBN, publisher, genres)
+- **PDF** — LLM recognition from extracted text
+- **DOCX** — LLM recognition from extracted text
+- **DOC** — LLM recognition from extracted text (OLE2 + UTF-16LE)
+- **ZIP** — auto-detects content type (FB2, EPUB, PDF, DOC, DOCX inside)
+
+## Search & Filtering
+- `normalizeQuery()` converts to lowercase + replaces ё→е for all search strings
+- Indices: `persons.lower_fio` (VARCHAR(510) GIN trgm), `works.lower_original_title` (TEXT GIN trgm), `editions.lower_title` (TEXT GIN trgm)
+- Trigger function `normalize_search_field()` fills lower_ fields via `REPLACE(LOWER(...), 'ё', 'е')`
+- All search queries use indexed lower_ fields
+
+## Build & Run
+
 ```bash
-cd /home/sergey/git/aitest/agents/lbl
+# Build
+go build -o library_app ./src/
+
+# Run (requires config.toml + PostgreSQL)
+./library_app
+
+# With env overrides
+DATABASE_URL="host=..." PORT=9091 ./library_app
+```
+
+Run persistently:
+```bash
 nohup ./library_app > library_app.log 2>&1 &
 ```
-Log will be written to `library_app.log`.
 
-### Using systemd (if available)
-Create `/etc/systemd/system/library-app.service`:
-```ini
-[Unit]
-Description=Library App
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/home/sergey/git/aitest/agents/lbl
-ExecStart=/home/sergey/git/aitest/agents/lbl/library_app
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-Then enable and start:
+## Testing
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable library-app
-sudo systemctl start library-app
-```
-
-### Pre-built binary
-The binary is already compiled as `library_app` in the project root. Build with:
-```bash
-go build -o library_app src/main.go
+go test ./src/...
 ```
