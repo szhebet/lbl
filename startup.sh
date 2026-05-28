@@ -12,4 +12,4 @@ done
 echo "PostgreSQL is ready!"
 
 echo "Starting Library App..."
-exec ./library_app
+exec ./main

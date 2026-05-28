@@ -9,3 +9,4 @@ opencode.json
 *.tmp
 *.bak
 library_app
+.env

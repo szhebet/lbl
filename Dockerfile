@@ -14,7 +14,7 @@ RUN go mod download
 COPY src/ ./src/
 
 # Build the Go app
-RUN go build -o main ./src/main.go
+RUN go build -o main ./src
 
 # Use a minimal alpine image to run the application
 FROM alpine:latest
@@ -23,10 +23,16 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 
 # Set the Current Working Directory inside the container
-WORKDIR /root/
+WORKDIR /app/
 
 # Copy the Pre-built binary file from the previous stage
 COPY --from=builder /app/main .
+
+# Copy static
+COPY static/ ./static/
+COPY templates/ ./templates/
+
+
 
 # Copy the database initialization script
 COPY db/scripts/init_db.sql ./init_db.sql

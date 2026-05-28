@@ -1,3 +1,22 @@
+# Use the official Golang image to build the application
+FROM golang:1.25-alpine AS builder
+
+# Set the Current Working Directory inside the container
+WORKDIR /app
+
+# Copy go mod and sum files
+COPY go.mod go.sum ./
+
+# Download all dependencies. Dependencies will be cached if the go.mod and go.sum files are not changed
+RUN go mod download
+
+# Copy the source from the current directory to the Working Directory inside the container
+COPY src/ ./src/
+
+# Build the Go app
+RUN go build -o main ./src/
+
+
 FROM postgres:17-alpine
 
 ENV POSTGRES_USER=library
@@ -10,24 +29,16 @@ RUN apk add --no-cache go ca-certificates bash
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY src/ ./src/
-COPY opds.go ./
-RUN go build -o library_app ./src/main.go ./src/opds.go
+COPY --from=builder /app/main .
 
 COPY static/ ./static/
 COPY templates/ ./templates/
-COPY bookarch/ ./bookarch/
-COPY tempfld/ ./tempfld/
 
 COPY startup.sh ./
 RUN chmod +x startup.sh
 
 ENV PORT=8080
-ENV DATABASE_URL=host=localhost port=5432 user=library password=library_secret dbname=librarydb sslmode=disable
-
+ENV DATABASE_URL=host=localhost port=5432 user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=$POSTGRES_DB sslmode=disable
 EXPOSE 5432 8080
 
 CMD ["./startup.sh"]

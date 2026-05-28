@@ -1,20 +1,16 @@
-version: '3.8'
-
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: library-db
     environment:
-      - POSTGRES_USER=library
-      - POSTGRES_PASSWORD=library_secret
-      - POSTGRES_DB=librarydb
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
       - ./db/scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql
-      - library_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - ${DATABASE_PATH}:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U library"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -25,16 +21,15 @@ services:
       dockerfile: Dockerfile
     container_name: library-app
     environment:
-      - DATABASE_URL=host=db port=5432 user=library password=library_secret dbname=librarydb sslmode=disable
+      - DATABASE_URL=host=db port=5432 user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} sslmode=disable
       - PORT=8080
     ports:
-      - "8080:8080"
+      - "9092:8080"
     depends_on:
       db:
         condition: service_healthy
     volumes:
-      - ./bookarch:/app/bookarch
-      - ./tempfld:/app/tempfld
-
-volumes:
-  library_data:
+      - /media/LinPart/bookarch/bookarch:/bookarch
+      - /media/LinPart/bookarch/logs:/logs
+      - /media/LinPart/bookarch/tmp:/tempfld
+      - ./config.toml:/config.toml:ro
