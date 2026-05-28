@@ -177,7 +177,7 @@ CREATE TABLE editions (
     work_id       INTEGER NOT NULL REFERENCES works(id) ON DELETE CASCADE,
     
     -- Идентификаторы
-    isbn          VARCHAR(17) UNIQUE,         -- с дефисами или без
+    isbn          VARCHAR(50) UNIQUE,         -- с дефисами или без
     ean           VARCHAR(13),
     udc           VARCHAR(50),                -- УДК
     bbk           VARCHAR(50),                -- ББК

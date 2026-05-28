@@ -2545,20 +2545,26 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		}
 
 		publisher := ""
+		var editionISBN interface{} = nil
 		if bookInfo != nil {
 			publisher = bookInfo.Publisher
+			isbn := strings.SplitN(bookInfo.ISBN, ",", 2)[0]
+			isbn = strings.TrimSpace(isbn)
+			if isbn != "" {
+				var exists bool
+				tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE isbn=$1)", isbn).Scan(&exists)
+				if !exists {
+					editionISBN = isbn
+				}
+			}
 		}
 
 		var editionID int
-		isbn := ""
-		if bookInfo != nil {
-			isbn = bookInfo.ISBN
-		}
 		err = tx.QueryRow(`
 			INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
 			RETURNING id
-		`, workID, title, langCode, publisher, year, "imported", "good", isbn).Scan(&editionID)
+		`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -3000,17 +3006,25 @@ func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *s
 
 	var editionID int
 	publisher := ""
-	isbn := ""
+	var editionISBN interface{} = nil
 	if bookInfo != nil {
 		publisher = bookInfo.Publisher
-		isbn = bookInfo.ISBN
+		isbn := strings.SplitN(bookInfo.ISBN, ",", 2)[0]
+		isbn = strings.TrimSpace(isbn)
+		if isbn != "" {
+			var exists bool
+			tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE isbn=$1)", isbn).Scan(&exists)
+			if !exists {
+				editionISBN = isbn
+			}
+		}
 	}
 	err = tx.QueryRow(`
 		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8) RETURNING id
-	`, workID, title, langCode, publisher, year, "imported", "good", isbn).Scan(&editionID)
+	`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
 	if err != nil {
-		updateFn(idx, "error", "", "Edition error")
+		updateFn(idx, "error", "", "Edition error: "+err.Error())
 		return
 	}
 
