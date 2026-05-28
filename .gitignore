@@ -5,3 +5,7 @@ errors*
 tmpBookarch
 config.toml
 opencode.json
+*.log
+*.tmp
+*.bak
+library_app
