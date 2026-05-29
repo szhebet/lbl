@@ -3,14 +3,14 @@ services:
     image: postgres:17-alpine
     container_name: library-db
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${LIBAPP_DB_USER}
+      - POSTGRES_PASSWORD=${LIBAPP_DB_PASSWORD}
+      - POSTGRES_DB=${LIBAPP_DB_NAME}
     volumes:
-      - ./db/scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql
+#      - ./db/scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql
       - ${DATABASE_PATH}:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${LIBAPP_DB_USER} -d ${LIBAPP_DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,7 +21,11 @@ services:
       dockerfile: Dockerfile
     container_name: library-app
     environment:
-      - DATABASE_URL=host=db port=5432 user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} sslmode=disable
+      - LIBAPP_DB_HOST=db
+      - LIBAPP_DB_USER=${LIBAPP_DB_USER}
+      - LIBAPP_DB_PASSWORD=${LIBAPP_DB_PASSWORD}
+      - LIBAPP_DB_NAME=${LIBAPP_DB_NAME}
+      - LIBAPP_DATABASE_URL=host=db port=5432 user=${LIBAPP_DB_USER} password=${LIBAPP_DB_PASSWORD} dbname=${LIBAPP_DB_NAME} sslmode=disable
       - PORT=8080
     ports:
       - "9092:8080"
@@ -32,4 +36,4 @@ services:
       - /media/LinPart/bookarch/bookarch:/bookarch
       - /media/LinPart/bookarch/logs:/logs
       - /media/LinPart/bookarch/tmp:/tempfld
-      - ./config.toml:/config.toml:ro
+      - ./config.toml:/app/config.toml:ro
