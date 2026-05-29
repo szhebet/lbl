@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"libapp/src/config"
 	"libapp/src/utils"
 )
@@ -128,6 +128,63 @@ func runMigrations(db *sql.DB) error {
 	} else {
 		log.Printf("DB is up to date (version %s)", currentVer)
 	}
+	return nil
+}
+
+func createDatabase(cfg *config.Config) error {
+	adminDSN := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=postgres sslmode=%s",
+		cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
+		cfg.Database.Password, cfg.Database.SSLMode,
+	)
+	adminDB, err := sql.Open("postgres", adminDSN)
+	if err != nil {
+		return fmt.Errorf("cannot connect to postgres database: %w", err)
+	}
+	defer adminDB.Close()
+
+	_, err = adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s ENCODING 'UTF8'", pq.QuoteIdentifier(cfg.Database.Name)))
+	if err != nil {
+		return fmt.Errorf("cannot create database: %w", err)
+	}
+	log.Printf("Database %q created", cfg.Database.Name)
+
+	targetDSN := cfg.DSN()
+	targetDB, err := sql.Open("postgres", targetDSN)
+	if err != nil {
+		return fmt.Errorf("cannot connect to new database: %w", err)
+	}
+	defer targetDB.Close()
+
+	schemaPath := "db/scripts/init_db.sql"
+	schemaSQL, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return fmt.Errorf("cannot read schema file %s: %w", schemaPath, err)
+	}
+
+	schemaStr := string(schemaSQL)
+	schemaStr = strings.ReplaceAll(schemaStr, "__DB_NAME__", cfg.Database.Name)
+	schemaStr = strings.ReplaceAll(schemaStr, "__DB_USER__", cfg.Database.User)
+
+	// Strip psql meta-commands (\c, \connect, \set) and DROP/CREATE DATABASE lines
+	var cleanSQL strings.Builder
+	for _, line := range strings.Split(schemaStr, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "\\") {
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(t), "DROP DATABASE") ||
+			strings.HasPrefix(strings.ToUpper(t), "CREATE DATABASE") {
+			continue
+		}
+		cleanSQL.WriteString(line + "\n")
+	}
+
+	if _, err := targetDB.Exec(cleanSQL.String()); err != nil {
+		return fmt.Errorf("cannot apply schema: %w", err)
+	}
+
+	log.Printf("Schema applied to database %q", cfg.Database.Name)
 	return nil
 }
 
@@ -359,7 +416,22 @@ func main() {
 
 	err = db.Ping()
 	if err != nil {
-		log.Fatal("Error pinging database: ", err)
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "3D000" {
+			log.Printf("Database %q does not exist, creating...", cfg.Database.Name)
+			if err := createDatabase(cfg); err != nil {
+				log.Fatal("Failed to create database: ", err)
+			}
+			db.Close()
+			db, err = sql.Open("postgres", dbURL)
+			if err != nil {
+				log.Fatal("Error reconnecting: ", err)
+			}
+			if err := db.Ping(); err != nil {
+				log.Fatal("Error pinging after creation: ", err)
+			}
+		} else {
+			log.Fatal("Error pinging database: ", err)
+		}
 	}
 
 	log.Println("Connected to database")
