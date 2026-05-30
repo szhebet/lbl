@@ -5,12 +5,6 @@
 -- 
 -- ============================================================
 
--- Создаем свежую базу данных
-CREATE DATABASE __DB_NAME__ OWNER __DB_USER__ ENCODING 'UTF8';
-
--- Подключаемся к новой базе данных
-\c __DB_NAME__;
-
 -- ============================================================
 -- РАСШИРЕНИЯ
 -- ============================================================
@@ -26,7 +20,8 @@ CREATE TABLE db_version (
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO db_version (version) VALUES ('1.0');
+INSERT INTO db_version (version) VALUES ('1.0')
+ON CONFLICT DO NOTHING;
 
 -- ============================================================
 -- ТАБЛИЦЫ АУТЕНТИФИКАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
@@ -74,7 +69,8 @@ INSERT INTO formats (name, extension, mime_type, category, is_reflowable, is_edi
 ('TXT',   'txt',   'text/plain',                                              'ebook',    true,  true),
 ('HTML',  'html',  'text/html',                                               'ebook',    true,  true),
 ('CBZ',   'cbz',   'application/x-cbz',                                       'comics',   false, false),
-('CBR',   'cbr',   'application/x-cbr',                                       'comics',   false, false);
+('CBR',   'cbr',   'application/x-cbr',                                       'comics',   false, false)
+ON CONFLICT (name) DO NOTHING;
 
 -- Языки
 CREATE TABLE languages (
@@ -96,7 +92,8 @@ INSERT INTO languages (code, name, native_name) VALUES
 ('ara', 'Arabic',   'العربية'),
 ('por', 'Portuguese','Português'),
 ('ukr', 'Ukrainian','Українська'),
-('bel', 'Belarusian','Беларуская');
+('bel', 'Belarusian','Беларуская')
+ON CONFLICT (code) DO NOTHING;
 
 -- ============================================================
 -- ПРОИЗВЕДЕНИЯ И АВТОРЫ

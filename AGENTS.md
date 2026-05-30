@@ -11,7 +11,6 @@ lbl/
 ├── bookarch/         # Book archive files (ZIP format)
 ├── db/
 │   └── scripts/
-│       └── init_db.sql   # Database schema (authors, works, editions, etc.)
 ├── logs/             # Application logs
 ├── src/              # Go source code
 │   ├── main.go       # Entry point, all handlers, routes
@@ -22,6 +21,7 @@ lbl/
 │   ├── reading.go    # Reading progress (unused)
 │   ├── recommendations.go  # Recommendations (unused)
 │   ├── main_test.go  # Tests
+│   ├── schema.sql    # Embedded database schema (tables, indexes, triggers)
 │   ├── config/
 │   │   └── config.go      # TOML config struct, Load(), DefaultConfig()
 │   └── utils/

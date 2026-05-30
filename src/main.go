@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -31,6 +32,9 @@ import (
 	"libapp/src/utils"
 )
 
+//go:embed schema.sql
+var embeddedSchema string
+
 const currentDBVersion = "1.0"
 
 type migration struct {
@@ -43,14 +47,7 @@ var migrations = []migration{
 	{
 		Version:     "1.0",
 		Description: "Initial schema",
-		SQL: `
-			CREATE TABLE IF NOT EXISTS db_version (
-				version     VARCHAR(20) NOT NULL,
-				updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			);
-			INSERT INTO db_version (version) VALUES ('1.0')
-			ON CONFLICT DO NOTHING;
-		`,
+		SQL:         stripSchema(embeddedSchema),
 	},
 }
 
@@ -156,19 +153,17 @@ func createDatabase(cfg *config.Config) error {
 	}
 	defer targetDB.Close()
 
-	schemaPath := "db/scripts/init_db.sql"
-	schemaSQL, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("cannot read schema file %s: %w", schemaPath, err)
+	if _, err := targetDB.Exec(stripSchema(embeddedSchema)); err != nil {
+		return fmt.Errorf("cannot apply schema: %w", err)
 	}
 
-	schemaStr := string(schemaSQL)
-	schemaStr = strings.ReplaceAll(schemaStr, "__DB_NAME__", cfg.Database.Name)
-	schemaStr = strings.ReplaceAll(schemaStr, "__DB_USER__", cfg.Database.User)
+	log.Printf("Schema applied to database %q", cfg.Database.Name)
+	return nil
+}
 
-	// Strip psql meta-commands (\c, \connect, \set) and DROP/CREATE DATABASE lines
-	var cleanSQL strings.Builder
-	for _, line := range strings.Split(schemaStr, "\n") {
+func stripSchema(schema string) string {
+	var clean strings.Builder
+	for _, line := range strings.Split(schema, "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" || strings.HasPrefix(t, "\\") {
 			continue
@@ -177,15 +172,9 @@ func createDatabase(cfg *config.Config) error {
 			strings.HasPrefix(strings.ToUpper(t), "CREATE DATABASE") {
 			continue
 		}
-		cleanSQL.WriteString(line + "\n")
+		clean.WriteString(line + "\n")
 	}
-
-	if _, err := targetDB.Exec(cleanSQL.String()); err != nil {
-		return fmt.Errorf("cannot apply schema: %w", err)
-	}
-
-	log.Printf("Schema applied to database %q", cfg.Database.Name)
-	return nil
+	return clean.String()
 }
 
 func normalizeStr(s string) string {
@@ -403,12 +392,9 @@ func main() {
 		log.Fatal("Error loading config: ", err)
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = cfg.DSN()
-	}
+	log.Printf("Connecting to database: %s", cfg.DSNDisplay())
 
-	db, err := sql.Open("postgres", dbURL)
+	db, err := sql.Open("postgres", cfg.DSN())
 	if err != nil {
 		log.Fatal("Error connecting to database: ", err)
 	}
@@ -422,7 +408,7 @@ func main() {
 				log.Fatal("Failed to create database: ", err)
 			}
 			db.Close()
-			db, err = sql.Open("postgres", dbURL)
+			db, err = sql.Open("postgres", cfg.DSN())
 			if err != nil {
 				log.Fatal("Error reconnecting: ", err)
 			}
@@ -502,11 +488,7 @@ func main() {
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", buf[:n])
 	})
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = fmt.Sprintf("%d", cfg.Server.Port)
-	}
-	addr := cfg.Server.Bind + ":" + port
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Bind, cfg.Server.Port)
 	log.Printf("Starting server on %s\n", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatal("Failed to start server: ", err)

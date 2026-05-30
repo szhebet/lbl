@@ -40,7 +40,13 @@
 
 ## Конфигурация
 
-Приложение читает `config.toml` из текущей директории (или `CONFIG_PATH` env var).
+Приложение читает настройки из двух источников (в порядке возрастания приоритета):
+
+1. **Переменные окружения** (`LIBAPP_*`) — низкий приоритет, используются как значения по умолчанию
+2. **Файл `config.toml`** — высокий приоритет, переопределяет переменные окружения
+
+Файл читается из текущей директории (или пути из `CONFIG_PATH`).
+
 Пример — `config.toml.example`:
 
 ```toml
@@ -74,12 +80,35 @@ prompt = "По тексту первых страниц книги опреде�
 prompt2= "По фрагменту текста определи автора и название книги..."
 ```
 
-### Переменные окружения (переопределяют config.toml)
+### Переменные окружения (низкий приоритет, переопределяются config.toml)
 
-| Переменная | Описание |
-|------------|----------|
-| `DATABASE_URL` | Полная строка подключения к БД |
-| `PORT` | Порт HTTP-сервера |
+| Переменная | Соответствие в config.toml | Описание |
+|------------|---------------------------|----------|
+| `LIBAPP_PORT` / `PORT` | `server.port` | Порт HTTP-сервера |
+| `LIBAPP_BIND` | `server.bind` | Адрес привязки |
+| `LIBAPP_ENABLE_DELETE` | `server.enable_delete` | Разрешить удаление (`true`/`false`) |
+| `LIBAPP_LOG_LEVEL` | `server.log_level` | Уровень логирования |
+| `LIBAPP_DIR_BOOKARCH` | `directories.bookarch` | Директория книжных архивов |
+| `LIBAPP_DIR_TEMP` | `directories.temp` | Временная директория |
+| `LIBAPP_DIR_LOGS` | `directories.logs` | Директория логов |
+| `LIBAPP_DIR_TEMPLATES` | `directories.templates` | Директория шаблонов |
+| `LIBAPP_DIR_STATIC` | `directories.static` | Директория статики |
+| `LIBAPP_DATABASE_URL` / `DATABASE_URL` | — | Полная строка подключения к БД (DSN или URL) |
+| `LIBAPP_DB_HOST` | `database.host` | Хост БД |
+| `LIBAPP_DB_PORT` | `database.port` | Порт БД |
+| `LIBAPP_DB_NAME` | `database.name` | Имя БД |
+| `LIBAPP_DB_USER` | `database.user` | Пользователь БД |
+| `LIBAPP_DB_PASSWORD` | `database.password` | Пароль БД |
+| `LIBAPP_DB_SSLMODE` | `database.sslmode` | Режим SSL |
+| `LIBAPP_DB_PGDATA` | `database.pgdata` | Директория данных PostgreSQL |
+| `LIBAPP_LLM_BASE_URL` | `llm.base_url` | URL LLM-сервера |
+| `LIBAPP_LLM_MODEL` | `llm.model` | Модель LLM |
+| `LIBAPP_LLM_TOKEN` | `llm.token` | Токен аутентификации LLM |
+| `LIBAPP_LLM_TIMEOUT` | `llm.timeout` | Таймаут LLM (сек) |
+| `LIBAPP_LLM_PROMPT` | `llm.prompt` | Первичный промпт для LLM |
+| `LIBAPP_LLM_PROMPT2` | `llm.prompt2` | Повторный промпт для LLM (при пустом ответе) |
+
+> **Важно**: переменные `PORT` и `DATABASE_URL` поддерживаются для обратной совместимости, но имеют более низкий приоритет, чем их аналоги `LIBAPP_PORT` и `LIBAPP_DATABASE_URL`.
 
 ## Сборка и запуск
 
@@ -96,7 +125,8 @@ git clone <repository_url>
 cd lbl
 
 # Настройка базы данных
-sudo -u postgres psql -d librarydb -f db/scripts/init_db.sql
+sudo -u postgres createdb library
+sudo -u postgres psql -d library -f src/schema.sql
 
 # Копирование и правка конфига
 cp config.toml.example config.toml
@@ -194,11 +224,11 @@ lbl/
 ├── bookarch/         # Директория хранения книжных файлов (ZIP-архивы)
 ├── db/
 │   └── scripts/
-│       └── init_db.sql  # SQL-скрипт инициализации БД (схема + триггеры + индексы)
 ├── logs/             # Логи приложения
 ├── src/              # Исходный код Go
 │   ├── main.go       # Точка входа, все хендлеры, маршруты, ImportManager
 │   ├── main_test.go  # Тесты
+│   ├── schema.sql    # Встраиваемая схема БД (таблицы, индексы, триггеры)
 │   ├── opds.go       # OPDS XML-каталог
 │   ├── auth.go       # Аутентификация (не используется)
 │   ├── jwt.go        # JWT (не используется)

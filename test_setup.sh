@@ -10,7 +10,8 @@ sleep 2
 
 # Run database initialization as postgres user
 echo "Initializing database..."
-sudo -u postgres psql -f db/scripts/init_db.sql
+sudo -u postgres sh -c 'createdb library 2>/dev/null || true'
+sudo -u postgres psql -d library -f src/schema.sql
 
 # Check if initialization succeeded
 if [ $? -eq 0 ]; then
