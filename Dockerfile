@@ -34,6 +34,12 @@ COPY templates/ ./templates/
 
 
 
+#<<<<<<< HEAD
+#=======
+# Copy the database initialization script
+#COPY db/scripts/init_db.sql ./db/scripts/init_db.sql
+
+#>>>>>>> 83d03999b7856536a568e4831f1b22e51f9335cd
 # Expose port 8080 to the outside world
 EXPOSE 8080
 
