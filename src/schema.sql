@@ -27,7 +27,7 @@ ON CONFLICT DO NOTHING;
 -- ТАБЛИЦЫ АУТЕНТИФИКАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
 -- ============================================================
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id            SERIAL PRIMARY KEY,
     username      VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 -- ============================================================
 
 -- Форматы книг
-CREATE TABLE formats (
+CREATE TABLE IF NOT EXISTS formats (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(50)  NOT NULL UNIQUE,
     extension   VARCHAR(10)  NOT NULL,
@@ -73,7 +73,7 @@ INSERT INTO formats (name, extension, mime_type, category, is_reflowable, is_edi
 ON CONFLICT (name) DO NOTHING;
 
 -- Языки
-CREATE TABLE languages (
+CREATE TABLE IF NOT EXISTS languages (
     code        VARCHAR(3)  PRIMARY KEY,   -- ISO 639-2/B
     name        VARCHAR(100) NOT NULL,
     native_name VARCHAR(100)
@@ -100,7 +100,7 @@ ON CONFLICT (code) DO NOTHING;
 -- ============================================================
 
 -- Произведение (абстрактная «книга как идея»)
-CREATE TABLE works (
+CREATE TABLE IF NOT EXISTS works (
     id                SERIAL PRIMARY KEY,
     original_title    TEXT NOT NULL,
     original_language VARCHAR(3) REFERENCES languages(code),
@@ -113,10 +113,10 @@ CREATE TABLE works (
     lower_original_title    TEXT
 );
 
-CREATE INDEX idx_works_lower_title ON works USING gin (lower_original_title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_works_lower_title ON works USING gin (lower_original_title gin_trgm_ops);
 
 -- Персоны (авторы, переводчики, редакторы и т.д.)
-CREATE TABLE persons (
+CREATE TABLE IF NOT EXISTS persons (
     id          SERIAL PRIMARY KEY,
     first_name  TEXT,
     middle_name TEXT,
@@ -131,16 +131,19 @@ CREATE TABLE persons (
     UNIQUE (first_name, last_name)
 );
 
-CREATE INDEX idx_persons_lower_fio ON persons USING gin (lower_fio gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_persons_lower_fio ON persons USING gin (lower_fio gin_trgm_ops);
 
 -- Роли персон
-CREATE TYPE contributor_role AS ENUM (
-    'author', 'translator', 'editor', 'illustrator', 'compiler',
-    'preface_author', 'commentary_author', 'other'
-);
+DO $$ BEGIN
+    CREATE TYPE contributor_role AS ENUM (
+        'author', 'translator', 'editor', 'illustrator', 'compiler',
+        'preface_author', 'commentary_author', 'other'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Связь произведения и персон
-CREATE TABLE work_contributors (
+CREATE TABLE IF NOT EXISTS work_contributors (
     work_id   INTEGER REFERENCES works(id) ON DELETE CASCADE,
     person_id INTEGER REFERENCES persons(id) ON DELETE CASCADE,
     role      contributor_role NOT NULL,
@@ -148,7 +151,7 @@ CREATE TABLE work_contributors (
 );
 
 -- Иерархия жанров
-CREATE TABLE genres (
+CREATE TABLE IF NOT EXISTS genres (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     parent_id   INTEGER REFERENCES genres(id),
@@ -156,7 +159,7 @@ CREATE TABLE genres (
 );
 
 -- Связь произведения и жанров
-CREATE TABLE work_genres (
+CREATE TABLE IF NOT EXISTS work_genres (
     work_id  INTEGER REFERENCES works(id) ON DELETE CASCADE,
     genre_id INTEGER REFERENCES genres(id) ON DELETE CASCADE,
     PRIMARY KEY (work_id, genre_id)
@@ -167,7 +170,7 @@ CREATE TABLE work_genres (
 -- ============================================================
 
 -- Издание (конкретная книга в конкретном языке, переводе, оформлении)
-CREATE TABLE editions (
+CREATE TABLE IF NOT EXISTS editions (
     id            SERIAL PRIMARY KEY,
     work_id       INTEGER NOT NULL REFERENCES works(id) ON DELETE CASCADE,
     
@@ -203,10 +206,10 @@ CREATE TABLE editions (
     lower_title   TEXT
 );
 
-CREATE INDEX idx_editions_lower_title ON editions USING gin (lower_title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_editions_lower_title ON editions USING gin (lower_title gin_trgm_ops);
 
 -- Конкретные файлы изданий (одно издание может быть в нескольких форматах)
-CREATE TABLE edition_files (
+CREATE TABLE IF NOT EXISTS edition_files (
     id            SERIAL PRIMARY KEY,
     edition_id    INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
     format_id     INTEGER NOT NULL REFERENCES formats(id) ON DELETE RESTRICT,
@@ -240,7 +243,7 @@ CREATE TABLE edition_files (
 -- ============================================================
 
 -- Пользовательские теги
-CREATE TABLE tags (
+CREATE TABLE IF NOT EXISTS tags (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     color       VARCHAR(7),                  -- #RRGGBB
@@ -248,14 +251,14 @@ CREATE TABLE tags (
 );
 
 -- Связь изданий с тегами
-CREATE TABLE edition_tags (
+CREATE TABLE IF NOT EXISTS edition_tags (
     edition_id INTEGER REFERENCES editions(id) ON DELETE CASCADE,
     tag_id     INTEGER REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (edition_id, tag_id)
 );
 
 -- Коллекции/подборки
-CREATE TABLE collections (
+CREATE TABLE IF NOT EXISTS collections (
     id          SERIAL PRIMARY KEY,
     name        TEXT NOT NULL,
     description TEXT,
@@ -265,7 +268,7 @@ CREATE TABLE collections (
 );
 
 -- Книги в коллекциях
-CREATE TABLE collection_items (
+CREATE TABLE IF NOT EXISTS collection_items (
     id            SERIAL PRIMARY KEY,
     collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,
     edition_id    INTEGER REFERENCES editions(id) ON DELETE CASCADE,
@@ -279,7 +282,7 @@ CREATE TABLE collection_items (
 -- ============================================================
 
 -- Оглавление (для сравнения книг и поиска дубликатов, навигации)
-CREATE TABLE toc_entries (
+CREATE TABLE IF NOT EXISTS toc_entries (
     id          SERIAL PRIMARY KEY,
     edition_id  INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
     parent_id   INTEGER REFERENCES toc_entries(id) ON DELETE CASCADE,
@@ -290,7 +293,7 @@ CREATE TABLE toc_entries (
 );
 
 -- Прогресс чтения
-CREATE TABLE reading_progress (
+CREATE TABLE IF NOT EXISTS reading_progress (
     id              SERIAL PRIMARY KEY,
     edition_id      INTEGER UNIQUE REFERENCES editions(id) ON DELETE CASCADE,
     current_position INTEGER DEFAULT 0,
@@ -308,7 +311,7 @@ CREATE TABLE reading_progress (
 -- ПОИСК ДУБЛИКАТОВ
 -- ============================================================
 
-CREATE TABLE duplicate_candidates (
+CREATE TABLE IF NOT EXISTS duplicate_candidates (
     id            SERIAL PRIMARY KEY,
     edition_id_1  INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
     edition_id_2  INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
@@ -328,7 +331,7 @@ CREATE TABLE duplicate_candidates (
 -- ============================================================
 
 -- Сессии импорта
-CREATE TABLE import_sessions (
+CREATE TABLE IF NOT EXISTS import_sessions (
     id              SERIAL PRIMARY KEY,
     source_type     VARCHAR(50) NOT NULL,     -- inpx, calibre, manual, directory
     source_path     TEXT,
@@ -344,7 +347,7 @@ CREATE TABLE import_sessions (
 );
 
 -- Лог конвертаций
-CREATE TABLE conversion_log (
+CREATE TABLE IF NOT EXISTS conversion_log (
     id              SERIAL PRIMARY KEY,
     source_file_id  INTEGER REFERENCES edition_files(id) ON DELETE SET NULL,
     target_file_id  INTEGER REFERENCES edition_files(id) ON DELETE SET NULL,
