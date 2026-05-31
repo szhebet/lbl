@@ -49,38 +49,8 @@
 
 Пример — `config.toml.example`:
 
-```toml
-[server]
-port = 9091
-bind = "0.0.0.0"
-enable_delete = true
-log_level = "info"
 
-[directories]
-bookarch = "bookarch"
-temp = "tempfld"
-logs = "logs"
-templates = "templates"
-static = "static"
-
-[database]
-host = "localhost"
-port = 5432
-name = "library"
-user = "postgres"
-password = "postgres"
-sslmode = "disable"
-
-[llm]
-base_url = "http://192.168.1.2:11434"
-model = "phi4:latest"
-token = ""
-timeout = 60
-prompt = "По тексту первых страниц книги определи автора и название..."
-prompt2= "По фрагменту текста определи автора и название книги..."
-```
-
-### Переменные окружения (низкий приоритет, переопределяются config.toml)
+### Переменные окружения (низкий приоритет, переопределяются config.toml) но для Docker удобнее использовать их
 
 | Переменная | Соответствие в config.toml | Описание |
 |------------|---------------------------|----------|
@@ -121,7 +91,7 @@ prompt2= "По фрагменту текста определи автора и 
 
 ```bash
 # Клонирование репозитория
-git clone <repository_url>
+git clone https://github.com/szhebet/lbl.git
 cd lbl
 
 # Настройка базы данных
@@ -130,7 +100,7 @@ sudo -u postgres psql -d library -f src/schema.sql
 
 # Копирование и правка конфига
 cp config.toml.example config.toml
-# Отредактируйте config.toml под свои параметры
+# Отредактируйте config.toml под свои параметры, раскомментируйте закомментированные строки или добавьте недостающие значения в переменные среды
 
 # Сборка
 go build -o library_app ./src/
@@ -141,15 +111,21 @@ go build -o library_app ./src/
 
 Приложение доступно по адресу: http://localhost:9091
 
-### Docker
+### Docker compose
+
+git clone https://github.com/szhebet/lbl.git
+cd lbl
 
 ```bash
 # Сборка all-in-one образа (приложение + PostgreSQL)
-docker build -f Dockerfile.all-in-one -t library-app .
+cp config.toml.example config.toml
+# Отредактируйте config.toml под свои параметры
 
-# Запуск
-docker run -d -p 9091:9091 --name library library-app
-```
+cp env.example .env
+# Отредактируйте .env под свои параметры, пароль сделайте сложным
+
+docker compose up -d
+
 
 ## API эндпоинты
 

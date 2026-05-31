@@ -5,20 +5,11 @@ services:
     environment:
       - POSTGRES_USER=${LIBAPP_DB_USER}
       - POSTGRES_PASSWORD=${LIBAPP_DB_PASSWORD}
-#<<<<<<< HEAD
-#      - POSTGRES_DB=${LIBAPP_DB_NAME}
-#=======
       - POSTGRES_DB=${LIBAPP_DB_NAME}
-#>>>>>>> 83d03999b7856536a568e4831f1b22e51f9335cd
     volumes:
-#      - ./db/scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql
       - ${DATABASE_PATH}:/var/lib/postgresql/data
     healthcheck:
-#<<<<<<< HEAD
-#      test: ["CMD-SHELL", "pg_isready -U ${LIBAPP_DB_USER} -d postgres"]
-#=======
       test: ["CMD-SHELL", "pg_isready -U ${LIBAPP_DB_USER} -d ${LIBAPP_DB_NAME}"]
-#>>>>>>> 83d03999b7856536a568e4831f1b22e51f9335cd
       interval: 5s
       timeout: 5s
       retries: 5
