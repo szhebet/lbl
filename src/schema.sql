@@ -15,7 +15,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";    -- генерация UUID
 -- ВЕРСИЯ БАЗЫ ДАННЫХ
 -- ============================================================
 
-CREATE TABLE db_version (
+CREATE TABLE IF NOT EXISTS db_version (
     version     VARCHAR(20) NOT NULL,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
