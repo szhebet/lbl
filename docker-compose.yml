@@ -32,7 +32,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ${SERVER_BOOKSTORAGE_FOLDER}:/bookarch
-      - ${SERVER_LOGS}:/logs
-      - ${SERVER_TMP_FOLDER}:/tempfld
+      - ${SERVER_BOOKSTORAGE_FOLDER}:/app/bookarch
+      - ${SERVER_LOGS}:/app/logs
+      - ${SERVER_TMP_FOLDER}:/app/tempfld
       - ./config.toml:/app/config.toml:ro
