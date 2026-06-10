@@ -98,7 +98,7 @@ cp config.toml.example config.toml
 cp env.example .env
 # Отредактировать .env (пароль, пути)
 
-docker compose up -d
+docker compose up -d --build
 ```
 
 Приложение: http://localhost:9092
