@@ -95,7 +95,10 @@ Overrides via environment: `DATABASE_URL`, `PORT`.
 |--------|----------|-------------|
 | GET | `/api/v1/authors` | List authors with book tree |
 | GET | `/api/v1/genres` | List genres |
+| GET | `/api/v1/genres/tree` | Genre hierarchy with nested authors & books (`?genre=`, `?author=`, `?book=`) |
 | POST | `/api/v1/genres` | Create genre |
+| PUT | `/api/v1/genres/:id` | Update genre |
+| DELETE | `/api/v1/genres/:id` | Delete genre (only if no books) |
 | GET | `/api/v1/tags` | List tags |
 | POST | `/api/v1/tags` | Create tag |
 | GET | `/api/v1/persons` | List all persons |
@@ -151,6 +154,13 @@ Overrides via environment: `DATABASE_URL`, `PORT`.
 - Import from server directory
 - Async progress polling with cancel button
 
+### Вкладка Жанры
+- Hierarchical tree view: genre → author → book (edition)
+- Filters: by genre name, author name, book title
+- Edit genre name inline via modal
+- Shelf checkboxes per edition
+- Download edition button
+
 ## LLM Book Recognition
 - Extracts first 3 pages (up to 2000 chars) from PDF/DOC/DOCX
 - Sends to OpenAI-compatible LLM (Ollama/llama.cpp)
@@ -205,7 +215,90 @@ Run persistently:
 nohup ./library_app > library_app.log 2>&1 &
 ```
 
-## Testing
+## Launch for Other Agents (Docker host-net mode)
+
+The app runs inside the opencode Docker container, but its port is **not exposed to the host** by default. Other agents need the site accessible via the browser on the host machine. The solution: create a minimal Docker image from the binary and run it with `--net=host`.
+
+### Prerequisites
+- PostgreSQL must be running and accessible (see `config.toml` `[database]` section)
+- Binary must be built: `go build -o library_app ./src/`
+- Docker socket must be available (`/var/run/docker.sock`)
+
+### Launch sequence
+
 ```bash
-go test ./src/...
+# 1. Kill any previously running instance (inside container or old Docker container)
+docker rm -f library-app 2>/dev/null
+pkill -f library_app 2>/dev/null; sleep 1
+
+# 2. Create minimal Docker image from the binary
+cd /tmp && mkdir -p library-app
+cp /home/sergey/git/aitest/agents/lbl/library_app library-app/
+cp -r /home/sergey/git/aitest/agents/lbl/templates /home/sergey/git/aitest/agents/lbl/static /home/sergey/git/aitest/agents/lbl/config.toml library-app/
+tar -cf library-app.tar -C library-app .
+docker import library-app.tar library-app:latest
+rm -rf /tmp/library-app /tmp/library-app.tar
+
+# 3. Run with host networking (accessible on host's localhost:9091)
+docker run -d --name library-app --net=host \
+  -v /home/sergey/git/aitest/agents/lbl/config.toml:/config.toml \
+  -v /home/sergey/git/aitest/agents/lbl/bookarch:/bookarch \
+  -v /home/sergey/git/aitest/agents/lbl/tempfld:/tempfld \
+  -v /home/sergey/git/aitest/agents/lbl/logs:/logs \
+  -v /home/sergey/git/aitest/agents/lbl/templates:/templates \
+  -v /home/sergey/git/aitest/agents/lbl/static:/static \
+  library-app /library_app
+
+# 4. Verify
+sleep 2
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9091/
+# Should print 200
+```
+
+### Verification
+
+```bash
+# Check container is running
+docker ps --filter name=library-app
+
+# Check logs
+docker logs library-app --tail 5
+
+# Test API
+curl -s http://localhost:9091/api/v1/config
+curl -s http://localhost:9091/api/v1/books?limit=1
+
+# Test frontend (should return HTML)
+curl -s http://localhost:9091/ | head -3
+```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `bind: address already in use` | Old process still listening | Run `pkill -f library_app; docker rm -f library-app` first |
+| `connection refused` | Container not started or port mismatch | Check `docker logs library-app`; verify config.toml port is 9091 |
+| PostgreSQL connection errors | DB not running | Check `pg_isready`; start with `sudo pg_ctlcluster 17 main start` |
+| Docker Hub pull fails (403) | No registry access | Use `docker import` approach above (does not require pulling images) |
+
+### Stop
+
+```bash
+docker rm -f library-app
+```
+
+### Rebuild
+
+After code changes, rebuild the binary first, then repeat the full launch sequence:
+
+```bash
+go build -o library_app ./src/
+```
+
+## Testing
+
+After every code change, run all tests **except** data reload (`TestImportBookFile` requires external test files):
+
+```bash
+go test -run 'Test[^I]|TestImport[^B]|TestImportBook[^F]' -count=1 ./src/
 ```

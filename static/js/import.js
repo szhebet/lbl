@@ -1,7 +1,3 @@
-if (typeof API_BASE === 'undefined') {
-    var API_BASE = '/api/v1';
-}
-
 var importPollTimer = null;
 var oldDirectoryHandler = null;
 
@@ -40,15 +36,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 var response = await fetch(API_BASE + '/import/file', { method: 'POST', body: formData });
                 var data = await response.json();
                 if (response.ok) {
-                    var html = '<div class="success"><h4>\u041a\u043d\u0438\u0433\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0430!</h4><ul>';
-                    html += '<li><strong>\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435:</strong> ' + escapeHtml(data.title || 'N/A') + '</li>';
-                    html += '<li><strong>\u0410\u0432\u0442\u043e\u0440\u044b:</strong> ' + escapeHtml((data.authors || []).join(', ') || 'N/A') + '</li>';
-                    html += '<li><strong>\u042f\u0437\u044b\u043a:</strong> ' + (data.language || 'N/A') + '</li>';
-                    html += '</ul></div>';
+                    var html;
+                    if (data.duplicate) {
+                        html = '<div class="warning"><h4>\u041a\u043d\u0438\u0433\u0430 \u0443\u0436\u0435 \u0435\u0441\u0442\u044c \u0432 \u0431\u0438\u0431\u043b\u0438\u043e\u0442\u0435\u043a\u0435!</h4><p>' + escapeHtml(data.message || '\u0414\u0443\u0431\u043b\u0438\u043a\u0430\u0442') + '</p></div>';
+                    } else {
+                        html = '<div class="success"><h4>\u041a\u043d\u0438\u0433\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0430!</h4><ul>';
+                        html += '<li><strong>\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435:</strong> ' + escapeHtml(data.title || 'N/A') + '</li>';
+                        var authorsList = Array.isArray(data.authors) ? data.authors : (data.authors ? [data.authors] : []);
+                        html += '<li><strong>\u0410\u0432\u0442\u043e\u0440\u044b:</strong> ' + escapeHtml(authorsList.join(', ') || 'N/A') + '</li>';
+                        html += '<li><strong>\u042f\u0437\u044b\u043a:</strong> ' + (data.language || 'N/A') + '</li>';
+                        html += '</ul></div>';
+                    }
                     uploadResult.innerHTML = html;
                     fileInput.value = '';
                     uploadPreview.style.display = 'none';
-                    if (typeof loadAuthorsWithState === 'function') {
+                    if (!data.duplicate && typeof loadAuthorsWithState === 'function') {
                         loadAuthorsWithState(saveExpandedState());
                     }
                 } else {
@@ -99,7 +101,9 @@ function switchToImportTab() {
     contents.forEach(function(c) { c.classList.remove('active'); });
     var importTab = document.querySelector('.tab[data-tab="import"]');
     var importContent = document.getElementById('import');
-    if (importTab) importTab.classList.add('active');
+    if (importTab) {
+        importTab.classList.add('active');
+    }
     if (importContent) importContent.classList.add('active');
 }
 
@@ -234,8 +238,25 @@ function finishImportUI(state) {
         var skipped = (state.items || []).filter(function(it) { return it.status === 'skipped'; }).length;
         var errors = (state.items || []).filter(function(it) { return it.status === 'error'; }).length;
         var cancelled = (state.items || []).filter(function(it) { return it.status === 'cancelled'; }).length;
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        var durationStr = '';
+        if (state.start_time) {
+            var diffSec = Math.floor((now.getTime() / 1000) - state.start_time);
+            if (diffSec < 60) {
+                durationStr = diffSec + ' \u0441\u0435\u043A';
+            } else if (diffSec < 3600) {
+                durationStr = Math.floor(diffSec / 60) + ' \u043C\u0438\u043D ' + (diffSec % 60) + ' \u0441\u0435\u043A';
+            } else {
+                var h = Math.floor(diffSec / 3600);
+                var m = Math.floor((diffSec % 3600) / 60);
+                durationStr = h + ' \u0447 ' + m + ' \u043C\u0438\u043D';
+            }
+        }
         var html = '<div class="import-summary">' +
-            '<h4>\u0418\u043c\u043f\u043e\u0440\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d</h4>' +
+            '<h4>\u0418\u043C\u043F\u043E\u0440\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D</h4>' +
+            '<p>\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043D: ' + dateStr + '</p>' +
+            '<p>\u0414\u043B\u0438\u0442\u0435\u043B\u044C\u043D\u043E\u0441\u0442\u044C: ' + durationStr + '</p>' +
             '<p>\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043D\u043E: ' + done + '</p>' +
             '<p>\u0414\u0443\u0431\u043B\u0438\u043A\u0430\u0442\u043E\u0432: ' + skipped + '</p>' +
             '<p>\u041E\u0448\u0438\u0431\u043E\u043A: ' + errors + '</p>';
@@ -253,6 +274,19 @@ function finishImportUI(state) {
 }
 
 function checkImportOnLoad() {
+    fetch(API_BASE + '/import/status')
+        .then(function(r) { return r.json(); })
+        .then(function(state) {
+            if (state.running) {
+                showImportProgress('', state.total);
+                updateImportUI(state);
+                startImportPolling();
+            }
+        })
+        .catch(function() {});
+}
+
+function checkImportStatus() {
     fetch(API_BASE + '/import/status')
         .then(function(r) { return r.json(); })
         .then(function(state) {

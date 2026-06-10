@@ -14,6 +14,11 @@ document.getElementById('loadBooksBtn')?.addEventListener('click', () => {
     document.getElementById('folderInput').click();
 });
 
+document.getElementById('showImportProgressBtn')?.addEventListener('click', () => {
+    switchToImportTab();
+    checkImportStatus();
+});
+
 document.getElementById('folderInput')?.addEventListener('change', async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -116,6 +121,8 @@ document.querySelectorAll('.tab').forEach(tab => {
         document.getElementById(tab.dataset.tab).classList.add('active');
         if (tab.dataset.tab === 'books') {
             loadBooks();
+        } else if (tab.dataset.tab === 'genres') {
+            loadGenres();
         }
     });
 });
@@ -240,6 +247,29 @@ document.getElementById('clearBookFilters')?.addEventListener('click', () => {
     }
 });
 
+document.getElementById('applyGenreFilters')?.addEventListener('click', () => {
+    loadGenres();
+});
+
+document.getElementById('clearGenreFilters')?.addEventListener('click', () => {
+    document.getElementById('genreNameFilter').value = '';
+    document.getElementById('genreAuthorFilter').value = '';
+    document.getElementById('genreBookFilter').value = '';
+    loadGenres();
+});
+
+['genreNameFilter', 'genreAuthorFilter', 'genreBookFilter'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) {
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                loadGenres();
+            }
+        });
+    }
+});
+
 document.getElementById('editForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -290,6 +320,27 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
             const state = saveExpandedState();
             state.keepFocus = { type: 'book', id: id };
             loadAuthorsWithState(state);
+        } else if (editType === 'genre') {
+            const name = document.getElementById('genre_name').value.trim();
+            if (!name) {
+                alert('Название жанра обязательно');
+                return;
+            }
+            const parentSelect = document.getElementById('genre_parent');
+            const parentId = parentSelect ? parentSelect.value : '';
+            const body = { name: name };
+            if (parentId) body.parent_id = parseInt(parentId);
+            const response = await fetch(`${API_BASE}/genres/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Ошибка сохранения');
+            }
+            closeModal();
+            loadGenres();
         }
     } catch (error) {
         alert(error.message);
@@ -670,6 +721,290 @@ async function loadBooks() {
     }
 }
 
+async function loadGenres() {
+    const treeContainer = document.getElementById('genresTree');
+    treeContainer.innerHTML = '<div class="loading">Загрузка...</div>';
+
+    const genreFilter = document.getElementById('genreNameFilter').value.trim();
+    const authorFilter = document.getElementById('genreAuthorFilter').value.trim().replace(/ё/g, 'е');
+    const bookFilter = document.getElementById('genreBookFilter').value.trim().replace(/ё/g, 'е');
+
+    try {
+        let url = `${API_BASE}/genres/tree?genre=${encodeURIComponent(genreFilter)}&author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Ошибка загрузки жанров');
+
+        const data = await response.json();
+        const genres = data.genres || [];
+
+        if (genres.length === 0) {
+            treeContainer.innerHTML = '<div class="no-results">Ничего не найдено</div>';
+            return;
+        }
+
+        treeContainer.innerHTML = '';
+        renderGenreTree(genres, treeContainer);
+    } catch (error) {
+        console.error('Error loading genres:', error);
+        treeContainer.innerHTML = `<div class="error">Ошибка: ${error.message}</div>`;
+    }
+}
+
+function renderGenreTree(genres, container) {
+    container.innerHTML = '';
+    genres.forEach(genre => renderGenreNode(genre, container, 1, false));
+}
+
+function renderGenreNode(genre, container, depth, isChild) {
+    const item = document.createElement('div');
+    item.className = 'tree-item';
+
+    const header = document.createElement('div');
+    header.className = 'tree-node-header';
+    header.style.marginLeft = (depth - 1) * 20 + 'px';
+    header.style.padding = '10px';
+    header.style.background = depth === 1 ? '#ecf0f1' : '#e8f4f8';
+    header.style.borderRadius = '4px';
+    header.style.marginBottom = '8px';
+    header.style.cursor = 'pointer';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.gap = '10px';
+
+    const hasContent = (genre.children && genre.children.length > 0) || (genre.authors && genre.authors.length > 0);
+    header.innerHTML = `
+        <span class="expand-icon">${hasContent ? '▶' : ''}</span>
+        <span style="font-weight: ${depth === 1 ? 'bold' : 'normal'};">${escapeHtml(genre.name)}</span>
+        <span style="color: #666; font-size: 12px;">(${genre.books_count} книг)</span>
+        <button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>
+        ${enableDelete ? `<button class="delete-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}">Удалить</button>` : ''}
+    `;
+
+    header.querySelector('.edit-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const btn = e.target;
+        openGenreModal({
+            id: btn.dataset.id,
+            name: btn.dataset.name,
+            parent_id: btn.dataset.parent_id ? parseInt(btn.dataset.parent_id) : null
+        });
+    });
+
+    const deleteGenreBtn = header.querySelector('.delete-btn[data-type="genre"]');
+    if (deleteGenreBtn) {
+        deleteGenreBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const btn = e.target;
+            const genreId = btn.dataset.id;
+            const name = btn.dataset.name;
+            if (!confirm(`Удалить жанр "${name}"? Книги не будут удалены.`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/genres/${genreId}`, { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                    return;
+                }
+                loadGenres();
+            } catch (err) {
+                alert('Ошибка: ' + err.message);
+            }
+        });
+    }
+
+    const contentContainer = document.createElement('div');
+    contentContainer.style.marginLeft = depth * 20 + 'px';
+    contentContainer.style.display = 'none';
+
+    if (hasContent) {
+        header.addEventListener('click', (e) => {
+            if (e.target.closest('.edit-btn, .download-btn, .shelf-checkbox, .delete-btn')) return;
+            const icon = header.querySelector('.expand-icon');
+            const isCollapsed = contentContainer.style.display === 'none';
+            contentContainer.style.display = isCollapsed ? 'block' : 'none';
+            icon.textContent = isCollapsed ? '▼' : '▶';
+        });
+    }
+
+    // Render child genres
+    if (genre.children && genre.children.length > 0) {
+        const childSection = document.createElement('div');
+        childSection.style.marginBottom = '8px';
+        genre.children.forEach(child => renderGenreNode(child, childSection, depth + 1, true));
+        contentContainer.appendChild(childSection);
+    }
+
+    // Render authors directly attached to this genre
+    if (genre.authors && genre.authors.length > 0) {
+        const authorSection = document.createElement('div');
+        genre.authors.forEach(author => {
+            const authorItem = document.createElement('div');
+            authorItem.className = 'tree-item';
+
+            const authorLevel = document.createElement('div');
+            authorLevel.className = 'tree-node-header';
+            authorLevel.style.marginLeft = '20px';
+            authorLevel.style.padding = '8px 12px';
+            authorLevel.style.background = '#f0f0f0';
+            authorLevel.style.borderRadius = '4px';
+            authorLevel.style.marginBottom = '6px';
+            authorLevel.style.cursor = 'pointer';
+            authorLevel.style.display = 'flex';
+            authorLevel.style.alignItems = 'center';
+            authorLevel.style.gap = '8px';
+
+            const hasBooks = author.books && author.books.length > 0;
+            authorLevel.innerHTML = `
+                <span class="expand-icon">${hasBooks ? '▶' : ''}</span>
+                <span>${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
+                <span style="color: #666; font-size: 12px;">(${author.books_count} книг)</span>
+            `;
+
+            const booksContainer = document.createElement('div');
+            booksContainer.style.marginLeft = '40px';
+            booksContainer.style.display = 'none';
+
+            if (hasBooks) {
+                authorLevel.addEventListener('click', (e) => {
+                    if (e.target.closest('.edit-btn, .download-btn, .shelf-checkbox, .delete-btn')) return;
+                    const icon = authorLevel.querySelector('.expand-icon');
+                    const isCollapsed = booksContainer.style.display === 'none';
+                    booksContainer.style.display = isCollapsed ? 'block' : 'none';
+                    icon.textContent = isCollapsed ? '▼' : '▶';
+                });
+
+                author.books.forEach(book => {
+                    const bookDiv = document.createElement('div');
+                    bookDiv.className = 'level-3';
+                    bookDiv.innerHTML = `
+                        <span class="book-title">${escapeHtml(book.title)}</span>
+                        ${book.year ? `<span style="color: #666; font-size: 12px;">(${book.year})</span>` : ''}
+                        <button class="download-btn" data-id="${book.id}" title="Скачать">⬇</button>
+                        <input type="checkbox" class="shelf-checkbox" data-id="${book.id}" ${book.on_shelf ? 'checked' : ''} title="На полке">
+                        <button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>
+                        ${enableDelete ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
+                    `;
+
+                    bookDiv.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
+                        e.stopPropagation();
+                        const checkbox = e.target;
+                        const editionId = checkbox.dataset.id;
+                        const onShelf = checkbox.checked;
+                        try {
+                            const response = await fetch(`${API_BASE}/books/${editionId}/shelf`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ on_shelf: onShelf })
+                            });
+                            if (!response.ok) {
+                                checkbox.checked = !onShelf;
+                            } else {
+                                updateShelfCount();
+                            }
+                        } catch (err) {
+                            checkbox.checked = !onShelf;
+                        }
+                    });
+
+                    bookDiv.querySelector('.edit-btn').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const btn = e.target;
+                        openBookModal({
+                            id: btn.dataset.id,
+                            title: btn.dataset.title,
+                            year: btn.dataset.year
+                        });
+                    });
+
+                    const deleteBtn = bookDiv.querySelector('.delete-btn');
+                    if (deleteBtn) {
+                        deleteBtn.addEventListener('click', async (e) => {
+                            e.stopPropagation();
+                            const btn = e.target;
+                            const editionId = btn.dataset.id;
+                            const title = btn.dataset.title;
+                            if (!confirm(`Удалить книгу "${title}"?`)) return;
+                            try {
+                                const res = await fetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
+                                if (!res.ok) {
+                                    const err = await res.json();
+                                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                                    return;
+                                }
+                                loadGenres();
+                            } catch (err) {
+                                alert('Ошибка: ' + err.message);
+                            }
+                        });
+                    }
+
+                    bookDiv.querySelector('.download-btn').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        window.location.href = `${API_BASE}/books/${book.id}/download`;
+                    });
+
+                    booksContainer.appendChild(bookDiv);
+                });
+            }
+
+            authorItem.appendChild(authorLevel);
+            authorItem.appendChild(booksContainer);
+            authorSection.appendChild(authorItem);
+        });
+        contentContainer.appendChild(authorSection);
+    }
+
+    item.appendChild(header);
+    item.appendChild(contentContainer);
+    container.appendChild(item);
+}
+
+async function openGenreModal(genre) {
+    const modal = document.getElementById('editModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+
+    modalTitle.textContent = 'Редактирование жанра';
+    modalTitle.dataset.type = 'genre';
+    modalTitle.dataset.id = genre.id;
+
+    let parentOptions = '<option value="">Нет родителя</option>';
+    try {
+        const res = await fetch(`${API_BASE}/genres`);
+        const allGenres = await res.json();
+        allGenres.forEach(g => {
+            if (g.id != genre.id) {
+                const selected = genre.parent_id && genre.parent_id == g.id ? 'selected' : '';
+                parentOptions += `<option value="${g.id}" ${selected}>${escapeHtml(g.name || '(без названия)')}</option>`;
+            }
+        });
+    } catch (e) {
+        console.error('Failed to load genres for parent select:', e);
+    }
+
+    modalBody.innerHTML = `
+        <form id="editForm">
+            <div class="form-group">
+                <label for="genre_name">Название:</label>
+                <input type="text" id="genre_name" name="name" value="${escapeHtml(genre.name || '')}" required>
+            </div>
+            <div class="form-group">
+                <label for="genre_parent">Родительский жанр:</label>
+                <select id="genre_parent">
+                    ${parentOptions}
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn">Сохранить</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+            </div>
+        </form>
+    `;
+
+    modal.classList.add('active');
+}
+
 function renderBooksTable(data) {
     const container = document.getElementById('booksTableContainer');
     const books = data.books || [];
@@ -684,6 +1019,7 @@ function renderBooksTable(data) {
     html += '<th class="col-date sortable" data-sort-by="upload_date">Дата загрузки' + getSortIcon('upload_date') + '</th>';
     html += '<th class="col-title sortable" data-sort-by="original_title">Название' + getSortIcon('original_title') + '</th>';
     html += '<th class="col-author sortable" data-sort-by="authors">Автор' + getSortIcon('authors') + '</th>';
+    html += '<th class="col-year sortable" data-sort-by="year">Год' + getSortIcon('year') + '</th>';
     html += '<th class="col-format sortable" data-sort-by="available_formats">Формат' + getSortIcon('available_formats') + '</th>';
     html += '<th class="col-shelf">Полка</th>';
     html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
@@ -693,6 +1029,7 @@ function renderBooksTable(data) {
         const dateStr = book.upload_date ? book.upload_date.substring(0, 10) : '';
         const title = book.original_title || book.edition_title || '';
         const authorName = getNullableValue(book, 'authors');
+        const yearValue = book.year && book.year.Valid && book.year.Int64 ? book.year.Int64 : '';
         const formatName = getNullableValue(book, 'available_formats');
         const onShelf = book.on_shelf;
         const shelfIcon = onShelf ? '★' : '☆';
@@ -704,10 +1041,14 @@ function renderBooksTable(data) {
         html += `<td class="col-date">${escapeHtml(dateStr)}</td>`;
         html += `<td class="col-title"><a href="#" class="book-title-link" data-id="${editionId}">${escapeHtml(title)}</a></td>`;
         html += `<td class="col-author">${escapeHtml(authorName)}</td>`;
+        html += `<td class="col-year">${escapeHtml(String(yearValue))}</td>`;
         html += `<td class="col-format"><a href="#" class="book-download-link" data-id="${editionId}">${escapeHtml(formatName)}</a></td>`;
         html += `<td class="col-shelf"><a href="#" class="shelf-toggle" data-id="${editionId}" data-on-shelf="${onShelf}" title="${shelfTitle}">${shelfIcon}</a></td>`;
         html += `<td class="col-actions">`;
-        html += `<button class="btn btn-small edit-book-btn" data-id="${editionId}">✎</button>`;
+        html += `<button class="btn btn-small edit-book-btn" data-id="${editionId}" title="Редактировать">✎</button>`;
+        if (enableDelete) {
+            html += `<button class="btn btn-small delete-book-btn" data-id="${editionId}" data-title="${escapeHtml(title)}">Удалить</button>`;
+        }
         html += `</td></tr>`;
     });
 
@@ -775,6 +1116,28 @@ function setupBooksTableEvents() {
         if (editBtn) {
             e.stopPropagation();
             openBookModal({ id: editBtn.dataset.id });
+            return;
+        }
+
+        const deleteBtn = e.target.closest('.delete-book-btn');
+        if (deleteBtn) {
+            e.preventDefault();
+            const id = deleteBtn.dataset.id;
+            const title = deleteBtn.dataset.title;
+            if (!confirm(`Удалить книгу "${title}"?`)) return;
+            (async () => {
+                try {
+                    const r = await fetch(`${API_BASE}/books/${id}`, { method: 'DELETE' });
+                    if (!r.ok) {
+                        const err = await r.json();
+                        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                        return;
+                    }
+                    loadBooks();
+                } catch (err) {
+                    alert('Ошибка: ' + err.message);
+                }
+            })();
             return;
         }
 
@@ -871,6 +1234,18 @@ function renderAuthorsTree(authors, container, expandedState = null) {
         booksContainer.style.display = isExpanded ? 'block' : 'none';
 
         if (author.books && author.books.length > 0) {
+            author.books.sort(function(a, b) {
+                var yearA = a.year !== undefined && a.year !== null ? a.year : null;
+                var yearB = b.year !== undefined && b.year !== null ? b.year : null;
+                if (yearA === yearB) {
+                    var titleA = (a.title || '').toLowerCase();
+                    var titleB = (b.title || '').toLowerCase();
+                    return titleA < titleB ? -1 : titleA > titleB ? 1 : 0;
+                }
+                if (yearA === null) return 1;
+                if (yearB === null) return -1;
+                return yearB - yearA;
+            });
             author.books.forEach(book => {
                 const bookItem = document.createElement('div');
                 bookItem.className = 'tree-item';

@@ -125,6 +125,7 @@ header h1 {
 .filter-date-row {
     flex: 0 0 100%;
     display: flex;
+    flex-wrap: wrap;
     gap: 15px;
 }
 
@@ -132,8 +133,8 @@ header h1 {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex: 0 0 auto;
-    min-width: auto;
+    flex: 1 1 auto;
+    min-width: 160px;
 }
 
 .filter-date-row .filter-group label {
@@ -143,14 +144,36 @@ header h1 {
 }
 
 .filter-date-row .filter-group input {
-    width: 160px;
+    width: auto;
+    min-width: 120px;
+    flex: 1 1 140px;
 }
 
 .filter-date-actions {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+    .filter-group {
+        min-width: 100%;
+    }
+    .filter-date-row .filter-group {
+        min-width: 100%;
+    }
+    .filter-date-row .filter-group input {
+        min-width: 0;
+    }
+    .filter-date-actions {
+        width: 100%;
+        justify-content: center;
+    }
+    .shelf-link {
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 
 .filter-group input:focus {
@@ -230,6 +253,11 @@ header h1 {
 
 .btn:hover {
     background: #2980b9;
+}
+
+.btn-small {
+    padding: 4px 8px;
+    font-size: 12px;
 }
 
 .btn-secondary {
@@ -348,6 +376,14 @@ header h1 {
     padding: 20px;
     background: #fee;
     color: #c33;
+    border-radius: 4px;
+}
+
+.warning {
+    text-align: center;
+    padding: 20px;
+    background: #fff3cd;
+    color: #856404;
     border-radius: 4px;
 }
 
@@ -849,6 +885,12 @@ header h1 {
     min-width: 150px;
 }
 
+.books-table .col-year {
+    width: 60px;
+    text-align: center;
+    white-space: nowrap;
+}
+
 .books-table .col-format {
     width: 80px;
     text-align: center;
@@ -860,9 +902,25 @@ header h1 {
 }
 
 .books-table .col-actions {
-    width: 80px;
+    width: 160px;
     text-align: center;
     white-space: nowrap;
+}
+
+.books-table .delete-book-btn {
+    padding: 4px 8px;
+    background: #e74c3c;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-left: 4px;
+    transition: background 0.3s ease;
+}
+
+.books-table .delete-book-btn:hover {
+    background: #c0392b;
 }
 
 .books-table .shelf-toggle {

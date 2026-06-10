@@ -150,6 +150,23 @@ func ZipContentTypeToFormatName(ct ZipContentType) string {
 	}
 }
 
+func InnerFileExtFromZipContent(ct ZipContentType) string {
+	switch ct {
+	case ZipContentFB2:
+		return ".fb2"
+	case ZipContentPDF:
+		return ".pdf"
+	case ZipContentDOC:
+		return ".doc"
+	case ZipContentDOCX:
+		return ".docx"
+	case ZipContentEPUB:
+		return ".epub"
+	default:
+		return ".fb2"
+	}
+}
+
 func GetFormatNameFromZip(filename string) string {
 	base := strings.TrimSuffix(filename, ".zip")
 	base = strings.TrimSuffix(base, ".fb2")

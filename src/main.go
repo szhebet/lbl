@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,7 +36,10 @@ import (
 //go:embed schema.sql
 var embeddedSchema string
 
-const currentDBVersion = "1.0"
+//go:embed migration_1.1.sql
+var embeddedMigration11 string
+
+const currentDBVersion = "1.1"
 
 type migration struct {
 	Version     string
@@ -48,6 +52,11 @@ var migrations = []migration{
 		Version:     "1.0",
 		Description: "Initial schema",
 		SQL:         stripSchema(embeddedSchema),
+	},
+	{
+		Version:     "1.1",
+		Description: "Placeholder — future schema changes go here",
+		SQL:         stripSchema(embeddedMigration11),
 	},
 }
 
@@ -369,6 +378,13 @@ type UpdateBookRequest struct {
 	Publisher   *string `json:"publisher,omitempty"`
 }
 
+func normalizeYear(year sql.NullInt64) sql.NullInt64 {
+	if year.Valid && year.Int64 == 0 {
+		return sql.NullInt64{Valid: false}
+	}
+	return year
+}
+
 func getConfig(c *gin.Context) *config.Config {
 	if cfg, exists := c.Get("config"); exists {
 		return cfg.(*config.Config)
@@ -452,7 +468,10 @@ func main() {
 		api.GET("/authors", getAuthors(db))
 		api.PUT("/persons/:id", updatePerson(db))
 		api.GET("/genres", getGenres(db))
+		api.GET("/genres/tree", getGenreTree(db))
 		api.POST("/genres", createGenre(db))
+		api.PUT("/genres/:id", updateGenre(db))
+		api.DELETE("/genres/:id", deleteGenre(db))
 		api.GET("/tags", getTags(db))
 		api.POST("/tags", createTag(db))
 		api.GET("/persons", getPersons(db))
@@ -576,10 +595,11 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		offset := c.DefaultQuery("offset", "0")
 
 		allowedSorts := map[string]string{
-			"original_title":   "original_title",
-			"upload_date":      "upload_date",
+			"original_title":    "original_title",
+			"upload_date":       "upload_date",
 			"authors":          "authors",
 			"available_formats": "available_formats",
+			"year":             "COALESCE(year, 0)",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {
@@ -680,6 +700,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			book.Year = normalizeYear(book.Year)
 			books = append(books, book)
 		}
 
@@ -824,6 +845,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			book.Year = normalizeYear(book.Year)
 			books = append(books, book)
 		}
 
@@ -859,6 +881,7 @@ func getBook(db *sql.DB) gin.HandlerFunc {
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 		)
+		book.Year = normalizeYear(book.Year)
 
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -1027,6 +1050,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt,
 		)
+		book.Year = normalizeYear(book.Year)
 
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1210,6 +1234,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 		)
+		book.Year = normalizeYear(book.Year)
 
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1461,10 +1486,10 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
 				}
-				if year.Valid {
-					yearInt := int(year.Int64)
-					book.Year = &yearInt
-				}
+			if year.Valid && year.Int64 != 0 {
+				yearInt := int(year.Int64)
+				book.Year = &yearInt
+			}
 				book.OnShelf = onShelf
 				if uploadDate.Valid {
 					book.UploadDate = uploadDate.String
@@ -1588,8 +1613,20 @@ type AuthorData struct {
 
 // GenreData represents a genre
 type GenreData struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	ParentID *int   `json:"parent_id,omitempty"`
+}
+
+// GenreWithAuthors represents a genre with its authors and books
+type GenreWithAuthors struct {
+	ID          int                `json:"id"`
+	Name        string             `json:"name"`
+	ParentID    *int               `json:"parent_id"`
+	Description *string            `json:"description"`
+	BooksCount  int                `json:"books_count"`
+	Authors     []AuthorWithBooks  `json:"authors"`
+	Children    []GenreWithAuthors `json:"children"`
 }
 
 // FileData represents an edition file
@@ -2045,7 +2082,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 // getGenres returns all genres
 func getGenres(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, name FROM genres ORDER BY name")
+		rows, err := db.Query("SELECT id, name, parent_id FROM genres ORDER BY name")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -2055,9 +2092,14 @@ func getGenres(db *sql.DB) gin.HandlerFunc {
 		var genres []GenreData
 		for rows.Next() {
 			var genre GenreData
-			if err := rows.Scan(&genre.ID, &genre.Name); err != nil {
+			var parentID sql.NullInt64
+			if err := rows.Scan(&genre.ID, &genre.Name, &parentID); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
+			}
+			if parentID.Valid {
+				v := int(parentID.Int64)
+				genre.ParentID = &v
 			}
 			genres = append(genres, genre)
 		}
@@ -2085,6 +2127,352 @@ func createGenre(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusCreated, genre)
+	}
+}
+
+// getGenreTree returns genre hierarchy with nested authors and books
+func getGenreTree(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		genreFilter := c.Query("genre")
+		authorFilter := c.Query("author")
+		bookFilter := c.Query("book")
+
+		whereClause := ""
+		whereArgs := []interface{}{}
+		argNum := 1
+
+		if genreFilter != "" {
+			whereClause += fmt.Sprintf(" AND LOWER(g.name) LIKE $%d", argNum)
+			whereArgs = append(whereArgs, "%"+strings.ToLower(genreFilter)+"%")
+			argNum++
+		}
+
+		// Get all genres matching the filter
+		query := fmt.Sprintf(`
+			SELECT g.id, g.name, g.parent_id, g.description,
+				COUNT(DISTINCT e.id) as books_count
+			FROM genres g
+			LEFT JOIN work_genres wg ON wg.genre_id = g.id
+			LEFT JOIN works w ON w.id = wg.work_id
+			LEFT JOIN editions e ON e.work_id = w.id
+			WHERE 1=1%s
+			GROUP BY g.id, g.name, g.parent_id, g.description
+			ORDER BY g.name
+		`, whereClause)
+
+		rows, err := db.Query(query, whereArgs...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		// Build genre map
+		genreMap := make(map[int]*GenreWithAuthors)
+		for rows.Next() {
+			var g GenreWithAuthors
+			var parentID sql.NullInt64
+			var desc sql.NullString
+			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc, &g.BooksCount); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if parentID.Valid {
+				v := int(parentID.Int64)
+				g.ParentID = &v
+			}
+			if desc.Valid {
+				g.Description = &desc.String
+			}
+			g.Authors = []AuthorWithBooks{}
+			g.Children = []GenreWithAuthors{}
+			genreMap[g.ID] = &g
+		}
+
+		// Build parent-child relationships
+		for _, g := range genreMap {
+			if g.ParentID != nil {
+				if parent, ok := genreMap[*g.ParentID]; ok {
+					parent.Children = append(parent.Children, *g)
+				}
+			}
+		}
+
+		// Recursively build tree: each genre copy in parent.Children
+		// needs its own children populated from the map
+		var buildTree func(g *GenreWithAuthors)
+		buildTree = func(g *GenreWithAuthors) {
+			var populated []GenreWithAuthors
+			for _, child := range g.Children {
+				if orig, ok := genreMap[child.ID]; ok {
+					orig.Children = nil // clear to avoid re-processing
+					for _, sub := range genreMap {
+						if sub.ParentID != nil && *sub.ParentID == child.ID {
+							orig.Children = append(orig.Children, *sub)
+						}
+					}
+					populated = append(populated, *orig)
+				}
+			}
+			g.Children = populated
+			if g.Children == nil {
+				g.Children = []GenreWithAuthors{}
+			}
+			for i := range g.Children {
+				buildTree(&g.Children[i])
+			}
+		}
+
+		// Apply to all roots
+		for _, g := range genreMap {
+			if g.ParentID == nil {
+				buildTree(g)
+			}
+		}
+
+		// Remove children from the map so they aren't also treated as roots
+		// (already copied into parent.Children above)
+
+		// populateGenreAuthors queries authors and books for a genre
+		var populateErr error
+		var populateGenre func(g *GenreWithAuthors)
+		populateGenre = func(g *GenreWithAuthors) {
+			if populateErr != nil {
+				return
+			}
+
+			authorQuery := `
+				SELECT p.id, COALESCE(p.first_name, '') as first_name, p.last_name,
+					COUNT(DISTINCT e.id) as books_count
+				FROM persons p
+				JOIN work_contributors wc ON wc.person_id = p.id AND wc.role = 'author'
+				JOIN works w ON w.id = wc.work_id
+				JOIN work_genres wg ON wg.work_id = w.id
+				JOIN editions e ON e.work_id = w.id
+				WHERE wg.genre_id = $1
+			`
+			authorArgs := []interface{}{g.ID}
+			authorArgNum := 2
+
+			if authorFilter != "" {
+				authorQuery += fmt.Sprintf(" AND p.lower_fio LIKE $%d", authorArgNum)
+				authorArgs = append(authorArgs, "%"+normalizeQuery(authorFilter)+"%")
+				authorArgNum++
+			}
+			if bookFilter != "" {
+				authorQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", authorArgNum)
+				authorArgs = append(authorArgs, "%"+normalizeQuery(bookFilter)+"%")
+				authorArgNum++
+			}
+
+			authorQuery += " GROUP BY p.id, p.first_name, p.last_name ORDER BY p.last_name, p.first_name"
+
+			aRows, err := db.Query(authorQuery, authorArgs...)
+			if err != nil {
+				populateErr = err
+				return
+			}
+
+			for aRows.Next() {
+				var author AuthorWithBooks
+				if err := aRows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
+					aRows.Close()
+					populateErr = err
+					return
+				}
+
+				booksQuery := `
+					SELECT e.id, w.original_title, e.year, e.on_shelf, e.upload_date
+					FROM works w
+					JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+					JOIN editions e ON e.work_id = w.id
+					JOIN work_genres wg ON wg.work_id = w.id
+					WHERE wc.person_id = $1 AND wg.genre_id = $2
+				`
+				bookArgs := []interface{}{author.ID, g.ID}
+				bookArgNum := 3
+
+				if bookFilter != "" {
+					booksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", bookArgNum)
+					bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
+				}
+
+			booksQuery += " ORDER BY NULLIF(e.year, 0) DESC NULLS LAST, w.original_title"
+
+			bRows, err := db.Query(booksQuery, bookArgs...)
+				if err != nil {
+					aRows.Close()
+					populateErr = err
+					return
+				}
+
+				var books []BookWithFormats
+				for bRows.Next() {
+					var book BookWithFormats
+					var year sql.NullInt64
+					var onShelf bool
+					var uploadDate sql.NullString
+					if err := bRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
+						bRows.Close()
+						aRows.Close()
+						populateErr = err
+						return
+					}
+					if year.Valid {
+						y := int(year.Int64)
+						book.Year = &y
+					}
+					book.OnShelf = onShelf
+					if uploadDate.Valid {
+						book.UploadDate = uploadDate.String
+					}
+
+					formatRows, err := db.Query(`
+						SELECT f.name, ef.file_path
+						FROM edition_files ef
+						JOIN formats f ON f.id = ef.format_id
+						WHERE ef.edition_id = $1
+					`, book.ID)
+					if err != nil {
+						bRows.Close()
+						aRows.Close()
+						populateErr = err
+						return
+					}
+					var formats []FormatInfo
+					for formatRows.Next() {
+						var fi FormatInfo
+						if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
+							formatRows.Close()
+							bRows.Close()
+							aRows.Close()
+							populateErr = err
+							return
+						}
+						formats = append(formats, fi)
+					}
+					formatRows.Close()
+					if formats == nil {
+						book.Formats = []FormatInfo{}
+					} else {
+						book.Formats = formats
+					}
+					books = append(books, book)
+				}
+				bRows.Close()
+
+				if books == nil {
+					author.Books = []BookWithFormats{}
+				} else {
+					author.Books = books
+				}
+				g.Authors = append(g.Authors, author)
+			}
+			aRows.Close()
+
+			if g.Authors == nil {
+				g.Authors = []AuthorWithBooks{}
+			}
+
+			// Recurse into children
+			for i := range g.Children {
+				populateGenre(&g.Children[i])
+			}
+		}
+
+		// Collect root genres (those without parent in the map)
+		var roots []GenreWithAuthors
+		for _, g := range genreMap {
+			if g.ParentID == nil {
+				populateGenre(g)
+				if populateErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": populateErr.Error()})
+					return
+				}
+				roots = append(roots, *g)
+			}
+		}
+
+		if roots == nil {
+			roots = []GenreWithAuthors{}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"genres": roots})
+	}
+}
+
+// updateGenre updates a genre
+func updateGenre(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var req struct {
+			Name        string  `json:"name"`
+			Description *string `json:"description"`
+			ParentID    *int    `json:"parent_id"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		_, err := db.Exec(`
+			UPDATE genres SET name = COALESCE(NULLIF($1, ''), name),
+				description = COALESCE($2, description),
+				parent_id = $3
+			WHERE id = $4
+		`, req.Name, req.Description, req.ParentID, id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		var genre GenreData
+		err = db.QueryRow("SELECT id, name FROM genres WHERE id = $1", id).Scan(&genre.ID, &genre.Name)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, genre)
+	}
+}
+
+// deleteGenre deletes a genre
+func deleteGenre(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+
+		tx, err := db.Begin()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer tx.Rollback()
+
+		// Remove genre-book associations
+		if _, err := tx.Exec("DELETE FROM work_genres WHERE genre_id = $1", id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Orphan child genres (set parent_id to NULL)
+		if _, err := tx.Exec("UPDATE genres SET parent_id = NULL WHERE parent_id = $1", id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Delete the genre itself
+		if _, err := tx.Exec("DELETE FROM genres WHERE id = $1", id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Жанр удалён"})
 	}
 }
 
@@ -2190,6 +2578,389 @@ func getLanguages(db *sql.DB) gin.HandlerFunc {
 }
 
 // ImportBookFile handles single file upload
+type importFileResult struct {
+	title      string
+	authors    []string
+	workID     int
+	editionID  int
+	filePath   string
+	hashStr    string
+	bookInfo   *utils.FB2Book
+	llmResult  *utils.LLMResult
+	parseErr   error
+}
+
+type duplicateInfo struct {
+	title   string
+	authors string
+	hash    string
+}
+
+func (d *duplicateInfo) Error() string {
+	return fmt.Sprintf("book already exists: %s — %s", d.authors, d.title)
+}
+
+func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *config.Config) (result *importFileResult, err error) {
+	var bookContent []byte
+	var bookInfo *utils.FB2Book
+	var parseErr error
+	var zipContentType utils.ZipContentType
+
+	switch ext {
+	case ".fb2":
+		bookContent = data
+		bookInfo, parseErr = utils.ParseFB2FromBytes(data)
+	case ".zip":
+		zipResult, zipErr := utils.DetectZipContent(data)
+		if zipErr != nil {
+			return nil, fmt.Errorf("extract from zip: %w", zipErr)
+		}
+		bookContent = zipResult.Content
+		zipContentType = zipResult.ContentType
+		if zipResult.ContentType == utils.ZipContentFB2 {
+			bookInfo, parseErr = utils.ParseFB2FromBytes(bookContent)
+		} else if zipResult.ContentType == utils.ZipContentEPUB {
+			epubInfo, epubErr := utils.ParseEPUBFromBytes(bookContent)
+			if epubErr == nil && epubInfo != nil {
+				bookInfo = &utils.FB2Book{
+					Title: epubInfo.Title, Authors: epubInfo.Authors,
+					Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
+					Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
+					Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
+				}
+			}
+		}
+	case ".epub":
+		bookContent = data
+		epubInfo, epubErr := utils.ParseEPUBFromBytes(data)
+		if epubErr == nil && epubInfo != nil {
+			bookInfo = &utils.FB2Book{
+				Title: epubInfo.Title, Authors: epubInfo.Authors,
+				Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
+				Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
+				Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
+			}
+		}
+	case ".pdf", ".docx", ".doc":
+		bookContent = data
+	}
+
+	if bookContent == nil {
+		return nil, fmt.Errorf("cannot extract content from %s", ext)
+	}
+
+	hash := sha256.Sum256(bookContent)
+	hashStr := hex.EncodeToString(hash[:])
+
+	var existingTitle string
+	var existingAuthors string
+	err = db.QueryRow(`
+		SELECT w.original_title,
+			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
+		FROM edition_files ef
+		JOIN editions e ON ef.edition_id = e.id
+		JOIN works w ON e.work_id = w.id
+		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
+		LEFT JOIN persons p ON wc.person_id = p.id
+		WHERE ef.file_hash = $1
+		GROUP BY w.original_title
+	`, hashStr).Scan(&existingTitle, &existingAuthors)
+	if err == nil {
+		if existingAuthors == "" {
+			existingAuthors = "Неизвестный автор"
+		}
+		return nil, &duplicateInfo{title: existingTitle, authors: existingAuthors, hash: hashStr}
+	}
+
+	var llmResult *utils.LLMResult
+	needsLLM := ext == ".pdf" || ext == ".docx" || ext == ".doc"
+	if ext == ".zip" && zipContentType != utils.ZipContentFB2 {
+		needsLLM = true
+	}
+	if needsLLM {
+		var text string
+		var textErr error
+		switch ext {
+		case ".zip":
+			switch zipContentType {
+			case utils.ZipContentPDF:
+				text, textErr = utils.ExtractPDFText(bookContent, 3)
+			case utils.ZipContentDOCX:
+				text, textErr = utils.ExtractDOCXText(bookContent, 3)
+			case utils.ZipContentDOC:
+				text, textErr = utils.ExtractDOCText(bookContent, 3)
+			}
+		case ".pdf":
+			text, textErr = utils.ExtractPDFText(bookContent, 3)
+		case ".docx":
+			text, textErr = utils.ExtractDOCXText(bookContent, 3)
+		case ".doc":
+			if len(bookContent) > 2 && bookContent[0] == 0x50 && bookContent[1] == 0x4b {
+				text, textErr = utils.ExtractDOCXText(bookContent, 3)
+			} else {
+				text, textErr = utils.ExtractDOCText(bookContent, 3)
+			}
+		}
+		if textErr == nil && text != "" && cfg.LLM.BaseURL != "" {
+			llmResult = recognizeBook(text, cfg)
+		}
+	}
+
+	title := filename
+	titleResolved := false
+	if bookInfo != nil && bookInfo.Title != "" {
+		title = bookInfo.Title
+		titleResolved = true
+	} else if llmResult != nil && llmResult.Title != "" {
+		title = llmResult.Title
+		titleResolved = true
+	}
+
+	var authors []string
+	if bookInfo != nil && len(bookInfo.Authors) > 0 {
+		authors = bookInfo.Authors
+	} else if llmResult != nil && len(llmResult.Authors) > 0 {
+		authors = llmResult.Authors
+	}
+	if len(authors) == 0 {
+		authors = []string{"Неизвестный автор"}
+	}
+
+	var existingWorkID int
+	if title != filename {
+		existingWorkID = findWorkByTitleAndAuthors(db, title, authors)
+	}
+
+	destDir := cfg.Directories.Bookarch
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return nil, fmt.Errorf("create bookarch dir: %w", err)
+	}
+
+	subDir := getNextSubdir(destDir)
+	if err := os.MkdirAll(filepath.Join(destDir, subDir), 0755); err != nil {
+		return nil, fmt.Errorf("create subdir: %w", err)
+	}
+
+	var innerExt string
+	if ext == ".zip" {
+		innerExt = utils.InnerFileExtFromZipContent(zipContentType)
+	} else {
+		innerExt = ext
+	}
+
+	var baseName string
+	if titleResolved {
+		baseName = utils.TransliterateFilename(title)
+	} else {
+		baseName = strings.TrimSuffix(title, ext)
+	}
+	zipName := baseName + ".zip"
+	destPath := filepath.Join(destDir, subDir, zipName)
+
+	idx := 1
+	for {
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			break
+		}
+		zipName = fmt.Sprintf("%s_%d.zip", baseName, idx)
+		destPath = filepath.Join(destDir, subDir, zipName)
+		idx++
+	}
+
+	zipFile, err := os.Create(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("create zip: %w", err)
+	}
+	zipWriter := zip.NewWriter(zipFile)
+	entryName := baseName + innerExt
+	fw, err := zipWriter.Create(entryName)
+	if err != nil {
+		zipWriter.Close()
+		zipFile.Close()
+		return nil, fmt.Errorf("create zip entry: %w", err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		zipWriter.Close()
+		zipFile.Close()
+		return nil, fmt.Errorf("write zip: %w", err)
+	}
+	if err := zipWriter.Close(); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("close zip writer: %w", err)
+	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("db begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	langCode := "eng"
+	if bookInfo != nil && bookInfo.Lang != "" {
+		langCode = utils.NormalizeLanguage(bookInfo.Lang)
+	}
+	var langExists bool
+	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", langCode).Scan(&langExists)
+	if err != nil || !langExists {
+		langCode = "eng"
+	}
+
+	workType := "novel"
+	if bookInfo != nil && len(bookInfo.Genres) > 0 {
+		gn := bookInfo.Genres[0]
+		switch strings.ToLower(gn) {
+		case "poetry", "poem":
+			workType = "poem"
+		case "story", "short_story":
+			workType = "story"
+		case "article", "sci_article":
+			workType = "article"
+		case "essay", "sci_publicistics":
+			workType = "article"
+		}
+	}
+
+	var year *int
+	if bookInfo != nil && bookInfo.Year != "" {
+		if y, pe := strconv.Atoi(bookInfo.Year); pe == nil {
+			year = &y
+		}
+	}
+
+	var workID int
+	if existingWorkID > 0 {
+		workID = existingWorkID
+		log.Printf("Found existing work id=%d for title='%s'", workID, title)
+	} else {
+		annotation := ""
+		if bookInfo != nil {
+			annotation = bookInfo.Annotation
+		}
+		err = tx.QueryRow(`
+			INSERT INTO works (original_title, original_language, first_published, work_type, annotation)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id
+		`, title, langCode, year, workType, annotation).Scan(&workID)
+		if err != nil {
+			return nil, fmt.Errorf("insert work: %w", err)
+		}
+	}
+
+	if existingWorkID == 0 {
+		for _, authorName := range authors {
+			firstName, lastName := utils.NormalizeAuthorName(authorName)
+			var personID int
+			err = tx.QueryRow(`
+				INSERT INTO persons (last_name, first_name)
+				VALUES ($1, $2) ON CONFLICT (first_name, last_name) DO NOTHING RETURNING id
+			`, lastName, firstName).Scan(&personID)
+			if err != nil {
+				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name=$1 AND (first_name=$2 OR (first_name IS NULL AND $2=''))`,
+					lastName, firstName).Scan(&personID)
+				if err != nil {
+					return nil, fmt.Errorf("person lookup: %w", err)
+				}
+			}
+			_, err = tx.Exec(`
+				INSERT INTO work_contributors (work_id, person_id, role) VALUES ($1,$2,'author') ON CONFLICT DO NOTHING
+			`, workID, personID)
+			if err != nil {
+				return nil, fmt.Errorf("insert contributor: %w", err)
+			}
+		}
+	}
+
+	if existingWorkID == 0 && bookInfo != nil {
+		for _, genreName := range bookInfo.Genres {
+			var genreID int
+			err = tx.QueryRow(`
+				INSERT INTO genres (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id
+			`, genreName).Scan(&genreID)
+			if err != nil {
+				err = tx.QueryRow(`SELECT id FROM genres WHERE name=$1`, genreName).Scan(&genreID)
+				if err != nil {
+					continue
+				}
+			}
+			_, err = tx.Exec(`
+				INSERT INTO work_genres (work_id, genre_id) VALUES ($1,$2) ON CONFLICT DO NOTHING
+			`, workID, genreID)
+			if err != nil {
+				continue
+			}
+		}
+	}
+
+	publisher := ""
+	var editionISBN interface{} = nil
+	if bookInfo != nil {
+		publisher = bookInfo.Publisher
+		isbn := strings.SplitN(bookInfo.ISBN, ",", 2)[0]
+		isbn = strings.TrimSpace(isbn)
+		if isbn != "" {
+			var exists bool
+			tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE isbn=$1)", isbn).Scan(&exists)
+			if !exists {
+				editionISBN = isbn
+			}
+		}
+	}
+
+	var editionID int
+	err = tx.QueryRow(`
+		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8) RETURNING id
+	`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
+	if err != nil {
+		return nil, fmt.Errorf("insert edition: %w", err)
+	}
+
+	formatName := utils.GetFormatNameByExt(ext)
+	if ext == ".zip" {
+		if zipContentType != utils.ZipContentUnknown {
+			formatName = utils.ZipContentTypeToFormatName(zipContentType)
+		} else {
+			formatName = utils.GetFormatNameFromZip(filename)
+		}
+	}
+	var formatID int
+	err = tx.QueryRow("SELECT id FROM formats WHERE name=$1", formatName).Scan(&formatID)
+	if err != nil {
+		formatID = 1
+	}
+
+	fileInfo, _ := os.Stat(destPath)
+	zipSize := int64(0)
+	if fileInfo != nil {
+		zipSize = fileInfo.Size()
+	}
+
+	relPath := filepath.Join(filepath.Base(cfg.Directories.Bookarch), subDir, zipName)
+	_, err = tx.Exec(`
+		INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
+		VALUES ($1,$2,$3,$4,$5,$6)
+	`, editionID, formatID, relPath, zipSize, hashStr, true)
+	if err != nil {
+		return nil, fmt.Errorf("insert edition_file: %w", err)
+	}
+
+	return &importFileResult{
+		title: title, authors: authors,
+		workID: workID, editionID: editionID,
+		filePath: relPath, hashStr: hashStr,
+		bookInfo: bookInfo, llmResult: llmResult,
+		parseErr: parseErr,
+	}, nil
+}
+
 func importBookFile(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
@@ -2204,9 +2975,8 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		filename := header.Filename
 		ext := strings.ToLower(filepath.Ext(filename))
 
-		tmpDir := cfg.TempBookarchDir()
-		if err := os.MkdirAll(tmpDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create directory"})
+		if !isSupportedFile(filename) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported format: %s", ext)})
 			return
 		}
 
@@ -2216,469 +2986,52 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-	// Phase 1: extract content and native metadata (no LLM yet)
-	var bookContent []byte
-	var hashStr string
-	var bookInfo *utils.FB2Book
-	var parseErr error
-		var zipContentType utils.ZipContentType
-
-		switch ext {
-	case ".fb2":
-		bookContent = data
-		bookInfo, parseErr = utils.ParseFB2FromBytes(data)
-	case ".zip":
-		zipResult, zipErr := utils.DetectZipContent(data)
-		if zipErr != nil {
-			logImportError(filename, "", "Failed to extract from zip: "+zipErr.Error())
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to extract book from archive"})
-			return
-		}
-		bookContent = zipResult.Content
-		zipContentType = zipResult.ContentType
-		if zipResult.ContentType == utils.ZipContentFB2 {
-			bookInfo, parseErr = utils.ParseFB2FromBytes(bookContent)
-		}
-	case ".epub":
-		bookContent = data
-		epubInfo, epubErr := utils.ParseEPUBFromBytes(data)
-		if epubErr == nil {
-			bookInfo = &utils.FB2Book{
-				Title:      epubInfo.Title,
-				Authors:    epubInfo.Authors,
-				Lang:       epubInfo.Lang,
-				Year:       epubInfo.Year,
-				ISBN:       epubInfo.ISBN,
-				Publisher:  epubInfo.Publisher,
-				Genres:     epubInfo.Genres,
-				Annotation: epubInfo.Annotation,
-				Sequence:   epubInfo.Sequence,
-			}
-		} else {
-			parseErr = epubErr
-		}
-	case ".pdf", ".docx", ".doc":
-		bookContent = data
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported file format: %s", ext)})
-		return
-	}
-
-	if bookContent == nil {
-		logImportError(filename, "", "Failed to extract book content")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to extract book content from archive"})
-		return
-	}
-
-	// Phase 2: duplicate check (hash before LLM)
-	hash := sha256.Sum256(bookContent)
-	hashStr = hex.EncodeToString(hash[:])
-
-	var existingFileID int
-	var existingTitle string
-	var existingAuthors string
-	err = db.QueryRow(`
-		SELECT ef.id, w.original_title,
-			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
-		FROM edition_files ef
-		JOIN editions e ON ef.edition_id = e.id
-		JOIN works w ON e.work_id = w.id
-		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
-		LEFT JOIN persons p ON wc.person_id = p.id
-		WHERE ef.file_hash = $1
-		GROUP BY ef.id, w.original_title
-	`, hashStr).Scan(&existingFileID, &existingTitle, &existingAuthors)
-	if err == nil {
-		if existingAuthors == "" {
-			existingAuthors = "Неизвестный автор"
-		}
-		log.Printf("Duplicate file detected: hash=%s, title='%s', authors='%s'", hashStr, existingTitle, existingAuthors)
-		c.JSON(http.StatusOK, gin.H{
-			"duplicate": true,
-			"message":   fmt.Sprintf("Книга уже существует в библиотеке: %s — %s", existingAuthors, existingTitle),
-			"file_hash": hashStr,
-			"title":     existingTitle,
-			"authors":   existingAuthors,
-		})
-		return
-	}
-
-	// Phase 3: LLM recognition for formats without native metadata
-	var llmResult *utils.LLMResult
-
-	needsLLM := ext == ".pdf" || ext == ".docx" || ext == ".doc"
-	if ext == ".zip" && zipContentType != utils.ZipContentFB2 {
-		needsLLM = true
-	}
-
-	if needsLLM {
-		switch ext {
-		case ".zip":
-			switch zipContentType {
-			case utils.ZipContentPDF:
-				text, textErr := utils.ExtractPDFText(bookContent, 3)
-				if textErr == nil {
-					llmResult = recognizeBook(text, cfg)
-				}
-			case utils.ZipContentDOCX:
-				text, textErr := utils.ExtractDOCXText(bookContent, 3)
-				if textErr == nil {
-					llmResult = recognizeBook(text, cfg)
-				}
-			case utils.ZipContentDOC:
-				text, textErr := utils.ExtractDOCText(bookContent, 3)
-				if textErr == nil {
-					llmResult = recognizeBook(text, cfg)
-				}
-			}
-		case ".pdf":
-			text, textErr := utils.ExtractPDFText(bookContent, 3)
-			if textErr == nil {
-				llmResult = recognizeBook(text, cfg)
-			}
-		case ".docx":
-			text, textErr := utils.ExtractDOCXText(bookContent, 3)
-			if textErr == nil {
-				llmResult = recognizeBook(text, cfg)
-			}
-		case ".doc":
-			var text string
-			var textErr error
-			if len(bookContent) > 2 && bookContent[0] == 0x50 && bookContent[1] == 0x4b {
-				text, textErr = utils.ExtractDOCXText(bookContent, 3)
-			} else {
-				text, textErr = utils.ExtractDOCText(bookContent, 3)
-			}
-			if textErr == nil {
-				llmResult = recognizeBook(text, cfg)
-			}
-		}
-	}
-
-		tmpPath := filepath.Join(tmpDir, filename)
-		tmpFile, err := os.Create(tmpPath)
-		if err != nil {
-			logImportError(filename, hashStr, "Failed to create temp file: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save temp file"})
-			return
-		}
-		tmpFile.Write(data)
-		tmpFile.Close()
-
-		destDir := cfg.Directories.Bookarch
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			logImportError(filename, hashStr, "Failed to create directory: "+err.Error(), cfg)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create bookarch directory"})
-			return
-		}
-
-		subDir := getNextSubdir(destDir)
-		if err := os.MkdirAll(filepath.Join(destDir, subDir), 0755); err != nil {
-			logImportError(filename, hashStr, "Failed to create subdirectory: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subdirectory"})
-			return
-		}
-
-		baseName := strings.TrimSuffix(filename, filepath.Ext(filename))
-		zipName := baseName + ".zip"
-		destPath := filepath.Join(destDir, subDir, zipName)
-
-		idx := 1
-		for {
-			if _, err := os.Stat(destPath); os.IsNotExist(err) {
-				break
-			}
-			zipName = fmt.Sprintf("%s_%d.zip", baseName, idx)
-			destPath = filepath.Join(destDir, subDir, zipName)
-			idx++
-		}
-
-		zipFile, err := os.Create(destPath)
-		if err != nil {
-			logImportError(filename, hashStr, "Failed to create zip file: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip file"})
-			return
-		}
-
-		zipWriter := zip.NewWriter(zipFile)
-		fw, err := zipWriter.Create(filename)
-		if err != nil {
-			zipWriter.Close()
-			zipFile.Close()
-			logImportError(filename, hashStr, "Failed to create entry in zip: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create zip entry"})
-			return
-		}
-
-		if _, err := fw.Write(data); err != nil {
-			zipWriter.Close()
-			zipFile.Close()
-			logImportError(filename, hashStr, "Failed to write to zip: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write to zip"})
-			return
-		}
-
-		if err := zipWriter.Close(); err != nil {
-			zipFile.Close()
-			logImportError(filename, hashStr, "Failed to close zip: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to close zip"})
-			return
-		}
-
-		if err := zipFile.Close(); err != nil {
-			logImportError(filename, hashStr, "Failed to close zip file: "+err.Error())
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to close zip file"})
-			return
-		}
-
-		os.Remove(tmpPath)
-
-		tx, err := db.Begin()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		defer func() {
-			if err != nil {
-				tx.Rollback()
-			} else {
-				tx.Commit()
-			}
-		}()
-
-		langCode := "eng"
-		if bookInfo != nil && bookInfo.Lang != "" {
-			langCode = utils.NormalizeLanguage(bookInfo.Lang)
-		}
-
-		var langExists bool
-		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", langCode).Scan(&langExists)
-		if err != nil || !langExists {
-			langCode = "eng"
-		}
-
-		title := filename
-		if bookInfo != nil && bookInfo.Title != "" {
-			title = bookInfo.Title
-		} else if llmResult != nil && llmResult.Title != "" {
-			title = llmResult.Title
-		}
-
-		var authors []string
-		if bookInfo != nil {
-			authors = bookInfo.Authors
-		} else if llmResult != nil && len(llmResult.Authors) > 0 {
-			authors = llmResult.Authors
-		}
-		if len(authors) == 0 {
-			authors = []string{"Неизвестный автор"}
-		}
-
-		var existingWorkID int
-		if title != filename {
-			existingWorkID = findWorkByTitleAndAuthors(db, title, authors)
-		}
-
-		workType := "novel"
-		if bookInfo != nil && len(bookInfo.Genres) > 0 {
-			genreName := bookInfo.Genres[0]
-			switch strings.ToLower(genreName) {
-			case "poetry", "poem":
-				workType = "poem"
-			case "story", "short_story":
-				workType = "story"
-			case "article", "sci_article":
-				workType = "article"
-			case "essay", "sci_publicistics":
-				workType = "article"
-			}
-		}
-
-		var year *int
-		if bookInfo != nil && bookInfo.Year != "" {
-			if y, parseErr := strconv.Atoi(bookInfo.Year); parseErr == nil {
-				year = &y
-			}
-		}
-
-		var workID int
-		if existingWorkID > 0 {
-			workID = existingWorkID
-			log.Printf("Found existing work id=%d for title='%s'", workID, title)
-		} else {
-			err = tx.QueryRow(`
-				INSERT INTO works (original_title, original_language, first_published, work_type, annotation)
-				VALUES ($1, $2, $3, $4, $5)
-				RETURNING id
-			`, title, langCode, year, workType, "").Scan(&workID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		res, importErr := importFile(filename, data, ext, db, cfg)
+		if importErr != nil {
+			var dup *duplicateInfo
+			if errors.As(importErr, &dup) {
+				log.Printf("Duplicate file detected: hash=%s, title='%s', authors='%s'", dup.hash, dup.title, dup.authors)
+				c.JSON(http.StatusOK, gin.H{
+					"duplicate": true,
+					"message":   fmt.Sprintf("Книга уже существует в библиотеке: %s — %s", dup.authors, dup.title),
+					"file_hash": dup.hash,
+					"title":     dup.title,
+					"authors":   dup.authors,
+				})
 				return
 			}
-		}
-
-		if existingWorkID == 0 {
-			for _, authorName := range authors {
-				firstName, lastName := utils.NormalizeAuthorName(authorName)
-
-				var personID int
-				err = tx.QueryRow(`
-					INSERT INTO persons (last_name, first_name)
-					VALUES ($1, $2)
-					ON CONFLICT (first_name, last_name) DO NOTHING
-					RETURNING id
-				`, lastName, firstName).Scan(&personID)
-				if err != nil {
-					err = tx.QueryRow(`
-						SELECT id FROM persons WHERE last_name = $1 AND (first_name = $2 OR (first_name IS NULL AND $2 = ''))
-					`, lastName, firstName).Scan(&personID)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-						return
-					}
-				}
-
-				_, err = tx.Exec(`
-					INSERT INTO work_contributors (work_id, person_id, role)
-					VALUES ($1, $2, 'author')
-					ON CONFLICT DO NOTHING
-				`, workID, personID)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-			}
-
-			if len(authors) == 0 {
-				var personID int
-				err = tx.QueryRow(`
-					INSERT INTO persons (last_name)
-					VALUES ($1)
-					ON CONFLICT (first_name, last_name) DO NOTHING
-					RETURNING id
-				`, "Неизвестный автор").Scan(&personID)
-				if err != nil {
-					err = tx.QueryRow(`SELECT id FROM persons WHERE last_name = 'Неизвестный автор'`).Scan(&personID)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-						return
-					}
-				}
-
-				_, err = tx.Exec(`
-					INSERT INTO work_contributors (work_id, person_id, role)
-					VALUES ($1, $2, 'author')
-				`, workID, personID)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-			}
-		}
-
-		if existingWorkID == 0 && bookInfo != nil {
-			for _, genreName := range bookInfo.Genres {
-				var genreID int
-				err = tx.QueryRow(`
-					INSERT INTO genres (name) VALUES ($1)
-					ON CONFLICT (name) DO NOTHING RETURNING id
-				`, genreName).Scan(&genreID)
-				if err != nil {
-					err = tx.QueryRow(`SELECT id FROM genres WHERE name = $1`, genreName).Scan(&genreID)
-					if err != nil {
-						continue
-					}
-				}
-				_, err = tx.Exec(`
-					INSERT INTO work_genres (work_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
-				`, workID, genreID)
-				if err != nil {
-					continue
-				}
-			}
-		}
-
-		publisher := ""
-		var editionISBN interface{} = nil
-		if bookInfo != nil {
-			publisher = bookInfo.Publisher
-			isbn := strings.SplitN(bookInfo.ISBN, ",", 2)[0]
-			isbn = strings.TrimSpace(isbn)
-			if isbn != "" {
-				var exists bool
-				tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE isbn=$1)", isbn).Scan(&exists)
-				if !exists {
-					editionISBN = isbn
-				}
-			}
-		}
-
-		var editionID int
-		err = tx.QueryRow(`
-			INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
-			RETURNING id
-		`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			logImportError(filename, "", importErr.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": importErr.Error()})
 			return
 		}
 
-	var formatID int
-	formatName := utils.GetFormatNameByExt(ext)
-	if ext == ".zip" {
-		formatName = utils.GetFormatNameFromZip(filename)
-	}
-	err = tx.QueryRow("SELECT id FROM formats WHERE name = $1", formatName).Scan(&formatID)
-		if err != nil {
-			formatID = 1
+		response := gin.H{
+			"message":    "Book imported successfully",
+			"work_id":    res.workID,
+			"edition_id": res.editionID,
+			"file_path":  res.filePath,
+			"title":      res.title,
 		}
-
-		fileInfo, _ := os.Stat(destPath)
-		zipSize := int64(0)
-		if fileInfo != nil {
-			zipSize = fileInfo.Size()
-		}
-
-		relPath := filepath.Join(filepath.Base(cfg.Directories.Bookarch), subDir, zipName)
-		_, err = tx.Exec(`
-			INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, editionID, formatID, relPath, zipSize, hashStr, true)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		result := gin.H{
-			"message":     "Book imported successfully",
-			"work_id":      workID,
-			"edition_id":   editionID,
-			"file_path":    relPath,
-			"title":        title,
-		}
-
-		if bookInfo != nil {
-			result["parsed"] = true
-			result["authors"] = bookInfo.Authors
-			result["language"] = bookInfo.Lang
-			if bookInfo.Year != "" {
-				result["year"] = bookInfo.Year
+		if res.bookInfo != nil {
+			response["parsed"] = true
+			response["authors"] = res.bookInfo.Authors
+			response["language"] = res.bookInfo.Lang
+			if res.bookInfo.Year != "" {
+				response["year"] = res.bookInfo.Year
 			}
-			if bookInfo.ISBN != "" {
-				result["isbn"] = bookInfo.ISBN
+			if res.bookInfo.ISBN != "" {
+				response["isbn"] = res.bookInfo.ISBN
 			}
-		} else if parseErr != nil {
-			result["parsed"] = false
-			result["parse_error"] = parseErr.Error()
+		} else if res.parseErr != nil {
+			response["parsed"] = false
+			response["parse_error"] = res.parseErr.Error()
 		} else {
-			result["parsed"] = true
-			if llmResult != nil {
-				result["authors"] = llmResult.Authors
+			response["parsed"] = true
+			if res.llmResult != nil {
+				response["authors"] = res.llmResult.Authors
 			}
 		}
-
-		c.JSON(http.StatusCreated, result)
+		c.JSON(http.StatusCreated, response)
 	}
 }
 
@@ -2765,348 +3118,25 @@ func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *s
 	filePath := filepath.Join(dirPath, filename)
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	file, err := os.Open(filePath)
-	if err != nil {
-		updateFn(idx, "error", "", "Cannot open file")
-		return
-	}
-	data, err := io.ReadAll(file)
-	file.Close()
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		updateFn(idx, "error", "", "Cannot read file")
 		return
 	}
 
-	var bookContent []byte
-	var bookInfo *utils.FB2Book
-	var zipContentType utils.ZipContentType
-
-	switch ext {
-	case ".fb2":
-		bookContent = data
-		bookInfo, _ = utils.ParseFB2FromBytes(data)
-	case ".zip":
-		zipResult, zipErr := utils.DetectZipContent(data)
-		if zipErr != nil {
-			updateFn(idx, "error", "", "Cannot extract from zip")
+	res, importErr := importFile(filename, data, ext, db, cfg)
+	if importErr != nil {
+		var dup *duplicateInfo
+		if errors.As(importErr, &dup) {
+			log.Printf("Duplicate file: hash=%s, title='%s'", dup.hash, dup.title)
+			updateFn(idx, "skipped", dup.title, "")
 			return
 		}
-		bookContent = zipResult.Content
-		zipContentType = zipResult.ContentType
-		if zipResult.ContentType == utils.ZipContentFB2 {
-			bookInfo, _ = utils.ParseFB2FromBytes(bookContent)
-		} else if zipResult.ContentType == utils.ZipContentEPUB {
-			epubInfo, _ := utils.ParseEPUBFromBytes(bookContent)
-			if epubInfo != nil {
-				bookInfo = &utils.FB2Book{
-					Title: epubInfo.Title, Authors: epubInfo.Authors,
-					Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
-					Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
-					Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
-				}
-			}
-		}
-	case ".epub":
-		bookContent = data
-		epubInfo, _ := utils.ParseEPUBFromBytes(data)
-		if epubInfo != nil {
-			bookInfo = &utils.FB2Book{
-				Title: epubInfo.Title, Authors: epubInfo.Authors,
-				Lang: epubInfo.Lang, Year: epubInfo.Year, ISBN: epubInfo.ISBN,
-				Publisher: epubInfo.Publisher, Genres: epubInfo.Genres,
-				Annotation: epubInfo.Annotation, Sequence: epubInfo.Sequence,
-			}
-		}
-	case ".pdf", ".docx", ".doc":
-		bookContent = data
-	}
-
-	if bookContent == nil {
-		updateFn(idx, "error", "", "Cannot extract book content")
+		updateFn(idx, "error", "", importErr.Error())
 		return
 	}
 
-	hash := sha256.Sum256(bookContent)
-	hashStr := hex.EncodeToString(hash[:])
-
-	var existingTitle, existingAuthors string
-	err = db.QueryRow(`
-		SELECT w.original_title,
-			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
-		FROM edition_files ef
-		JOIN editions e ON ef.edition_id = e.id
-		JOIN works w ON e.work_id = w.id
-		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
-		LEFT JOIN persons p ON wc.person_id = p.id
-		WHERE ef.file_hash = $1
-		GROUP BY w.original_title
-	`, hashStr).Scan(&existingTitle, &existingAuthors)
-	if err == nil {
-		if existingAuthors == "" {
-			existingAuthors = "Неизвестный автор"
-		}
-		log.Printf("Duplicate file: hash=%s, title='%s'", hashStr, existingTitle)
-		updateFn(idx, "skipped", existingTitle, "")
-		return
-	}
-
-	var llmResult *utils.LLMResult
-	needsLLM := ext == ".pdf" || ext == ".docx" || ext == ".doc"
-	if ext == ".zip" && zipContentType != utils.ZipContentFB2 {
-		needsLLM = true
-	}
-	if needsLLM {
-		var text string
-		var textErr error
-		switch ext {
-		case ".zip":
-			switch zipContentType {
-			case utils.ZipContentPDF:
-				text, textErr = utils.ExtractPDFText(bookContent, 3)
-			case utils.ZipContentDOCX:
-				text, textErr = utils.ExtractDOCXText(bookContent, 3)
-			case utils.ZipContentDOC:
-				text, textErr = utils.ExtractDOCText(bookContent, 3)
-			}
-		case ".pdf":
-			text, textErr = utils.ExtractPDFText(bookContent, 3)
-		case ".docx":
-			text, textErr = utils.ExtractDOCXText(bookContent, 3)
-		case ".doc":
-			if len(bookContent) > 2 && bookContent[0] == 0x50 && bookContent[1] == 0x4b {
-				text, textErr = utils.ExtractDOCXText(bookContent, 3)
-			} else {
-				text, textErr = utils.ExtractDOCText(bookContent, 3)
-			}
-		}
-		if textErr == nil && text != "" && cfg.LLM.BaseURL != "" {
-			llmResult = recognizeBook(text, cfg)
-		}
-	}
-
-	title := filename
-	if bookInfo != nil && bookInfo.Title != "" {
-		title = bookInfo.Title
-	} else if llmResult != nil && llmResult.Title != "" {
-		title = llmResult.Title
-	}
-
-	var authors []string
-	if bookInfo != nil && len(bookInfo.Authors) > 0 {
-		authors = bookInfo.Authors
-	} else if llmResult != nil && len(llmResult.Authors) > 0 {
-		authors = llmResult.Authors
-	}
-	if len(authors) == 0 {
-		authors = []string{"Неизвестный автор"}
-	}
-
-	var existingWorkID int
-	if title != filename {
-		existingWorkID = findWorkByTitleAndAuthors(db, title, authors)
-	}
-
-	destDir := cfg.Directories.Bookarch
-	os.MkdirAll(destDir, 0755)
-
-	subDir := getNextSubdir(destDir)
-	if err := os.MkdirAll(filepath.Join(destDir, subDir), 0755); err != nil {
-		updateFn(idx, "error", "", "Cannot create subdirectory")
-		return
-	}
-
-	baseName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
-	zipName := baseName + ".zip"
-	destPath := filepath.Join(destDir, subDir, zipName)
-
-	idxUnique := 1
-	for {
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			break
-		}
-		zipName = fmt.Sprintf("%s_%d.zip", baseName, idxUnique)
-		destPath = filepath.Join(destDir, subDir, zipName)
-		idxUnique++
-	}
-
-	zipFile, err := os.Create(destPath)
-	if err != nil {
-		updateFn(idx, "error", "", "Cannot create zip file")
-		return
-	}
-
-	zipWriter := zip.NewWriter(zipFile)
-	fw, err := zipWriter.Create(filepath.Base(filename))
-	if err != nil {
-		zipWriter.Close()
-		zipFile.Close()
-		updateFn(idx, "error", "", "Cannot create zip entry")
-		return
-	}
-
-	if _, err := fw.Write(data); err != nil {
-		zipWriter.Close()
-		zipFile.Close()
-		updateFn(idx, "error", "", "Cannot write to zip")
-		return
-	}
-
-	if err := zipWriter.Close(); err != nil {
-		zipFile.Close()
-		updateFn(idx, "error", "", "Cannot close zip writer")
-		return
-	}
-
-	if err := zipFile.Close(); err != nil {
-		updateFn(idx, "error", "", "Cannot close zip file")
-		return
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		updateFn(idx, "error", "", "Database error")
-		return
-	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		} else {
-			tx.Commit()
-		}
-	}()
-
-	langCode := "eng"
-	if bookInfo != nil && bookInfo.Lang != "" {
-		langCode = utils.NormalizeLanguage(bookInfo.Lang)
-	}
-
-	var langExists bool
-	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", langCode).Scan(&langExists)
-	if err != nil || !langExists {
-		langCode = "eng"
-	}
-
-	workType := "novel"
-	var year *int
-	if bookInfo != nil && bookInfo.Year != "" {
-		if y, parseErr := strconv.Atoi(bookInfo.Year); parseErr == nil {
-			year = &y
-		}
-	}
-
-	var workID int
-	var createdWork bool
-	if existingWorkID > 0 {
-		workID = existingWorkID
-		log.Printf("Found existing work id=%d for title='%s'", workID, title)
-	} else {
-		createdWork = true
-		err = tx.QueryRow(`
-			INSERT INTO works (original_title, original_language, first_published, work_type)
-			VALUES ($1, $2, $3, $4) RETURNING id
-		`, title, langCode, year, workType).Scan(&workID)
-		if err != nil {
-			updateFn(idx, "error", "", err.Error())
-			return
-		}
-	}
-
-	if createdWork {
-		for _, authorName := range authors {
-			firstName, lastName := utils.NormalizeAuthorName(authorName)
-			var personID int
-			err = tx.QueryRow(`
-				INSERT INTO persons (last_name, first_name)
-				VALUES ($1, $2) ON CONFLICT (first_name, last_name) DO NOTHING RETURNING id
-			`, lastName, firstName).Scan(&personID)
-			if err != nil {
-				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name=$1 AND (first_name=$2 OR (first_name IS NULL AND $2=''))`,
-					lastName, firstName).Scan(&personID)
-				if err != nil {
-					updateFn(idx, "error", "", "Author error")
-					return
-				}
-			}
-			_, err = tx.Exec(`INSERT INTO work_contributors (work_id, person_id, role) VALUES ($1,$2,'author') ON CONFLICT DO NOTHING`,
-				workID, personID)
-			if err != nil {
-				updateFn(idx, "error", "", "Contributor error")
-				return
-			}
-		}
-	}
-
-	if createdWork && bookInfo != nil {
-		for _, genreName := range bookInfo.Genres {
-			var genreID int
-			err = tx.QueryRow(`
-				INSERT INTO genres (name) VALUES ($1)
-				ON CONFLICT (name) DO NOTHING RETURNING id
-			`, genreName).Scan(&genreID)
-			if err != nil {
-				err = tx.QueryRow(`SELECT id FROM genres WHERE name = $1`, genreName).Scan(&genreID)
-				if err != nil {
-					continue
-				}
-			}
-			_, err = tx.Exec(`
-				INSERT INTO work_genres (work_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING
-			`, workID, genreID)
-			if err != nil {
-				continue
-			}
-		}
-	}
-
-	var editionID int
-	publisher := ""
-	var editionISBN interface{} = nil
-	if bookInfo != nil {
-		publisher = bookInfo.Publisher
-		isbn := strings.SplitN(bookInfo.ISBN, ",", 2)[0]
-		isbn = strings.TrimSpace(isbn)
-		if isbn != "" {
-			var exists bool
-			tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE isbn=$1)", isbn).Scan(&exists)
-			if !exists {
-				editionISBN = isbn
-			}
-		}
-	}
-	err = tx.QueryRow(`
-		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8) RETURNING id
-	`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
-	if err != nil {
-		updateFn(idx, "error", "", "Edition error: "+err.Error())
-		return
-	}
-
-	formatName := utils.GetFormatNameByExt(ext)
-	if ext == ".zip" {
-		if zipContentType != utils.ZipContentUnknown {
-			formatName = utils.ZipContentTypeToFormatName(zipContentType)
-		} else {
-			formatName = utils.GetFormatNameFromZip(filename)
-		}
-	}
-	var formatID int
-	err = tx.QueryRow("SELECT id FROM formats WHERE name=$1", formatName).Scan(&formatID)
-	if err != nil {
-		formatID = 1
-	}
-
-	relPath := filepath.Join(filepath.Base(cfg.Directories.Bookarch), subDir, zipName)
-	_, err = tx.Exec(`
-		INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
-		VALUES ($1,$2,$3,$4,$5,$6)
-	`, editionID, formatID, relPath, len(bookContent), hashStr, true)
-	if err != nil {
-		updateFn(idx, "error", "", "File entry error")
-		return
-	}
-
-	updateFn(idx, "done", title, "")
+	updateFn(idx, "done", res.title, "")
 }
 
 func findWorkByTitleAndAuthors(db *sql.DB, title string, authors []string) int {

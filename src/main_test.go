@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"libapp/src/config"
 )
 
 func TestMain(m *testing.M) {
@@ -1158,4 +1159,262 @@ func TestGetBookExtendedReturnsWorkAndEdition(t *testing.T) {
 	assert.True(t, hasEdition, "Response should have 'edition' field")
 	assert.NotNil(t, work, "Work should not be null")
 	assert.NotNil(t, edition, "Edition should not be null")
+}
+
+func TestGetAuthors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/authors", getAuthors(db))
+
+	req, _ := http.NewRequest("GET", "/api/v1/authors", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Authors       []AuthorWithBooks `json:"authors"`
+		Total         int              `json:"total"`
+		Page          int              `json:"page"`
+		Limit         int              `json:"limit"`
+		TotalWorks    int              `json:"total_works"`
+		TotalEditions int              `json:"total_editions"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, response.Total, 0)
+	assert.GreaterOrEqual(t, response.Page, 1)
+	assert.GreaterOrEqual(t, response.Limit, 1)
+	assert.GreaterOrEqual(t, response.TotalEditions, 0)
+
+	if len(response.Authors) > 0 {
+		author := response.Authors[0]
+		assert.NotEmpty(t, author.LastName)
+		assert.GreaterOrEqual(t, author.ID, 1)
+	}
+}
+
+func TestGetGenres(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/genres", getGenres(db))
+
+	req, _ := http.NewRequest("GET", "/api/v1/genres", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var genres []GenreData
+	err := json.Unmarshal(w.Body.Bytes(), &genres)
+	assert.NoError(t, err)
+
+	if len(genres) > 0 {
+		assert.NotEmpty(t, genres[0].Name)
+		assert.GreaterOrEqual(t, genres[0].ID, 1)
+	}
+}
+
+func TestGetGenreTree(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/genres/tree", getGenreTree(db))
+
+	req, _ := http.NewRequest("GET", "/api/v1/genres/tree", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Genres []GenreWithAuthors `json:"genres"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+
+	if len(response.Genres) > 0 {
+		g := response.Genres[0]
+		assert.NotEmpty(t, g.Name)
+		assert.GreaterOrEqual(t, g.BooksCount, 0)
+		assert.NotNil(t, g.Authors)
+		assert.NotNil(t, g.Children)
+	}
+}
+
+func TestSortByYear(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/books", getBooks(db))
+
+	t.Run("DESC year sorting", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/books?sort_by=year&sort_order=desc&limit=100", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response struct {
+			Books []BookDetails `json:"books"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+
+		noYearFound := false
+		lastYear := 9999
+		for _, b := range response.Books {
+			if b.Year.Valid {
+				if noYearFound {
+					t.Error("Book with year found after book without year in DESC order")
+				}
+				y := int(b.Year.Int64)
+				if y > lastYear {
+					t.Errorf("Not sorted DESC: %d > %d", y, lastYear)
+				}
+				lastYear = y
+			} else {
+				noYearFound = true
+			}
+		}
+	})
+
+	t.Run("ASC year sorting", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/books?sort_by=year&sort_order=asc&limit=100", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response struct {
+			Books []BookDetails `json:"books"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+
+		noYearFound := false
+		lastYear := 0
+		for _, b := range response.Books {
+			if b.Year.Valid {
+				if noYearFound {
+					t.Error("Book with year found after book without year in ASC order")
+				}
+				y := int(b.Year.Int64)
+				if y < lastYear {
+					t.Errorf("Not sorted ASC: %d < %d", y, lastYear)
+				}
+				lastYear = y
+			} else {
+				noYearFound = true
+			}
+		}
+	})
+}
+
+func TestGetTagsPersonsLanguages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/tags", getTags(db))
+	r.GET("/api/v1/persons", getPersons(db))
+	r.GET("/api/v1/languages", getLanguages(db))
+
+	t.Run("tags", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/tags", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("persons", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/persons", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("languages", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/languages", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+func TestGetConfigAPI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		cfg := &config.Config{
+			Server: config.ServerConfig{
+				EnableDelete: true,
+			},
+		}
+		c.Set("config", cfg)
+		c.Next()
+	})
+	r.GET("/api/v1/config", func(c *gin.Context) {
+		cfg := getConfig(c)
+		c.JSON(http.StatusOK, gin.H{
+			"enable_delete": cfg.Server.EnableDelete,
+		})
+	})
+
+	req, _ := http.NewRequest("GET", "/api/v1/config", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		EnableDelete bool `json:"enable_delete"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.True(t, response.EnableDelete)
+}
+
+func TestGetGenreTreeWithFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.GET("/api/v1/genres/tree", getGenreTree(db))
+
+	t.Run("genre filter", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/genres/tree?genre=prose", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("author filter", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/genres/tree?author=test", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("book filter", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/api/v1/genres/tree?book=test", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 }

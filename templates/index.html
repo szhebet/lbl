@@ -13,10 +13,11 @@
         <nav class="tabs">
             <button class="tab active" data-tab="authors">Авторы</button>
             <button class="tab" data-tab="books">Книги</button>
-            <button class="tab" data-tab="genres" style="display:none">Жанры</button>
+            <button class="tab" data-tab="genres">Жанры</button>
             <button class="tab" data-tab="import" style="display:none">Импорт</button>
             <span class="tabs-spacer"></span>
             <button id="loadBooksBtn" class="btn load-books-btn">Загрузить книги</button>
+            <button id="showImportProgressBtn" class="btn load-books-btn">Прогресс загрузки</button>
             <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
         </nav>
 
@@ -90,7 +91,23 @@
 
             <!-- Вкладка Жанры -->
             <div id="genres" class="tab-content">
-                <div class="coming-soon">Раздел в разработке</div>
+                <div class="filters">
+                    <div class="filter-group">
+                        <input type="text" id="genreNameFilter" placeholder="Поиск по жанру...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="genreAuthorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="genreBookFilter" placeholder="Поиск по книге...">
+                    </div>
+                    <button id="applyGenreFilters" class="btn">Применить</button>
+                    <button id="clearGenreFilters" class="btn btn-secondary">Очистить</button>
+                </div>
+
+                <div class="tree-view" id="genresTree">
+                    <div class="loading">Загрузка...</div>
+                </div>
             </div>
 
             <!-- Вкладка Импорт -->
