@@ -1,86 +1,69 @@
-# Library Management System (LMS)
+# Домашняя библиотека
 
-Веб-приложение для управления домашней библиотекой книг с поддержкой OPDS-каталога для чтения на электронных читалках.
+Веб-приложение для управления домашней коллекцией книг с REST API, OPDS-каталогом (для читалок) и SPA-интерфейсом.
 
-## Функциональность
+## Возможности
 
-- **Управление книгами**: добавление, редактирование, удаление книг с метаданными (название, год, ISBN, аннотация)
-- **Авторы и жанры**: иерархическая структура авторов с книгами, категоризация по жанрам
-- **Система тегов**: гибкая маркировка книг тегами
-- **Обложки книг**: загрузка и отображение обложек
-- **Импорт книг**: массовый асинхронный импорт из файлов (FB2, EPUB, PDF, DOC, DOCX) и ZIP-архивов
-- **LLM-распознавание**: автоматическое определение названия и автора по тексту первых страниц (Ollama/OpenAI-compatible)
-- **Полка (избранное)**: возможность отмечать книги для быстрого доступа
-- **Поиск**: поиск по названию, автору, ISBN, жанру с поддержкой ё→е и регистронезависимости
-- **OPDS-каталог**: доступ к библиотеке с читалок через OPDS-протокол
+- **Управление книгами** — добавление, редактирование, удаление книг с метаданными (название, автор, год, ISBN, аннотация, издатель, обложка)
+- **Иерархия авторов и жанров** — дерево автор → произведение → издание с фильтрацией
+- **Импорт книг** — массовый асинхронный импорт из файлов и ZIP-архивов с прогрессом и отменой
+- **LLM-распознавание** — автоматическое определение названия и автора по тексту первых страниц (PDF, DOC, DOCX) через Ollama / OpenAI-совместимый API
+- **Проверка дубликатов** — SHA-256 хеш контента; если книга уже есть, импорт пропускается
+- **Полка (избранное)** — быстрый доступ к отмеченным книгам
+- **Поиск** — по автору, названию, жанру, дате; ё→е, регистронезависимый, GIN trgm индексы
+- **OPDS-каталог** — доступ к библиотеке с электронных читалок через OPDS 1.2
+- **SPA-интерфейс** — три вкладки (Авторы, Книги, Жанры), кнопка быстрого импорта, прогресс загрузки
 
 ### Поддерживаемые форматы
 
-| Формат | Метаданные | Примечание |
-|--------|-----------|------------|
-| FB2 | Нативные (автор, жанры, аннотация, обложка, ISBN) | XML-разбор, поддержка CP1251/KOI8-R/ISO-8859-5 |
-| EPUB | Нативные (автор, ISBN, издатель, язык) | Разбор container.xml + OPF |
-| PDF | LLM-распознавание (первые 3 страницы, до 2000 символов) | github.com/ledongthuc/pdf |
-| DOCX | LLM-распознавание (первые 3 страницы) | word/document.xml |
-| DOC | LLM-распознавание (первые 3 страницы) | OLE2 + UTF-16LE (mscfb) |
+| Формат | Метаданные | Распознавание |
+|--------|-----------|---------------|
+| FB2 | Нативные (автор, жанры, аннотация, обложка, ISBN, издатель, язык) | XML-парсер |
+| EPUB | Нативные (автор, ISBN, издатель, язык, жанры) | container.xml + OPF |
+| PDF | LLM (первые 3 страницы, до 2000 символов) | github.com/ledongthuc/pdf |
+| DOCX | LLM (первые 3 страницы) | word/document.xml |
+| DOC | LLM (первые 3 страницы) | OLE2 + UTF-16LE (mscfb) |
 | ZIP | Автоопределение формата внутри | FB2, EPUB, PDF, DOC, DOCX |
-
-### OPDS-каталог
-
-Читалки могут подключаться к каталогу по адресу `/api/v1/opds/catalog.xml`:
-
-| Эндпоинт | Описание |
-|----------|----------|
-| `GET /api/v1/opds/catalog.xml` | Корневой каталог |
-| `GET /api/v1/opds/latest.xml` | Последние добавленные книги |
-| `GET /api/v1/opds/genres.xml` | Список жанров |
-| `GET /api/v1/opds/genre/:id.xml` | Книги жанра |
-| `GET /api/v1/opds/search.xml?q=` | Поиск |
-| `GET /api/v1/opds/book/:id` | Скачивание книги |
 
 ## Конфигурация
 
-Приложение читает настройки из двух источников (в порядке возрастания приоритета):
+Приложение читает настройки в следующем порядке (последний имеет наивысший приоритет):
 
-1. **Переменные окружения** (`LIBAPP_*`) — низкий приоритет, используются как значения по умолчанию
-2. **Файл `config.toml`** — высокий приоритет, переопределяет переменные окружения
+1. **Значения по умолчанию** (встроенные)
+2. **Переменные окружения** с префиксом `LIBAPP_` (и `PORT` / `DATABASE_URL` для обратной совместимости)
+3. **Файл `config.toml`** (текущая директория или `CONFIG_PATH`)
 
-Файл читается из текущей директории (или пути из `CONFIG_PATH`).
+### Переменные окружения
 
-Пример — `config.toml.example`:
+| Переменная | Раздел | Описание |
+|------------|--------|----------|
+| `LIBAPP_PORT` / `PORT` | server.port | Порт HTTP |
+| `LIBAPP_BIND` | server.bind | Адрес привязки |
+| `LIBAPP_ENABLE_DELETE` | server.enable_delete | Разрешить удаление |
+| `LIBAPP_LOG_LEVEL` | server.log_level | Уровень логирования |
+| `LIBAPP_DIR_BOOKARCH` | directories.bookarch | Хранилище книг |
+| `LIBAPP_DIR_TEMP` | directories.temp | Временная директория |
+| `LIBAPP_DIR_LOGS` | directories.logs | Директория логов |
+| `LIBAPP_DIR_TEMPLATES` | directories.templates | Шаблоны |
+| `LIBAPP_DIR_STATIC` | directories.static | Статика |
+| `LIBAPP_DATABASE_URL` / `DATABASE_URL` | — | DSN или postgres:// URL |
+| `LIBAPP_DB_HOST` | database.host | Хост БД |
+| `LIBAPP_DB_PORT` | database.port | Порт БД |
+| `LIBAPP_DB_NAME` | database.name | Имя БД |
+| `LIBAPP_DB_USER` | database.user | Пользователь БД |
+| `LIBAPP_DB_PASSWORD` | database.password | Пароль БД |
+| `LIBAPP_DB_SSLMODE` | database.sslmode | Режим SSL |
+| `LIBAPP_DB_PGDATA` | database.pgdata | Директория данных (all-in-one) |
+| `LIBAPP_LLM_BASE_URL` | llm.base_url | URL LLM-сервера |
+| `LIBAPP_LLM_MODEL` | llm.model | Модель LLM |
+| `LIBAPP_LLM_TOKEN` | llm.token | Токен аутентификации |
+| `LIBAPP_LLM_TIMEOUT` | llm.timeout | Таймаут (сек) |
+| `LIBAPP_LLM_PROMPT` | llm.prompt | Основной промпт |
+| `LIBAPP_LLM_PROMPT2` | llm.prompt2 | Повторный промпт |
 
+Полный пример — `config.toml.example`.
 
-### Переменные окружения (низкий приоритет, переопределяются config.toml) но для Docker удобнее использовать их
-
-| Переменная | Соответствие в config.toml | Описание |
-|------------|---------------------------|----------|
-| `LIBAPP_PORT` / `PORT` | `server.port` | Порт HTTP-сервера |
-| `LIBAPP_BIND` | `server.bind` | Адрес привязки |
-| `LIBAPP_ENABLE_DELETE` | `server.enable_delete` | Разрешить удаление (`true`/`false`) |
-| `LIBAPP_LOG_LEVEL` | `server.log_level` | Уровень логирования |
-| `LIBAPP_DIR_BOOKARCH` | `directories.bookarch` | Директория книжных архивов |
-| `LIBAPP_DIR_TEMP` | `directories.temp` | Временная директория |
-| `LIBAPP_DIR_LOGS` | `directories.logs` | Директория логов |
-| `LIBAPP_DIR_TEMPLATES` | `directories.templates` | Директория шаблонов |
-| `LIBAPP_DIR_STATIC` | `directories.static` | Директория статики |
-| `LIBAPP_DATABASE_URL` / `DATABASE_URL` | — | Полная строка подключения к БД (DSN или URL) |
-| `LIBAPP_DB_HOST` | `database.host` | Хост БД |
-| `LIBAPP_DB_PORT` | `database.port` | Порт БД |
-| `LIBAPP_DB_NAME` | `database.name` | Имя БД |
-| `LIBAPP_DB_USER` | `database.user` | Пользователь БД |
-| `LIBAPP_DB_PASSWORD` | `database.password` | Пароль БД |
-| `LIBAPP_DB_SSLMODE` | `database.sslmode` | Режим SSL |
-| `LIBAPP_DB_PGDATA` | `database.pgdata` | Директория данных PostgreSQL |
-| `LIBAPP_LLM_BASE_URL` | `llm.base_url` | URL LLM-сервера |
-| `LIBAPP_LLM_MODEL` | `llm.model` | Модель LLM |
-| `LIBAPP_LLM_TOKEN` | `llm.token` | Токен аутентификации LLM |
-| `LIBAPP_LLM_TIMEOUT` | `llm.timeout` | Таймаут LLM (сек) |
-| `LIBAPP_LLM_PROMPT` | `llm.prompt` | Первичный промпт для LLM |
-| `LIBAPP_LLM_PROMPT2` | `llm.prompt2` | Повторный промпт для LLM (при пустом ответе) |
-
-> **Важно**: переменные `PORT` и `DATABASE_URL` поддерживаются для обратной совместимости, но имеют более низкий приоритет, чем их аналоги `LIBAPP_PORT` и `LIBAPP_DATABASE_URL`.
-
-## Сборка и запуск
+## Быстрый старт
 
 ### Требования
 
@@ -90,81 +73,77 @@
 ### Локальный запуск
 
 ```bash
-# Клонирование репозитория
 git clone https://github.com/szhebet/lbl.git
 cd lbl
 
-# Настройка базы данных
-sudo -u postgres createdb library
-sudo -u postgres psql -d library -f src/schema.sql
-
-# Копирование и правка конфига
+# Копировать и отредактировать конфиг
 cp config.toml.example config.toml
-# Отредактируйте config.toml под свои параметры, раскомментируйте закомментированные строки или добавьте недостающие значения в переменные среды
 
 # Сборка
 go build -o library_app ./src/
 
-# Запуск
+# Запуск (БД должна быть доступна, схема создаётся автоматически)
 ./library_app
 ```
 
 Приложение доступно по адресу: http://localhost:9091
 
-### Docker compose
+### Docker Compose
 
+```bash
 git clone https://github.com/szhebet/lbl.git
 cd lbl
 
-```bash
-# Сборка all-in-one образа (приложение + PostgreSQL)
 cp config.toml.example config.toml
-# Отредактируйте config.toml под свои параметры
-
 cp env.example .env
-# Отредактируйте .env под свои параметры, пароль сделайте сложным
+# Отредактировать .env (пароль, пути)
 
 docker compose up -d
+```
 
+Приложение: http://localhost:9092
 
-## API эндпоинты
+## API
 
 ### Книги
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/books` | Список книг (?author=, ?book=, ?genre=, ?date_from=, ?date_to=, ?sort_by=, ?sort_order=, ?limit=, ?offset=) |
-| GET | `/api/v1/books/search` | Поиск книг |
-| POST | `/api/v1/books` | Создание книги |
-| GET | `/api/v1/books/:id` | Информация о книге |
-| PUT | `/api/v1/books/:id` | Обновление книги |
-| DELETE | `/api/v1/books/:id` | Удаление книги + осиротевшей работы |
+| GET | `/api/v1/books` | Список (?author=, ?book=, ?genre=, ?date_from=, ?date_to=, ?sort_by=, ?sort_order=, ?limit=, ?offset=) |
+| GET | `/api/v1/books/search` | Поиск |
+| POST | `/api/v1/books` | Создание |
+| GET | `/api/v1/books/:id` | Информация |
+| PUT | `/api/v1/books/:id` | Обновление |
+| DELETE | `/api/v1/books/:id` | Удаление + осиротевшая работа |
 | GET | `/api/v1/books/:id/extended` | Расширенная информация (ISBN, аннотация, издатель) |
 | PUT | `/api/v1/books/:id/extended` | Обновление расширенных данных |
 | PUT | `/api/v1/books/:id/shelf` | Добавить/убрать с полки |
-| GET | `/api/v1/books/:id/download` | Скачать файл книги |
+| GET | `/api/v1/books/:id/download` | Скачать файл (ZIP) |
 | POST | `/api/v1/books/:id/cover` | Загрузить обложку |
 
 ### Авторы, жанры, теги
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/authors` | Список авторов с деревом книг |
+| GET | `/api/v1/authors` | Авторы с деревом книг |
 | GET | `/api/v1/genres` | Список жанров |
+| GET | `/api/v1/genres/tree` | Дерево жанров (?genre=, ?author=, ?book=) |
 | POST | `/api/v1/genres` | Создание жанра |
+| PUT | `/api/v1/genres/:id` | Обновление |
+| DELETE | `/api/v1/genres/:id` | Удаление (только без книг) |
 | GET | `/api/v1/tags` | Список тегов |
 | POST | `/api/v1/tags` | Создание тега |
-| GET | `/api/v1/persons` | Список всех персон |
-| PUT | `/api/v1/persons/:id` | Обновление имени персоны |
+| GET | `/api/v1/persons` | Все персоны |
+| PUT | `/api/v1/persons/:id` | Обновление имени |
 | GET | `/api/v1/languages` | Список языков |
 
-### Импорт (асинхронный)
+### Импорт
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/api/v1/import/upload` | Загрузка файлов (multipart) → асинхронный импорт |
 | POST | `/api/v1/import/directory` | Импорт из директории на сервере |
-| GET | `/api/v1/import/status` | Статус импорта (running, total, completed, errors) |
+| GET | `/api/v1/import/status` | Статус импорта (running, total, completed, errors, items, start_time) |
 | POST | `/api/v1/import/cancel` | Отмена текущего импорта |
 | POST | `/api/v1/import/file` | Импорт одного файла (синхронно) |
 
@@ -179,7 +158,7 @@ docker compose up -d
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/config` | Конфигурация приложения (enable_delete) |
+| GET | `/api/v1/config` | Конфигурация (enable_delete) |
 | GET | `/debug/goroutines` | Дамп горутин |
 
 ### OPDS
@@ -188,71 +167,83 @@ docker compose up -d
 |-------|------|----------|
 | GET | `/api/v1/opds/catalog.xml` | Корневой каталог |
 | GET | `/api/v1/opds/latest.xml` | Последние книги |
-| GET | `/api/v1/opds/genres.xml` | Жанры |
+| GET | `/api/v1/opds/genres.xml` | Список жанров |
 | GET | `/api/v1/opds/genre/:id.xml` | Книги жанра |
 | GET | `/api/v1/opds/search.xml?q=` | Поиск |
-| GET | `/api/v1/opds/book/:id` | Скачивание книги |
+| GET | `/api/v1/opds/book/:id` | Скачивание |
+
+## Сборка и запуск
+
+```bash
+go build -o library_app ./src/
+./library_app
+```
+
+Все зависимости в `go.mod` — сторонних реестров не требуется.
+
+## Тестирование
+
+```bash
+go test -count=1 ./src/...
+```
+
+Для тестов нужна PostgreSQL (`DATABASE_URL`).
 
 ## Структура проекта
 
 ```
 lbl/
-├── bookarch/         # Директория хранения книжных файлов (ZIP-архивы)
-├── db/
-│   └── scripts/
-├── logs/             # Логи приложения
-├── src/              # Исходный код Go
-│   ├── main.go       # Точка входа, все хендлеры, маршруты, ImportManager
-│   ├── main_test.go  # Тесты
-│   ├── schema.sql    # Встраиваемая схема БД (таблицы, индексы, триггеры)
-│   ├── opds.go       # OPDS XML-каталог
-│   ├── auth.go       # Аутентификация (не используется)
-│   ├── jwt.go        # JWT (не используется)
-│   ├── reading.go    # Прогресс чтения (не используется)
-│   ├── recommendations.go  # Рекомендации (не используется)
-│   ├── export.go     # Экспорт/импорт (не используется)
+├── bookarch/                  # Хранилище книг (ZIP-архивы)
+├── db/scripts/                # Скрипты БД
+├── logs/                      # Логи
+├── src/                       # Исходный код
+│   ├── main.go                # Точка входа, все хендлеры, маршруты, ImportManager
+│   ├── main_test.go           # Тесты
+│   ├── schema.sql             # Встраиваемая схема БД (go:embed)
+│   ├── migration_1.1.sql      # Миграция (go:embed)
+│   ├── opds.go                # OPDS XML-каталог
+│   ├── auth.go                # (не используется)
+│   ├── jwt.go                 # (не используется)
+│   ├── reading.go             # (не используется)
+│   ├── recommendations.go     # (не используется)
+│   ├── export.go              # (не используется)
 │   ├── config/
-│   │   └── config.go      # Структура конфига, загрузка из TOML
+│   │   └── config.go          # Структура, загрузка из TOML + env
 │   └── utils/
-│       ├── llm_client.go   # OpenAI-совместимый LLM-клиент (sync.Mutex, ретрай с prompt2)
-│       ├── pdf_extract.go  # Извлечение текста из PDF (первые 3 страницы)
-│       ├── docx_extract.go # Извлечение текста из DOCX (word/document.xml)
-│       ├── doc_extract.go  # Извлечение текста из DOC (OLE2 + UTF-16LE)
-│       ├── epub.go         # Парсинг EPUB метаданных
-│       ├── fb2.go          # Парсинг FB2 метаданных (CP1251, жанры, ISBN)
-│       ├── fb2_test.go     # Тесты FB2
-│       ├── epub_test.go    # Тесты EPUB
-│       └── zip_extract.go  # Определение формата внутри ZIP
-├── static/           # Статические файлы
+│       ├── llm_client.go      # LLM-клиент (sync.Mutex, ретрай)
+│       ├── pdf_extract.go     # PDF → текст (первые 3 стр)
+│       ├── docx_extract.go    # DOCX → текст
+│       ├── doc_extract.go     # DOC → текст (OLE2)
+│       ├── epub.go            # EPUB-метаданные
+│       ├── fb2.go             # FB2-метаданные (CP1251, KOI8-R)
+│       ├── fb2_test.go        # Тесты FB2
+│       ├── epub_test.go       # Тесты EPUB
+│       └── zip_extract.go     # Определение контента ZIP
+├── static/
 │   ├── css/style.css
-│   ├── js/app.js     # SPA: авторы (дерево), книги (таблица с сортировкой/фильтрами)
-│   ├── js/import.js  # Асинхронный импорт с polling
+│   ├── js/app.js              # SPA: вкладки, авторы, книги, жанры
+│   ├── js/import.js           # Импорт с прогрессом и polling
 │   └── favicon.ico
 ├── templates/
-│   └── index.html    # SPA-шаблон (табы: авторы, книги, импорт)
-├── tempfld/          # Временная директория для загрузки и обработки
-├── testdata/         # Тестовые файлы книг
-├── config.toml.example  # Шаблон конфига
-├── Dockerfile        # Многоступенчатая сборка
-├── Dockerfile.all-in-one  # Всё в одном (приложение + БД)
-├── go.mod / go.sum   # Go-модуль
-├── startup.sh        # Точка входа контейнера
-└── README.md / AGENTS.md  # Документация
+│   └── index.html             # SPA (4 вкладки), модальное окно
+├── tempfld/                   # Временные файлы загрузки
+├── testdata/                  # Тестовые книги
+├── config.toml.example        # Пример конфига
+├── env.example                # Пример .env для Docker
+├── docker-compose.yml         # Docker Compose (БД + приложение)
+├── Dockerfile                 # Многоступенчатая сборка
+├── Dockerfile.all-in-one      # Всё в одном (БД + приложение)
+├── startup.sh                 # Точка входа контейнера
+├── go.mod / go.sum
+└── AGENTS.md                  # Инструкции для ассистентов
 ```
 
-## Поиск и фильтрация
+## Примечания
 
-- Все поисковые запросы приводятся к нижнему регистру с заменой ё→е (`normalizeQuery()`)
-- Индексы GIN trgm на полях `persons.lower_fio`, `works.lower_original_title`, `editions.lower_title`
-- Триггер `normalize_search_field` автоматически заполняет lower_ поля через `REPLACE(LOWER(...), 'ё', 'е')`
-- Фильтр книг: ?author=, ?book=, ?genre=, ?date_from=, ?date_to=, ?sort_by=(original_title|upload_date|authors|available_formats), ?sort_order=(asc|desc), ?limit=, ?offset=
-- Интервал дат: date_from с 00:00, date_to до 23:59
-
-## Тестирование
-
-```bash
-go test ./src/...
-```
+- **Схема БД** создаётся автоматически при первом запуске (embedded `schema.sql` + миграции). База данных также создаётся автоматически, если не существует.
+- **LLM-вызовы** сериализованы через `sync.Mutex` — при массовом импорте PDF/DOC/DOCX файлы обрабатываются последовательно.
+- **Транслитерация** названий книг в пути архива применяется только для определённых названий (из метаданных или LLM). Если название не определено, сохраняется оригинальное имя файла.
+- **Дубликаты** проверяются по SHA-256 от содержимого до обращения к LLM.
 
 ## Лицензия
 
