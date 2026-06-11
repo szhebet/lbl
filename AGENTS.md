@@ -199,21 +199,47 @@ Overrides via environment: `DATABASE_URL`, `PORT`.
 
 ## Build & Run
 
+The app listens on **`0.0.0.0:9091`** by default (configurable in `config.toml` `[server]` section).
+
+### Prerequisites
+
+- PostgreSQL must be running and accessible (see `config.toml` `[database]` section)
+- Config file must exist: `config.toml` in the project root or `CONFIG_PATH` env var
+
+### Quick start
+
 ```bash
 # Build
 go build -o library_app ./src/
 
-# Run (requires config.toml + PostgreSQL)
+# Run in foreground (Ctrl+C to stop)
 ./library_app
 
 # With env overrides
 DATABASE_URL="host=..." PORT=9091 ./library_app
 ```
 
-Run persistently:
+### Run persistently (background)
+
 ```bash
+# Build (if needed)
+go build -o library_app ./src/
+
+# Kill previous instance (if any) — use `kill` by PID, NOT `pkill -f`
+# because pkill -f "library_app" matches the grep process itself and hangs.
+# Instead:
+#   kill $(pgrep -f "^\./library_app$") 2>/dev/null; sleep 1
+
+# Start in background
 nohup ./library_app > library_app.log 2>&1 &
+
+# Verify
+sleep 2
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9091/
+# Should print 200
 ```
+
+> **Note**: The app listens on `0.0.0.0:9091`. Use `127.0.0.1:9091` or `localhost:9091` to access it locally. External access requires firewall rules on the host.
 
 ## Launch for Other Agents (Docker host-net mode)
 
@@ -277,8 +303,10 @@ curl -s http://localhost:9091/ | head -3
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `bind: address already in use` | Old process still listening | Run `pkill -f library_app; docker rm -f library-app` first |
+
+> **Note**: `pkill -f library_app` may hang if it matches its own grep/process. Use `kill $(pgrep -f '^\./library_app$') 2>/dev/null` instead.
 | `connection refused` | Container not started or port mismatch | Check `docker logs library-app`; verify config.toml port is 9091 |
-| PostgreSQL connection errors | DB not running | Check `pg_isready`; start with `sudo pg_ctlcluster 17 main start` |
+| PostgreSQL connection errors | DB not running | Check `pg_isready`; start with `sudo pg_ctlcluster $(pg_lsclusters -h | head -1 | awk '{print $1}') main start` |
 | Docker Hub pull fails (403) | No registry access | Use `docker import` approach above (does not require pulling images) |
 
 ### Stop

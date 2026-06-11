@@ -39,7 +39,16 @@ var embeddedSchema string
 //go:embed migration_1.1.sql
 var embeddedMigration11 string
 
-const currentDBVersion = "1.1"
+//go:embed migration_2.0.sql
+var embeddedMigration20 string
+
+//go:embed migration_2.1.sql
+var embeddedMigration21 string
+
+//go:embed migration_2.2.sql
+var embeddedMigration22 string
+
+const currentDBVersion = "2.2"
 
 type migration struct {
 	Version     string
@@ -55,8 +64,23 @@ var migrations = []migration{
 	},
 	{
 		Version:     "1.1",
-		Description: "Placeholder — future schema changes go here",
+		Description: "Release 1.0",
 		SQL:         stripSchema(embeddedMigration11),
+	},
+	{
+		Version:     "2.0",
+		Description: "Placeholder — future schema changes go here",
+		SQL:         stripSchema(embeddedMigration20),
+	},
+	{
+		Version:     "2.1",
+		Description: "Add user_devices table",
+		SQL:         stripSchema(embeddedMigration21),
+	},
+	{
+		Version:     "2.2",
+		Description: "Add user_books table",
+		SQL:         stripSchema(embeddedMigration22),
 	},
 }
 
@@ -469,6 +493,7 @@ func main() {
 		api.PUT("/persons/:id", updatePerson(db))
 		api.GET("/genres", getGenres(db))
 		api.GET("/genres/tree", getGenreTree(db))
+		api.GET("/genres/:id/authors", getGenreAuthors(db))
 		api.POST("/genres", createGenre(db))
 		api.PUT("/genres/:id", updateGenre(db))
 		api.DELETE("/genres/:id", deleteGenre(db))
@@ -476,6 +501,8 @@ func main() {
 		api.POST("/tags", createTag(db))
 		api.GET("/persons", getPersons(db))
 		api.GET("/languages", getLanguages(db))
+		api.POST("/auth/login", loginUser(db))
+		api.POST("/auth/register", createUser(db))
 		api.GET("/config", getAppConfig())
 		
 		api.POST("/import/file", importBookFile(db))
@@ -486,6 +513,32 @@ func main() {
 		api.POST("/books/:id/cover", uploadCover(db))
 		api.GET("/books/:id/download", downloadBook(db))
 		api.PUT("/books/:id/shelf", updateBookShelf(db))
+
+		// User-book status (requires auth, optional)
+		userBooks := r.Group("/api/v1/user/books")
+		userBooks.Use(authMiddleware())
+		{
+			userBooks.GET("", listUserBooks(db))
+			userBooks.GET("/:edition_id", getUserBook(db))
+			userBooks.PUT("/:edition_id", setUserBook(db))
+		}
+	}
+
+	// Admin API routes
+	admin := r.Group("/api/v1/admin")
+	{
+		admin.GET("/users", adminGetUsers(db))
+		admin.POST("/users", adminCreateUser(db))
+		admin.PUT("/users/:id", adminUpdateUser(db))
+		admin.DELETE("/users/:id", adminDeleteUser(db))
+		admin.GET("/persons", adminGetPersons(db))
+		admin.POST("/persons", adminCreatePerson(db))
+		admin.PUT("/persons/:id", adminUpdatePerson(db))
+		admin.DELETE("/persons/:id", adminDeletePerson(db))
+		admin.GET("/tags", adminGetTags(db))
+		admin.PUT("/tags/:id", adminUpdateTag(db))
+		admin.DELETE("/tags/:id", adminDeleteTag(db))
+		admin.GET("/genres", adminGetGenres(db))
 	}
 
 	// Serve static files
@@ -496,6 +549,9 @@ func main() {
 		c.File("./templates/index.html")
 	})
 
+	r.GET("/admin", func(c *gin.Context) {
+		c.File("./templates/admin.html")
+	})
 	r.GET("/shelf/", getShelfPage(db))
 	r.PUT("/api/v1/shelf/clear", clearShelf(db))
 	r.GET("/api/v1/shelf/count", getShelfCount(db))
@@ -1555,8 +1611,13 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 
 // UpdatePersonRequest represents the request body for updating a person
 type UpdatePersonRequest struct {
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
+	FirstName  string  `json:"first_name"`
+	MiddleName string  `json:"middle_name"`
+	LastName   string  `json:"last_name"`
+	Pseudonym  *string `json:"pseudonym"`
+	BirthDate  *string `json:"birth_date"`
+	DeathDate  *string `json:"death_date"`
+	Biography  *string `json:"biography"`
 }
 
 // ExtendedBookData represents the full book data with all related information
@@ -1624,7 +1685,6 @@ type GenreWithAuthors struct {
 	Name        string             `json:"name"`
 	ParentID    *int               `json:"parent_id"`
 	Description *string            `json:"description"`
-	BooksCount  int                `json:"books_count"`
 	Authors     []AuthorWithBooks  `json:"authors"`
 	Children    []GenreWithAuthors `json:"children"`
 }
@@ -1714,27 +1774,19 @@ func updatePerson(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Validate required fields
-		if req.LastName == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Last name is required"})
-			return
-		}
-
-		// Update person
-		result, err := db.Exec(`
-			UPDATE persons 
-			SET first_name = $1, last_name = $2
-			WHERE id = $3
-		`, req.FirstName, req.LastName, id)
-
+		_, err := db.Exec(`
+			UPDATE persons SET
+				first_name = COALESCE(NULLIF($1,''), first_name),
+				middle_name = COALESCE(NULLIF($2,''), middle_name),
+				last_name = COALESCE(NULLIF($3,''), last_name),
+				pseudonym = $4,
+				birth_date = NULLIF($5,'')::date,
+				death_date = NULLIF($6,'')::date,
+				biography = $7
+			WHERE id = $8
+		`, req.FirstName, req.MiddleName, req.LastName, req.Pseudonym, req.BirthDate, req.DeathDate, req.Biography, id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Person not found"})
 			return
 		}
 
@@ -2130,35 +2182,20 @@ func createGenre(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// getGenreTree returns genre hierarchy with nested authors and books
+// getGenreTree returns genre hierarchy (without authors/books — loaded lazily)
 func getGenreTree(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		genreFilter := c.Query("genre")
-		authorFilter := c.Query("author")
-		bookFilter := c.Query("book")
 
 		whereClause := ""
 		whereArgs := []interface{}{}
-		argNum := 1
 
 		if genreFilter != "" {
-			whereClause += fmt.Sprintf(" AND LOWER(g.name) LIKE $%d", argNum)
+			whereClause = " WHERE LOWER(g.name) LIKE $1"
 			whereArgs = append(whereArgs, "%"+strings.ToLower(genreFilter)+"%")
-			argNum++
 		}
 
-		// Get all genres matching the filter
-		query := fmt.Sprintf(`
-			SELECT g.id, g.name, g.parent_id, g.description,
-				COUNT(DISTINCT e.id) as books_count
-			FROM genres g
-			LEFT JOIN work_genres wg ON wg.genre_id = g.id
-			LEFT JOIN works w ON w.id = wg.work_id
-			LEFT JOIN editions e ON e.work_id = w.id
-			WHERE 1=1%s
-			GROUP BY g.id, g.name, g.parent_id, g.description
-			ORDER BY g.name
-		`, whereClause)
+		query := `SELECT g.id, g.name, g.parent_id, g.description FROM genres g` + whereClause + ` ORDER BY g.name`
 
 		rows, err := db.Query(query, whereArgs...)
 		if err != nil {
@@ -2167,13 +2204,12 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 		}
 		defer rows.Close()
 
-		// Build genre map
 		genreMap := make(map[int]*GenreWithAuthors)
 		for rows.Next() {
 			var g GenreWithAuthors
 			var parentID sql.NullInt64
 			var desc sql.NullString
-			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc, &g.BooksCount); err != nil {
+			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -2189,7 +2225,6 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 			genreMap[g.ID] = &g
 		}
 
-		// Build parent-child relationships
 		for _, g := range genreMap {
 			if g.ParentID != nil {
 				if parent, ok := genreMap[*g.ParentID]; ok {
@@ -2198,206 +2233,155 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Recursively build tree: each genre copy in parent.Children
-		// needs its own children populated from the map
-		var buildTree func(g *GenreWithAuthors)
-		buildTree = func(g *GenreWithAuthors) {
-			var populated []GenreWithAuthors
-			for _, child := range g.Children {
-				if orig, ok := genreMap[child.ID]; ok {
-					orig.Children = nil // clear to avoid re-processing
-					for _, sub := range genreMap {
-						if sub.ParentID != nil && *sub.ParentID == child.ID {
-							orig.Children = append(orig.Children, *sub)
-						}
-					}
-					populated = append(populated, *orig)
-				}
-			}
-			g.Children = populated
-			if g.Children == nil {
-				g.Children = []GenreWithAuthors{}
-			}
-			for i := range g.Children {
-				buildTree(&g.Children[i])
-			}
-		}
-
-		// Apply to all roots
-		for _, g := range genreMap {
-			if g.ParentID == nil {
-				buildTree(g)
-			}
-		}
-
-		// Remove children from the map so they aren't also treated as roots
-		// (already copied into parent.Children above)
-
-		// populateGenreAuthors queries authors and books for a genre
-		var populateErr error
-		var populateGenre func(g *GenreWithAuthors)
-		populateGenre = func(g *GenreWithAuthors) {
-			if populateErr != nil {
-				return
-			}
-
-			authorQuery := `
-				SELECT p.id, COALESCE(p.first_name, '') as first_name, p.last_name,
-					COUNT(DISTINCT e.id) as books_count
-				FROM persons p
-				JOIN work_contributors wc ON wc.person_id = p.id AND wc.role = 'author'
-				JOIN works w ON w.id = wc.work_id
-				JOIN work_genres wg ON wg.work_id = w.id
-				JOIN editions e ON e.work_id = w.id
-				WHERE wg.genre_id = $1
-			`
-			authorArgs := []interface{}{g.ID}
-			authorArgNum := 2
-
-			if authorFilter != "" {
-				authorQuery += fmt.Sprintf(" AND p.lower_fio LIKE $%d", authorArgNum)
-				authorArgs = append(authorArgs, "%"+normalizeQuery(authorFilter)+"%")
-				authorArgNum++
-			}
-			if bookFilter != "" {
-				authorQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", authorArgNum)
-				authorArgs = append(authorArgs, "%"+normalizeQuery(bookFilter)+"%")
-				authorArgNum++
-			}
-
-			authorQuery += " GROUP BY p.id, p.first_name, p.last_name ORDER BY p.last_name, p.first_name"
-
-			aRows, err := db.Query(authorQuery, authorArgs...)
-			if err != nil {
-				populateErr = err
-				return
-			}
-
-			for aRows.Next() {
-				var author AuthorWithBooks
-				if err := aRows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
-					aRows.Close()
-					populateErr = err
-					return
-				}
-
-				booksQuery := `
-					SELECT e.id, w.original_title, e.year, e.on_shelf, e.upload_date
-					FROM works w
-					JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
-					JOIN editions e ON e.work_id = w.id
-					JOIN work_genres wg ON wg.work_id = w.id
-					WHERE wc.person_id = $1 AND wg.genre_id = $2
-				`
-				bookArgs := []interface{}{author.ID, g.ID}
-				bookArgNum := 3
-
-				if bookFilter != "" {
-					booksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", bookArgNum)
-					bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
-				}
-
-			booksQuery += " ORDER BY NULLIF(e.year, 0) DESC NULLS LAST, w.original_title"
-
-			bRows, err := db.Query(booksQuery, bookArgs...)
-				if err != nil {
-					aRows.Close()
-					populateErr = err
-					return
-				}
-
-				var books []BookWithFormats
-				for bRows.Next() {
-					var book BookWithFormats
-					var year sql.NullInt64
-					var onShelf bool
-					var uploadDate sql.NullString
-					if err := bRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
-						bRows.Close()
-						aRows.Close()
-						populateErr = err
-						return
-					}
-					if year.Valid {
-						y := int(year.Int64)
-						book.Year = &y
-					}
-					book.OnShelf = onShelf
-					if uploadDate.Valid {
-						book.UploadDate = uploadDate.String
-					}
-
-					formatRows, err := db.Query(`
-						SELECT f.name, ef.file_path
-						FROM edition_files ef
-						JOIN formats f ON f.id = ef.format_id
-						WHERE ef.edition_id = $1
-					`, book.ID)
-					if err != nil {
-						bRows.Close()
-						aRows.Close()
-						populateErr = err
-						return
-					}
-					var formats []FormatInfo
-					for formatRows.Next() {
-						var fi FormatInfo
-						if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
-							formatRows.Close()
-							bRows.Close()
-							aRows.Close()
-							populateErr = err
-							return
-						}
-						formats = append(formats, fi)
-					}
-					formatRows.Close()
-					if formats == nil {
-						book.Formats = []FormatInfo{}
-					} else {
-						book.Formats = formats
-					}
-					books = append(books, book)
-				}
-				bRows.Close()
-
-				if books == nil {
-					author.Books = []BookWithFormats{}
-				} else {
-					author.Books = books
-				}
-				g.Authors = append(g.Authors, author)
-			}
-			aRows.Close()
-
-			if g.Authors == nil {
-				g.Authors = []AuthorWithBooks{}
-			}
-
-			// Recurse into children
-			for i := range g.Children {
-				populateGenre(&g.Children[i])
-			}
-		}
-
-		// Collect root genres (those without parent in the map)
 		var roots []GenreWithAuthors
 		for _, g := range genreMap {
 			if g.ParentID == nil {
-				populateGenre(g)
-				if populateErr != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": populateErr.Error()})
-					return
-				}
 				roots = append(roots, *g)
 			}
 		}
-
 		if roots == nil {
 			roots = []GenreWithAuthors{}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"genres": roots})
+	}
+}
+
+// getGenreAuthors returns authors with books for a specific genre (lazy load)
+func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		genreID := c.Param("id")
+		authorFilter := c.Query("author")
+		bookFilter := c.Query("book")
+
+		authorQuery := `
+			SELECT p.id, COALESCE(p.first_name, '') as first_name, p.last_name
+			FROM persons p
+			JOIN work_contributors wc ON wc.person_id = p.id AND wc.role = 'author'
+			JOIN works w ON w.id = wc.work_id
+			JOIN work_genres wg ON wg.work_id = w.id
+			WHERE wg.genre_id = $1
+		`
+		authorArgs := []interface{}{genreID}
+		argNum := 2
+
+		if authorFilter != "" {
+			authorQuery += fmt.Sprintf(" AND p.lower_fio LIKE $%d", argNum)
+			authorArgs = append(authorArgs, "%"+normalizeQuery(authorFilter)+"%")
+			argNum++
+		}
+		if bookFilter != "" {
+			authorQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", argNum)
+			authorArgs = append(authorArgs, "%"+normalizeQuery(bookFilter)+"%")
+			argNum++
+		}
+
+		authorQuery += " GROUP BY p.id, p.first_name, p.last_name ORDER BY p.last_name, p.first_name"
+
+		aRows, err := db.Query(authorQuery, authorArgs...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer aRows.Close()
+
+		authors := []AuthorWithBooks{}
+		for aRows.Next() {
+			var author AuthorWithBooks
+			if err := aRows.Scan(&author.ID, &author.FirstName, &author.LastName); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			booksQuery := `
+				SELECT e.id, w.original_title, e.year, e.on_shelf, e.upload_date
+				FROM works w
+				JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+				JOIN editions e ON e.work_id = w.id
+				JOIN work_genres wg ON wg.work_id = w.id
+				WHERE wc.person_id = $1 AND wg.genre_id = $2
+			`
+			bookArgs := []interface{}{author.ID, genreID}
+			bArgNum := 3
+
+			if bookFilter != "" {
+				booksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", bArgNum)
+				bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
+			}
+
+			booksQuery += " ORDER BY NULLIF(e.year, 0) DESC NULLS LAST, w.original_title"
+
+			bRows, err := db.Query(booksQuery, bookArgs...)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			var books []BookWithFormats
+			for bRows.Next() {
+				var book BookWithFormats
+				var year sql.NullInt64
+				var onShelf bool
+				var uploadDate sql.NullString
+				if err := bRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
+					bRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				if year.Valid {
+					y := int(year.Int64)
+					book.Year = &y
+				}
+				book.OnShelf = onShelf
+				if uploadDate.Valid {
+					book.UploadDate = uploadDate.String
+				}
+
+				formatRows, err := db.Query(`
+					SELECT f.name, ef.file_path
+					FROM edition_files ef
+					JOIN formats f ON f.id = ef.format_id
+					WHERE ef.edition_id = $1
+				`, book.ID)
+				if err != nil {
+					bRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				var formats []FormatInfo
+				for formatRows.Next() {
+					var fi FormatInfo
+					if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
+						formatRows.Close()
+						bRows.Close()
+						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						return
+					}
+					formats = append(formats, fi)
+				}
+				formatRows.Close()
+				if formats == nil {
+					book.Formats = []FormatInfo{}
+				} else {
+					book.Formats = formats
+				}
+				books = append(books, book)
+			}
+			bRows.Close()
+
+			if books == nil {
+				author.Books = []BookWithFormats{}
+			} else {
+				author.Books = books
+			}
+			authors = append(authors, author)
+		}
+
+		if authors == nil {
+			authors = []AuthorWithBooks{}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"authors": authors})
 	}
 }
 

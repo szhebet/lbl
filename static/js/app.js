@@ -4,6 +4,61 @@ let authorsPage = 1;
 let booksPage = 1;
 let booksSortBy = 'original_title';
 let booksSortOrder = 'asc';
+let userBookStatuses = {};
+
+// Load user's book statuses if logged in
+async function loadUserBookStatuses() {
+    var token = localStorage.getItem('auth_token');
+    if (!token) { userBookStatuses = {}; return; }
+    try {
+        var res = await fetch(API_BASE + '/user/books', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (res.ok) {
+            var list = await res.json();
+            userBookStatuses = {};
+            list.forEach(function(ub) { userBookStatuses[ub.edition_id] = ub; });
+        }
+    } catch(e) {}
+}
+
+function refreshCurrentView() {
+    var authorsTab = document.getElementById('tab-authors') || document.getElementById('authors');
+    var booksTab = document.getElementById('tab-books') || document.getElementById('books');
+    var activeAuthors = authorsTab && (authorsTab.classList.contains('active') || document.getElementById('tab-authors')?.classList.contains('active'));
+    var activeBooks = booksTab && (booksTab.classList.contains('active') || document.getElementById('tab-books')?.classList.contains('active'));
+    // Check both tab naming conventions (admin uses tab-xxx, main page uses xxx)
+    var mainAuthors = document.getElementById('authors')?.classList.contains('active');
+    var mainBooks = document.getElementById('books')?.classList.contains('active');
+    if (activeAuthors || mainAuthors) loadAuthors();
+    if (activeBooks || mainBooks) loadBooks();
+}
+
+function getUserBookStatus(editionId) {
+    return userBookStatuses[editionId] || { status: 'Не заполнено' };
+}
+
+function getStatusClass(status) {
+    var m = { 'Прочитано': 'status-done', 'Читаю': 'status-reading', 'Отложил': 'status-paused', 'Бросил': 'status-abandoned' };
+    return m[status] || '';
+}
+
+async function setUserBookStatus(editionId, status) {
+    var token = localStorage.getItem('auth_token');
+    if (!token) { alert('Необходимо авторизоваться'); return; }
+    try {
+        var res = await fetch(API_BASE + '/user/books/' + editionId, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: status })
+        });
+        if (res.ok) {
+            var ub = await res.json();
+            userBookStatuses[editionId] = ub;
+            refreshCurrentView();
+        }
+    } catch(e) {}
+}
 
 // Stubs - replaced by real functions from import.js when it loads
 var showImportProgress = function(dirPath, total) {};
@@ -481,6 +536,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateShelfCount();
     fetchConfig();
     setupBooksTableEvents();
+    loadUserBookStatuses();
 });
 
 async function fetchConfig() {
@@ -726,11 +782,12 @@ async function loadGenres() {
     treeContainer.innerHTML = '<div class="loading">Загрузка...</div>';
 
     const genreFilter = document.getElementById('genreNameFilter').value.trim();
-    const authorFilter = document.getElementById('genreAuthorFilter').value.trim().replace(/ё/g, 'е');
-    const bookFilter = document.getElementById('genreBookFilter').value.trim().replace(/ё/g, 'е');
 
     try {
-        let url = `${API_BASE}/genres/tree?genre=${encodeURIComponent(genreFilter)}&author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}`;
+        let url = `${API_BASE}/genres/tree`;
+        if (genreFilter) {
+            url += `?genre=${encodeURIComponent(genreFilter)}`;
+        }
 
         const response = await fetch(url);
         if (!response.ok) throw new Error('Ошибка загрузки жанров');
@@ -753,10 +810,10 @@ async function loadGenres() {
 
 function renderGenreTree(genres, container) {
     container.innerHTML = '';
-    genres.forEach(genre => renderGenreNode(genre, container, 1, false));
+    genres.forEach(genre => renderGenreNode(genre, container, 1));
 }
 
-function renderGenreNode(genre, container, depth, isChild) {
+function renderGenreNode(genre, container, depth) {
     const item = document.createElement('div');
     item.className = 'tree-item';
 
@@ -772,11 +829,9 @@ function renderGenreNode(genre, container, depth, isChild) {
     header.style.alignItems = 'center';
     header.style.gap = '10px';
 
-    const hasContent = (genre.children && genre.children.length > 0) || (genre.authors && genre.authors.length > 0);
     header.innerHTML = `
-        <span class="expand-icon">${hasContent ? '▶' : ''}</span>
+        <span class="expand-icon">▶</span>
         <span style="font-weight: ${depth === 1 ? 'bold' : 'normal'};">${escapeHtml(genre.name)}</span>
-        <span style="color: #666; font-size: 12px;">(${genre.books_count} книг)</span>
         <button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>
         ${enableDelete ? `<button class="delete-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}">Удалить</button>` : ''}
     `;
@@ -817,28 +872,73 @@ function renderGenreNode(genre, container, depth, isChild) {
     contentContainer.style.marginLeft = depth * 20 + 'px';
     contentContainer.style.display = 'none';
 
-    if (hasContent) {
-        header.addEventListener('click', (e) => {
-            if (e.target.closest('.edit-btn, .download-btn, .shelf-checkbox, .delete-btn')) return;
-            const icon = header.querySelector('.expand-icon');
-            const isCollapsed = contentContainer.style.display === 'none';
-            contentContainer.style.display = isCollapsed ? 'block' : 'none';
-            icon.textContent = isCollapsed ? '▼' : '▶';
-        });
-    }
+    const hasChildren = genre.children && genre.children.length > 0;
 
-    // Render child genres
-    if (genre.children && genre.children.length > 0) {
-        const childSection = document.createElement('div');
-        childSection.style.marginBottom = '8px';
-        genre.children.forEach(child => renderGenreNode(child, childSection, depth + 1, true));
-        contentContainer.appendChild(childSection);
-    }
+    header.addEventListener('click', async (e) => {
+        if (e.target.closest('.edit-btn, .delete-btn')) return;
+        const icon = header.querySelector('.expand-icon');
+        const isCollapsed = contentContainer.style.display === 'none';
 
-    // Render authors directly attached to this genre
-    if (genre.authors && genre.authors.length > 0) {
-        const authorSection = document.createElement('div');
-        genre.authors.forEach(author => {
+        if (isCollapsed) {
+            contentContainer.style.display = 'block';
+            icon.textContent = '▼';
+
+            if (!contentContainer.dataset.loaded) {
+                contentContainer.dataset.loaded = 'true';
+
+                if (hasChildren) {
+                    const childSection = document.createElement('div');
+                    childSection.style.marginBottom = '8px';
+                    genre.children.forEach(child => renderGenreNode(child, childSection, depth + 1));
+                    contentContainer.appendChild(childSection);
+                }
+
+                await loadGenreAuthors(genre.id, contentContainer);
+            }
+        } else {
+            contentContainer.style.display = 'none';
+            icon.textContent = '▶';
+        }
+    });
+
+    item.appendChild(header);
+    item.appendChild(contentContainer);
+    container.appendChild(item);
+}
+
+async function loadGenreAuthors(genreId, container) {
+    const authorFilter = document.getElementById('genreAuthorFilter').value.trim().replace(/ё/g, 'е');
+    const bookFilter = document.getElementById('genreBookFilter').value.trim().replace(/ё/g, 'е');
+
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'loading';
+    loadingEl.textContent = 'Загрузка...';
+    container.appendChild(loadingEl);
+
+    try {
+        let url = `${API_BASE}/genres/${genreId}/authors`;
+        const params = [];
+        if (authorFilter) params.push('author=' + encodeURIComponent(authorFilter));
+        if (bookFilter) params.push('book=' + encodeURIComponent(bookFilter));
+        if (params.length > 0) url += '?' + params.join('&');
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Ошибка загрузки');
+        const data = await response.json();
+        const authors = data.authors || [];
+
+        loadingEl.remove();
+
+        if (authors.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.padding = '8px 20px';
+            empty.style.color = '#999';
+            empty.textContent = 'Нет книг в этом жанре';
+            container.appendChild(empty);
+            return;
+        }
+
+        authors.forEach(author => {
             const authorItem = document.createElement('div');
             authorItem.className = 'tree-item';
 
@@ -858,7 +958,6 @@ function renderGenreNode(genre, container, depth, isChild) {
             authorLevel.innerHTML = `
                 <span class="expand-icon">${hasBooks ? '▶' : ''}</span>
                 <span>${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
-                <span style="color: #666; font-size: 12px;">(${author.books_count} книг)</span>
             `;
 
             const booksContainer = document.createElement('div');
@@ -950,14 +1049,15 @@ function renderGenreNode(genre, container, depth, isChild) {
 
             authorItem.appendChild(authorLevel);
             authorItem.appendChild(booksContainer);
-            authorSection.appendChild(authorItem);
+            container.appendChild(authorItem);
         });
-        contentContainer.appendChild(authorSection);
+    } catch (err) {
+        loadingEl.remove();
+        const error = document.createElement('div');
+        error.className = 'error';
+        error.textContent = 'Ошибка: ' + err.message;
+        container.appendChild(error);
     }
-
-    item.appendChild(header);
-    item.appendChild(contentContainer);
-    container.appendChild(item);
 }
 
 async function openGenreModal(genre) {
@@ -1007,11 +1107,33 @@ async function openGenreModal(genre) {
 
 function renderBooksTable(data) {
     const container = document.getElementById('booksTableContainer');
-    const books = data.books || [];
+    var books = data.books || [];
 
     if (books.length === 0) {
         container.innerHTML = '<div class="empty">Книги не найдены</div>';
         return;
+    }
+
+    // Client-side status filter
+    var statusFilter = document.getElementById('bookStatusFilter')?.value || '';
+    if (statusFilter) {
+        books = books.filter(function(b) {
+            return (getUserBookStatus(b.edition_id).status) === statusFilter;
+        });
+    }
+
+    // Client-side status sort
+    if (booksSortBy === 'status') {
+        books.sort(function(a, b) {
+            var sa = getUserBookStatus(a.edition_id).status;
+            var sb = getUserBookStatus(b.edition_id).status;
+            var order = ['Не заполнено','Читаю','Прочитано','Отложил','Бросил'];
+            var ia = order.indexOf(sa);
+            var ib = order.indexOf(sb);
+            if (ia === -1) ia = 0;
+            if (ib === -1) ib = 0;
+            return booksSortOrder === 'asc' ? ia - ib : ib - ia;
+        });
     }
 
     let html = '<table class="books-table"><thead><tr>';
@@ -1021,6 +1143,7 @@ function renderBooksTable(data) {
     html += '<th class="col-author sortable" data-sort-by="authors">Автор' + getSortIcon('authors') + '</th>';
     html += '<th class="col-year sortable" data-sort-by="year">Год' + getSortIcon('year') + '</th>';
     html += '<th class="col-format sortable" data-sort-by="available_formats">Формат' + getSortIcon('available_formats') + '</th>';
+    html += '<th class="col-status sortable" data-sort-by="status">Статус' + getSortIcon('status') + '</th>';
     html += '<th class="col-shelf">Полка</th>';
     html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
 
@@ -1043,6 +1166,12 @@ function renderBooksTable(data) {
         html += `<td class="col-author">${escapeHtml(authorName)}</td>`;
         html += `<td class="col-year">${escapeHtml(String(yearValue))}</td>`;
         html += `<td class="col-format"><a href="#" class="book-download-link" data-id="${editionId}">${escapeHtml(formatName)}</a></td>`;
+        var st = getUserBookStatus(editionId).status;
+        html += `<td class="col-status"><select class="status-select ${getStatusClass(st)}" data-id="${editionId}" onchange="setUserBookStatus(${editionId}, this.value)">`;
+        ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
+            html += '<option value="' + s + '"' + (s === st ? ' selected' : '') + '>' + s + '</option>';
+        });
+        html += '</select></td>';
         html += `<td class="col-shelf"><a href="#" class="shelf-toggle" data-id="${editionId}" data-on-shelf="${onShelf}" title="${shelfTitle}">${shelfIcon}</a></td>`;
         html += `<td class="col-actions">`;
         html += `<button class="btn btn-small edit-book-btn" data-id="${editionId}" title="Редактировать">✎</button>`;
@@ -1204,7 +1333,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
         authorLevel.innerHTML = `
             <span class="expand-icon">${isExpanded ? '▼' : '▶'}</span>
             <span class="author-name">${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
-            <span style="color: #666; font-size: 12px;">(${author.books_count} книг)</span>
+            <span style="color: #666; font-size: 12px;">(${author.books_count || 0} книг)</span>
             <button class="edit-btn" data-type="author" data-id="${author.id}" data-first_name="${escapeHtml(author.first_name || '')}" data-last_name="${escapeHtml(author.last_name || '')}">Редактировать</button>
         `;
 
@@ -1365,7 +1494,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
     });
 }
 
-function openAuthorModal(author) {
+async function openAuthorModal(author) {
     const modal = document.getElementById('editModal');
     const modalTitle = document.getElementById('modalTitle');
     const modalBody = document.getElementById('modalBody');
@@ -1374,24 +1503,52 @@ function openAuthorModal(author) {
     modalTitle.dataset.type = 'author';
     modalTitle.dataset.id = author.id;
 
-    modalBody.innerHTML = `
-        <form id="editForm">
-            <div class="form-group">
-                <label for="first_name">Имя:</label>
-                <input type="text" id="first_name" name="first_name" value="${escapeHtml(author.first_name || '')}">
-            </div>
-            <div class="form-group">
-                <label for="last_name">Фамилия:</label>
-                <input type="text" id="last_name" name="last_name" value="${escapeHtml(author.last_name || '')}" required>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn">Сохранить</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
-            </div>
-        </form>
-    `;
-
+    modalBody.innerHTML = '<div class="loading">Загрузка...</div>';
     modal.classList.add('active');
+
+    try {
+        const res = await fetch(API_BASE + '/admin/persons');
+        const all = await res.json();
+        const p = all.find(a => a.id == author.id) || {};
+        modalBody.innerHTML = `
+            <form id="editForm">
+                <div class="form-group">
+                    <label for="first_name">Имя:</label>
+                    <input type="text" id="first_name" name="first_name" value="${escapeHtml(p.first_name || '')}">
+                </div>
+                <div class="form-group">
+                    <label for="last_name">Фамилия:</label>
+                    <input type="text" id="last_name" name="last_name" value="${escapeHtml(p.last_name || '')}" required>
+                </div>
+                <div class="form-group">
+                    <label for="middle_name">Отчество:</label>
+                    <input type="text" id="middle_name" name="middle_name" value="${escapeHtml(p.middle_name || '')}">
+                </div>
+                <div class="form-group">
+                    <label for="pseudonym">Псевдоним:</label>
+                    <input type="text" id="pseudonym" name="pseudonym" value="${escapeHtml(p.pseudonym || '')}">
+                </div>
+                <div class="form-group">
+                    <label for="birth_date">Дата рождения:</label>
+                    <input type="date" id="birth_date" name="birth_date" value="${p.birth_date || ''}">
+                </div>
+                <div class="form-group">
+                    <label for="death_date">Дата смерти:</label>
+                    <input type="date" id="death_date" name="death_date" value="${p.death_date || ''}">
+                </div>
+                <div class="form-group">
+                    <label for="biography">Биография:</label>
+                    <textarea id="biography" name="biography" rows="3">${escapeHtml(p.biography || '')}</textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+                </div>
+            </form>
+        `;
+    } catch(e) {
+        modalBody.innerHTML = '<p class="error">Ошибка загрузки данных</p>';
+    }
 }
 
 async function openBookModal(book) {

@@ -18,22 +18,24 @@
             <span class="tabs-spacer"></span>
             <button id="loadBooksBtn" class="btn load-books-btn">Загрузить книги</button>
             <button id="showImportProgressBtn" class="btn load-books-btn">Прогресс загрузки</button>
+            <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
+            <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
             <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
         </nav>
 
         <main>
             <!-- Вкладка Авторы -->
             <div id="authors" class="tab-content active">
-                <div class="filters">
-                    <div class="filter-group">
-                        <input type="text" id="authorFilter" placeholder="Поиск по автору...">
-                    </div>
-                    <div class="filter-group">
-                        <input type="text" id="bookFilter" placeholder="Поиск по книге...">
-                    </div>
-                    <div class="filter-group">
-                        <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
-                    </div>
+                    <div class="filters">
+                        <div class="filter-group">
+                            <input type="text" id="authorFilter" placeholder="Поиск по автору...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookFilter" placeholder="Поиск по книге...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
+                        </div>
                     <button id="applyFilters" class="btn">Применить</button>
                     <button id="clearFilters" class="btn btn-secondary">Очистить</button>
                     <span class="shelf-link">
@@ -52,16 +54,26 @@
 
             <!-- Вкладка Книги -->
             <div id="books" class="tab-content">
-                <div class="filters">
-                    <div class="filter-group">
-                        <input type="text" id="bookAuthorFilter" placeholder="Поиск по автору...">
-                    </div>
-                    <div class="filter-group">
-                        <input type="text" id="bookTitleFilter" placeholder="Поиск по названию...">
-                    </div>
-                    <div class="filter-group">
-                        <input type="text" id="bookGenreFilter" placeholder="Поиск по жанру...">
-                    </div>
+                    <div class="filters">
+                        <div class="filter-group">
+                            <input type="text" id="bookAuthorFilter" placeholder="Поиск по автору...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookTitleFilter" placeholder="Поиск по названию...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookGenreFilter" placeholder="Поиск по жанру...">
+                        </div>
+                        <div class="filter-group">
+                            <select id="bookStatusFilter" class="filter-select" onchange="loadBooks()">
+                                <option value="">Все статусы</option>
+                                <option value="Не заполнено">Не заполнено</option>
+                                <option value="Прочитано">Прочитано</option>
+                                <option value="Читаю">Читаю</option>
+                                <option value="Отложил">Отложил</option>
+                                <option value="Бросил">Бросил</option>
+                            </select>
+                        </div>
                     <div class="filter-date-row">
                         <div class="filter-group">
                             <label for="bookDateFrom">Дата загрузки с: ДД.ММ.ГГГГ</label>
@@ -161,5 +173,6 @@
 
     <script src="/static/js/app.js"></script>
     <script src="/static/js/import.js"></script>
+    <script src="/static/js/auth.js"></script>
 </body>
 </html>

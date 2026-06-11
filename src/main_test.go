@@ -1244,8 +1244,6 @@ func TestGetGenreTree(t *testing.T) {
 	if len(response.Genres) > 0 {
 		g := response.Genres[0]
 		assert.NotEmpty(t, g.Name)
-		assert.GreaterOrEqual(t, g.BooksCount, 0)
-		assert.NotNil(t, g.Authors)
 		assert.NotNil(t, g.Children)
 	}
 }
