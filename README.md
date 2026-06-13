@@ -64,8 +64,26 @@
 Полный пример — `config.toml.example`.
 
 ## Быстрый старт
+Проще всего установить через docker compose, см раздел ниже
+
+### Docker Compose
+
+```bash
+git clone https://github.com/szhebet/lbl.git
+cd lbl
+
+cp config.toml.example config.toml
+cp env.example .env
+# Отредактировать .env (пароль, пути)
+
+docker compose up -d --build
+```
+
+Приложение: http://localhost:9092
+
 
 ### Требования
+Для тех, кто ищет варианты посложнее...
 
 - Go 1.25+
 - PostgreSQL 17+
@@ -88,20 +106,7 @@ go build -o library_app ./src/
 
 Приложение доступно по адресу: http://localhost:9091
 
-### Docker Compose
 
-```bash
-git clone https://github.com/szhebet/lbl.git
-cd lbl
-
-cp config.toml.example config.toml
-cp env.example .env
-# Отредактировать .env (пароль, пути)
-
-docker compose up -d --build
-```
-
-Приложение: http://localhost:9092
 
 ## API
 
