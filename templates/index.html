@@ -14,13 +14,9 @@
             <button class="tab active" data-tab="authors">Авторы</button>
             <button class="tab" data-tab="books">Книги</button>
             <button class="tab" data-tab="genres">Жанры</button>
-            <button class="tab" data-tab="import" style="display:none">Импорт</button>
             <span class="tabs-spacer"></span>
-            <button id="loadBooksBtn" class="btn load-books-btn">Загрузить книги</button>
-            <button id="showImportProgressBtn" class="btn load-books-btn">Прогресс загрузки</button>
             <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
             <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
-            <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
         </nav>
 
         <main>
@@ -121,36 +117,6 @@
                     <div class="loading">Загрузка...</div>
                 </div>
             </div>
-
-            <!-- Вкладка Импорт -->
-            <div id="import" class="tab-content">
-                <h2>Импорт книг</h2>
-                
-                <div class="import-section">
-                    <h3>Загрузить файл книги</h3>
-                    <form id="uploadForm">
-                        <div class="form-group">
-                            <label for="bookFile">Выберите файл (FB2, FB2.ZIP, EPUB):</label>
-                            <input type="file" id="bookFile" accept=".fb2,.fb2.zip,.epub,.zip" class="file-input">
-                        </div>
-                        <div id="uploadPreview" class="upload-preview" style="display: none;"></div>
-                        <button type="submit" class="btn">Загрузить</button>
-                    </form>
-                    <div id="uploadResult" class="upload-result"></div>
-                </div>
-
-                <div class="import-section">
-                    <h3>Импорт из папки</h3>
-                    <form id="directoryForm">
-                        <div class="form-group">
-                            <label for="directoryPath">Путь к папке:</label>
-                            <input type="text" id="directoryPath" placeholder="/path/to/books" class="directory-input">
-                        </div>
-                        <button type="submit" class="btn">Импортировать все книги</button>
-                    </form>
-                    <div id="directoryResult" class="upload-result"></div>
-                </div>
-            </div>
         </main>
     </div>
 
@@ -172,7 +138,6 @@
     </div>
 
     <script src="/static/js/app.js"></script>
-    <script src="/static/js/import.js"></script>
     <script src="/static/js/auth.js"></script>
 </body>
 </html>

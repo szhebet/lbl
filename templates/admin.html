@@ -30,7 +30,40 @@
         .badge-role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ecf0f1; color: #555; }
         .badge-role.admin { background: #e74c3c; color: #fff; }
         .badge-role.editor { background: #3498db; color: #fff; }
-        .badge-role.viewer { background: #95a5a6; color: #fff; }
+        .admin-tab[data-tab="import"] { background: #27ae60; color: #fff; font-weight: 600; }
+        .admin-tab[data-tab="import"]:hover { background: #219a52; }
+        .admin-tab[data-tab="import"].active { background: #3498db; color: #fff; }
+        .import-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .import-section h3 { margin-top: 0; margin-bottom: 15px; color: #333; font-size: 16px; }
+        .import-section .form-group { margin-bottom: 15px; }
+        .import-section .form-group label { display: block; margin-bottom: 5px; color: #555; font-size: 13px; }
+        .file-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
+        .directory-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; font-family: monospace; }
+        .upload-preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 10px; margin-bottom: 10px; }
+        .preview-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
+        .upload-result { margin-top: 10px; }
+        .import-progress-panel { background: #f0f8ff; border: 1px solid #b8d4e8; border-radius: 8px; padding: 20px; }
+        .import-progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .import-progress-header h4 { margin: 0; }
+        .import-progress-bar { height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+        .import-progress-fill { height: 100%; background: linear-gradient(90deg, #3498db, #2ecc71); transition: width 0.3s ease; }
+        .import-current-file { font-size: 13px; color: #666; margin-bottom: 10px; padding: 5px; }
+        .import-results { max-height: 400px; overflow-y: auto; margin-bottom: 10px; }
+        .import-items-list { font-size: 13px; }
+        .import-item { padding: 4px 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 6px; }
+        .import-item-done { color: #27ae60; }
+        .import-item-error { color: #e74c3c; }
+        .import-item-skipped { color: #f39c12; }
+        .import-item-cancelled { color: #e67e22; }
+        .import-item-pending { color: #888; }
+        .import-item-processing { color: #3498db; }
+        .import-label { font-size: 11px; color: #888; }
+        .import-summary { line-height: 1.8; }
+        .import-summary h4 { margin-top: 0; }
+        .success { color: #27ae60; }
+        .error { color: #e74c3c; }
+        .warning { color: #f39c12; }
+        .loading { color: #3498db; }
     </style>
 </head>
 <body>
@@ -44,6 +77,8 @@
             <button class="admin-tab" data-tab="books">Книги</button>
             <button class="admin-tab" data-tab="genres">Жанры</button>
             <button class="admin-tab" data-tab="tags">Теги</button>
+            <span style="flex:1"></span>
+            <button class="admin-tab" data-tab="import">Импорт</button>
         </div>
 
         <div id="tab-users" class="admin-content active">
@@ -140,6 +175,43 @@
                 <tbody id="tagsTableBody"></tbody>
             </table>
         </div>
+
+        <div id="tab-import" class="admin-content">
+            <h2>Импорт книг</h2>
+            <div class="admin-toolbar">
+                <button id="showImportProgressBtn" class="btn" style="display:none">Прогресс загрузки</button>
+            </div>
+            <div class="import-section">
+                <h3>Загрузить файл книги</h3>
+                <form id="uploadForm">
+                    <div class="form-group">
+                        <label for="bookFile" style="display:none">Выберите файл (FB2, EPUB, ZIP):</label>
+                        <input type="file" id="bookFile" accept=".fb2,.fb2.zip,.epub,.zip" class="file-input">
+                    </div>
+                    <div id="uploadPreview" class="upload-preview" style="display: none;"></div>
+                    <button type="submit" class="btn">Загрузить</button>
+                </form>
+                <div id="uploadResult" class="upload-result"></div>
+            </div>
+            <div class="import-section">
+                <h3>Импорт из локальной папки</h3>
+                <p style="display:none">Выберите папку с книгами на вашем компьютере:</p>
+                <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
+                <button id="loadBooksBtn" class="btn">Загрузить книги</button>
+            </div>
+            <div class="import-section">
+                <h3>Импорт книг из папки на сервере</h3>
+                <form id="directoryForm">
+                    <div class="form-group">
+                        <label for="directoryPath" style="display:none">Путь к папке:</label>
+                        <input type="text" id="directoryPath" placeholder="/path/to/books" class="directory-input">
+                    </div>
+                    <button type="submit" class="btn">Импортировать все книги</button>
+                </form>
+                <div id="directoryResult" class="upload-result"></div>
+            </div>
+            <div id="importProgressArea" class="import-section" style="display:none"></div>
+        </div>
     </div>
 
     <div id="adminModal" class="modal">
@@ -160,6 +232,7 @@
 
     <script src="/static/js/app.js"></script>
     <script src="/static/js/auth.js"></script>
+    <script src="/static/js/import.js"></script>
     <script>
     const API = '/api/v1/admin';
 
@@ -171,6 +244,7 @@
             tab.classList.add('active');
             document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
             if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
+            if (tab.dataset.tab === 'import') { checkImportStatus(); }
         });
     });
 
