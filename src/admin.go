@@ -40,7 +40,7 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		defer rows.Close()
-		var users []AdminUser
+		users := make([]AdminUser, 0)
 		for rows.Next() {
 			var u AdminUser
 			if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
@@ -50,6 +50,24 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 			users = append(users, u)
 		}
 		c.JSON(http.StatusOK, users)
+	}
+}
+
+func adminGetUser(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var u AdminUser
+		err := db.QueryRow(`SELECT id, username, COALESCE(email,''), role, created_at FROM users WHERE id = $1`, id).
+			Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, u)
 	}
 }
 
@@ -184,7 +202,7 @@ func adminGetPersons(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		defer rows.Close()
-		var persons []PersonData
+		persons := make([]PersonData, 0)
 		for rows.Next() {
 			var p PersonData
 			if err := rows.Scan(&p.ID, &p.FirstName, &p.MiddleName, &p.LastName,
@@ -371,7 +389,7 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 			ParentName  string  `json:"parent_name"`
 			BooksCount  int     `json:"books_count"`
 		}
-		var genres []AdminGenre
+		genres := make([]AdminGenre, 0)
 		for rows.Next() {
 			var g AdminGenre
 			var parentID sql.NullInt64
@@ -412,7 +430,7 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 			Description string  `json:"description"`
 			BooksCount  int     `json:"books_count"`
 		}
-		var tags []AdminTag
+		tags := make([]AdminTag, 0)
 		for rows.Next() {
 			var t AdminTag
 			var color sql.NullString

@@ -528,6 +528,7 @@ func main() {
 	admin := r.Group("/api/v1/admin")
 	{
 		admin.GET("/users", adminGetUsers(db))
+		admin.GET("/users/:id", adminGetUser(db))
 		admin.POST("/users", adminCreateUser(db))
 		admin.PUT("/users/:id", adminUpdateUser(db))
 		admin.DELETE("/users/:id", adminDeleteUser(db))
@@ -1703,8 +1704,10 @@ type FileData struct {
 
 // TagData represents a tag
 type TagData struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
 }
 
 // TOCEntryData represents a table of contents entry
@@ -2463,7 +2466,7 @@ func deleteGenre(db *sql.DB) gin.HandlerFunc {
 // getTags returns all tags
 func getTags(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, name FROM tags ORDER BY name")
+		rows, err := db.Query("SELECT id, name, COALESCE(color,''), COALESCE(description,'') FROM tags ORDER BY name")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -2473,7 +2476,7 @@ func getTags(db *sql.DB) gin.HandlerFunc {
 		tags := make([]TagData, 0)
 		for rows.Next() {
 			var tag TagData
-			if err := rows.Scan(&tag.ID, &tag.Name); err != nil {
+			if err := rows.Scan(&tag.ID, &tag.Name, &tag.Color, &tag.Description); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -2488,7 +2491,9 @@ func getTags(db *sql.DB) gin.HandlerFunc {
 func createTag(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Name string `json:"name" binding:"required"`
+			Name        string `json:"name" binding:"required"`
+			Color       string `json:"color"`
+			Description string `json:"description"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -2496,7 +2501,7 @@ func createTag(db *sql.DB) gin.HandlerFunc {
 		}
 
 		var tag TagData
-		err := db.QueryRow("INSERT INTO tags (name) VALUES ($1) RETURNING id, name", req.Name).Scan(&tag.ID, &tag.Name)
+		err := db.QueryRow("INSERT INTO tags (name, color, description) VALUES ($1, NULLIF($2,''), NULLIF($3,'')) RETURNING id, name, COALESCE(color,''), COALESCE(description,'')", req.Name, req.Color, req.Description).Scan(&tag.ID, &tag.Name, &tag.Color, &tag.Description)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

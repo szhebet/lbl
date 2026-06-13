@@ -41,6 +41,7 @@
         <div class="admin-tabs">
             <button class="admin-tab active" data-tab="users">Пользователи</button>
             <button class="admin-tab" data-tab="authors">Авторы</button>
+            <button class="admin-tab" data-tab="books">Книги</button>
             <button class="admin-tab" data-tab="genres">Жанры</button>
             <button class="admin-tab" data-tab="tags">Теги</button>
         </div>
@@ -80,6 +81,28 @@
                 </tr></thead>
                 <tbody id="authorsTableBody"></tbody>
             </table>
+        </div>
+
+        <div id="tab-books" class="admin-content">
+            <div class="admin-toolbar">
+                <input type="text" id="bookAuthorFilter" class="filter-input" placeholder="Автор...">
+                <input type="text" id="bookTitleFilter" class="filter-input" placeholder="Название...">
+                <input type="text" id="bookGenreFilter" class="filter-input" placeholder="Жанр...">
+                <input type="date" id="bookDateFrom" class="filter-input" style="width:140px">
+                <input type="date" id="bookDateTo" class="filter-input" style="width:140px">
+                <select id="bookStatusFilter" class="filter-input" style="width:140px">
+                    <option value="">Все статусы</option>
+                    <option value="Не заполнено">Не заполнено</option>
+                    <option value="Прочитано">Прочитано</option>
+                    <option value="Читаю">Читаю</option>
+                    <option value="Отложил">Отложил</option>
+                    <option value="Бросил">Бросил</option>
+                </select>
+                <button class="btn" onclick="loadBooks()">Применить</button>
+            </div>
+            <div class="pagination" id="booksPagination"></div>
+            <div id="booksTableContainer"><div class="loading">Загрузка...</div></div>
+            <div class="pagination" id="booksPaginationBottom"></div>
         </div>
 
         <div id="tab-genres" class="admin-content">
@@ -135,6 +158,8 @@
         </div>
     </div>
 
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/auth.js"></script>
     <script>
     const API = '/api/v1/admin';
 
@@ -145,6 +170,7 @@
             document.querySelectorAll('.admin-content').forEach(c => c.classList.remove('active'));
             tab.classList.add('active');
             document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
         });
     });
 
@@ -159,85 +185,86 @@
     function openAdminModal(title, content) {
         document.getElementById('adminModalTitle').textContent = title;
         document.getElementById('adminModalBody').innerHTML = content;
-        document.getElementById('adminModal').classList.add('active');
-    }
-    function closeAdminModal() {
-        document.getElementById('adminModal').classList.remove('active');
+        document.getElementById('adminModal').style.display = 'flex';
+        document.getElementById('adminForm').onsubmit = null;
     }
 
-    // ─── Sort state ────────────────────────────────────────────
+    function closeAdminModal() {
+        document.getElementById('adminModal').style.display = 'none';
+    }
+
+    document.getElementById('adminModal').addEventListener('click', function(e) {
+        if (e.target === this) closeAdminModal();
+    });
+
+    // ─── Shared: filter + sort + render ───────────────────────
+    var storeUsers = [];
+    var storeAuthors = [];
+    var storeGenres = [];
+    var storeTags = [];
     var sortState = {};
 
-    function getSortKey(tableId) {
-        var st = sortState[tableId];
-        return st ? st.key : null;
-    }
-    function getSortDir(tableId) {
-        var st = sortState[tableId];
-        return st ? st.dir : 'asc';
-    }
+    function getSortKey(tableId) { return sortState[tableId] ? sortState[tableId].key : 'id'; }
+    function getSortDir(tableId) { return sortState[tableId] ? sortState[tableId].dir : 'asc'; }
 
     function setupSorting(tableId) {
         var table = document.getElementById(tableId);
+        if (!table) return;
         table.querySelectorAll('th[data-sort]').forEach(function(th) {
+            th.style.cursor = 'pointer';
             th.addEventListener('click', function() {
                 var key = th.dataset.sort;
-                var st = sortState[tableId] || {key: null, dir: 'asc'};
-                if (st.key === key) {
-                    st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+                if (!sortState[tableId]) sortState[tableId] = { key: 'id', dir: 'asc' };
+                if (sortState[tableId].key === key) {
+                    sortState[tableId].dir = sortState[tableId].dir === 'asc' ? 'desc' : 'asc';
                 } else {
-                    st.key = key;
-                    st.dir = 'asc';
+                    sortState[tableId].key = key;
+                    sortState[tableId].dir = 'asc';
                 }
-                sortState[tableId] = st;
-                // Update visual indicators
-                table.querySelectorAll('th[data-sort]').forEach(function(h) {
-                    h.classList.remove('sorted-asc', 'sorted-desc');
-                });
-                th.classList.add(st.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                table.querySelectorAll('th[data-sort]').forEach(function(h) { h.classList.remove('sorted-asc', 'sorted-desc'); });
+                th.classList.add('sorted-' + sortState[tableId].dir);
                 applyFilters();
             });
         });
     }
 
-    function filterData(data, filterText, fields) {
-        if (!filterText) return data;
-        var q = filterText.toLowerCase();
-        return data.filter(function(item) {
-            return fields.some(function(f) {
-                var val = item[f];
-                if (val === null || val === undefined) return false;
-                return String(val).toLowerCase().indexOf(q) !== -1;
-            });
+    function filterData(arr, text, fields) {
+        if (!text) return arr;
+        var q = text.toLowerCase().replace(/ё/g, 'е');
+        return arr.filter(function(item) {
+            for (var i = 0; i < fields.length; i++) {
+                var val = item[fields[i]];
+                if (val && val.toString().toLowerCase().replace(/ё/g, 'е').indexOf(q) !== -1) return true;
+            }
+            return false;
         });
     }
 
-    function sortData(data, key, dir) {
-        if (!key) return data;
-        return data.slice().sort(function(a, b) {
-            var av = a[key], bv = b[key];
-            if (av === null || av === undefined) av = '';
-            if (bv === null || bv === undefined) bv = '';
-            if (typeof av === 'number' && typeof bv === 'number') {
-                return dir === 'asc' ? av - bv : bv - av;
+    function sortData(arr, key, dir) {
+        var sorted = arr.slice();
+        sorted.sort(function(a, b) {
+            var va = a[key], vb = b[key];
+            if (va == null) va = '';
+            if (vb == null) vb = '';
+            if (typeof va === 'number' && typeof vb === 'number') {
+                return dir === 'asc' ? va - vb : vb - va;
             }
-            av = String(av).toLowerCase();
-            bv = String(bv).toLowerCase();
-            if (av < bv) return dir === 'asc' ? -1 : 1;
-            if (av > bv) return dir === 'asc' ? 1 : -1;
+            va = va.toString().toLowerCase();
+            vb = vb.toString().toLowerCase();
+            if (va < vb) return dir === 'asc' ? -1 : 1;
+            if (va > vb) return dir === 'asc' ? 1 : -1;
             return 0;
         });
+        return sorted;
     }
 
-    function renderTable(tbody, data, rowFn) {
-        tbody.innerHTML = data.map(rowFn).join('');
+    function renderTable(tbody, rows, rowFn) {
+        if (!rows || rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="20" class="no-results">Нет данных</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rows.map(rowFn).join('');
     }
-
-    // ─── Data stores ───────────────────────────────────────────
-    var storeUsers = [];
-    var storeAuthors = [];
-    var storeGenres = [];
-    var storeTags = [];
 
     // ============================================================
     // USERS
@@ -259,8 +286,8 @@
                 '<td>' + u.id + '</td>' +
                 '<td>' + escapeHtml(u.username) + '</td>' +
                 '<td>' + escapeHtml(u.email || '') + '</td>' +
-                '<td><span class="badge-role ' + u.role + '">' + escapeHtml(u.role) + '</span></td>' +
-                '<td>' + (u.created_at || '').substring(0, 10) + '</td>' +
+                '<td><span class="badge-role ' + (u.role || '') + '">' + escapeHtml(u.role || '') + '</span></td>' +
+                '<td>' + (u.created_at || '') + '</td>' +
                 '<td class="actions">' +
                 '<button class="btn btn-small" onclick="editUser(' + u.id + ')">✎</button> ' +
                 '<button class="btn btn-small btn-secondary" onclick="deleteUser(' + u.id + ')">Удалить</button>' +
@@ -268,49 +295,8 @@
         });
     }
 
-    document.getElementById('addUserBtn').addEventListener('click', function() {
-        openAdminModal('Создать пользователя', `
-            <div class="form-group">
-                <label>Имя пользователя:</label>
-                <input type="text" id="f_username" required>
-            </div>
-            <div class="form-group">
-                <label>Пароль:</label>
-                <input type="password" id="f_password" required>
-            </div>
-            <div class="form-group">
-                <label>Email:</label>
-                <input type="email" id="f_email">
-            </div>
-            <div class="form-group">
-                <label>Роль:</label>
-                <select id="f_role">
-                    <option value="viewer">viewer</option>
-                    <option value="editor">editor</option>
-                    <option value="admin">admin</option>
-                </select>
-            </div>
-        `);
-        document.getElementById('adminForm').onsubmit = async function(e) {
-            e.preventDefault();
-            var res = await fetch(API + '/users', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    username: document.getElementById('f_username').value,
-                    password: document.getElementById('f_password').value,
-                    email: document.getElementById('f_email').value,
-                    role: document.getElementById('f_role').value
-                })
-            });
-            if (res.ok) { closeAdminModal(); loadUsers(); }
-            else { var d = await res.json(); alert(d.error || 'Error'); }
-        };
-    });
-
     function editUser(id) {
-        fetch(API + '/users').then(r => r.json()).then(all => {
-            var u = all.find(u => u.id === id) || {};
+        fetch(API + '/users/' + id).then(r => r.json()).then(u => {
             openAdminModal('Редактировать пользователя #' + id, `
                 <div class="form-group">
                     <label>Имя пользователя:</label>
@@ -363,6 +349,49 @@
             else r.json().then(d => alert(d.error || 'Error'));
         });
     }
+
+    document.getElementById('addUserBtn').addEventListener('click', function() {
+        openAdminModal('Создать пользователя', `
+            <div class="form-group">
+                <label>Имя пользователя:</label>
+                <input type="text" id="f_username" required>
+            </div>
+            <div class="form-group">
+                <label>Пароль:</label>
+                <input type="password" id="f_password" required>
+            </div>
+            <div class="form-group">
+                <label>Email:</label>
+                <input type="email" id="f_email">
+            </div>
+            <div class="form-group">
+                <label>Роль:</label>
+                <select id="f_role">
+                    <option value="viewer">viewer</option>
+                    <option value="editor">editor</option>
+                    <option value="admin">admin</option>
+                </select>
+            </div>
+        `);
+        document.getElementById('adminForm').onsubmit = async function(e) {
+            e.preventDefault();
+            var body = {
+                username: document.getElementById('f_username').value,
+                password: document.getElementById('f_password').value
+            };
+            var email = document.getElementById('f_email').value;
+            var role = document.getElementById('f_role').value;
+            if (email) body.email = email;
+            if (role) body.role = role;
+            var res = await fetch(API + '/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (res.ok) { closeAdminModal(); loadUsers(); }
+            else { var d = await res.json(); alert(d.error || 'Error'); }
+        };
+    });
 
     // ============================================================
     // AUTHORS (persons)
@@ -570,6 +599,7 @@
                 var pid = document.getElementById('f_parent_id').value;
                 var desc = document.getElementById('f_description').value;
                 if (pid) body.parent_id = parseInt(pid);
+                if (desc) body.description = desc;
                 var res = await fetch('/api/v1/genres', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -582,48 +612,48 @@
     });
 
     function editGenre(id) {
-        fetch(API + '/genres').then(r => r.json()).then(allGenres => {
-            var current = allGenres.find(g => g.id === id);
-            var options = '<option value="">Нет родителя</option>' +
-                allGenres.filter(g => g.id !== id).map(g =>
-                    '<option value="' + g.id + '"' + (g.id === (current.parent_id || 0) ? ' selected' : '') + '>' + escapeHtml(g.name) + '</option>'
-                ).join('');
-            openAdminModal('Редактировать жанр', `
-                <div class="form-group">
-                    <label>Название:</label>
-                    <input type="text" id="f_name" value="${escapeHtml(current.name)}" required>
-                </div>
-                <div class="form-group">
-                    <label>Родительский жанр:</label>
-                    <select id="f_parent_id">${options}</select>
-                </div>
-                <div class="form-group">
-                    <label>Описание:</label>
-                    <textarea id="f_description" rows="3">${escapeHtml(current.description || '')}</textarea>
-                </div>
-            `);
-            document.getElementById('adminForm').onsubmit = async function(e) {
-                e.preventDefault();
-                var body = {name: document.getElementById('f_name').value};
-                var pid = document.getElementById('f_parent_id').value;
-                var desc = document.getElementById('f_description').value;
-                if (pid) body.parent_id = parseInt(pid);
-                if (desc) body.description = desc;
-                var res = await fetch('/api/v1/genres/' + id, {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(body)
-                });
-                if (res.ok) { closeAdminModal(); loadGenres(); }
-                else { var d = await res.json(); alert(d.error || 'Error'); }
-            };
+        fetch(API + '/genres').then(r => r.json()).then(all => {
+            var g = all.find(ge => ge.id === id) || {};
+            fetch(API + '/genres').then(r2 => r2.json()).then(allGenres => {
+                var options = '<option value="">Нет родителя</option>' +
+                    allGenres.filter(ge => ge.id !== id).map(ge => '<option value="' + ge.id + '" ' + (g.parent_id === ge.id ? 'selected' : '') + '>' + escapeHtml(ge.name) + '</option>').join('');
+                openAdminModal('Редактировать жанр #' + id, `
+                    <div class="form-group">
+                        <label>Название:</label>
+                        <input type="text" id="f_name" value="${escapeHtml(g.name || '')}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Родительский жанр:</label>
+                        <select id="f_parent_id">${options}</select>
+                    </div>
+                    <div class="form-group">
+                        <label>Описание:</label>
+                        <textarea id="f_description" rows="3">${escapeHtml(g.description || '')}</textarea>
+                    </div>
+                `);
+                document.getElementById('adminForm').onsubmit = async function(e) {
+                    e.preventDefault();
+                    var body = {name: document.getElementById('f_name').value};
+                    var pid = document.getElementById('f_parent_id').value;
+                    var desc = document.getElementById('f_description').value;
+                    if (pid) body.parent_id = parseInt(pid); else body.parent_id = null;
+                    if (desc) body.description = desc; else body.description = null;
+                    var res = await fetch('/api/v1/genres/' + id, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                    if (res.ok) { closeAdminModal(); loadGenres(); }
+                    else { var d = await res.json(); alert(d.error || 'Error'); }
+                };
+            });
         });
     }
 
     function deleteGenre(id) {
-        if (!confirm('Удалить жанр?')) return;
+        if (!confirm('Удалить жанр #' + id + '?')) return;
         fetch('/api/v1/genres/' + id, {method: 'DELETE'}).then(r => {
-            if (r.ok) loadGenres();
+            if (r.ok || r.status === 204) loadGenres();
             else r.json().then(d => alert(d.error || 'Error'));
         });
     }
@@ -641,13 +671,13 @@
     function renderTags() {
         var tbody = document.getElementById('tagsTableBody');
         var filterText = document.getElementById('filter-tags').value;
-        var filtered = filterData(storeTags, filterText, ['name', 'color', 'description']);
+        var filtered = filterData(storeTags, filterText, ['name', 'description', 'color']);
         var sorted = sortData(filtered, getSortKey('table-tags'), getSortDir('table-tags'));
         renderTable(tbody, sorted, function(t) {
             return '<tr>' +
                 '<td>' + t.id + '</td>' +
                 '<td>' + escapeHtml(t.name) + '</td>' +
-                '<td>' + (t.color ? '<span style="display:inline-block;width:20px;height:20px;border-radius:4px;background:' + escapeHtml(t.color) + ';vertical-align:middle;margin-right:4px"></span>' + escapeHtml(t.color) : '') + '</td>' +
+                '<td>' + (t.color ? '<span style="display:inline-block;width:16px;height:16px;background:' + escapeHtml(t.color) + ';border-radius:3px;vertical-align:middle;margin-right:4px"></span>' + escapeHtml(t.color) : '') + '</td>' +
                 '<td>' + escapeHtml(t.description || '') + '</td>' +
                 '<td>' + (t.books_count || 0) + '</td>' +
                 '<td class="actions">' +
