@@ -2869,6 +2869,9 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 
 	if existingWorkID == 0 && bookInfo != nil {
 		for _, genreName := range bookInfo.Genres {
+			if strings.TrimSpace(genreName) == "" {
+				continue
+			}
 			var genreID int
 			err = tx.QueryRow(`
 				INSERT INTO genres (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id
