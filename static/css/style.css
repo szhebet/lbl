@@ -122,6 +122,16 @@ header h1 {
     font-size: 14px;
 }
 
+.filter-group select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    background: #fff;
+    cursor: pointer;
+}
+
 .filter-date-row {
     flex: 0 0 100%;
     display: flex;
@@ -949,3 +959,54 @@ header h1 {
     padding: 40px;
     color: #999;
 }
+
+#loginBtn.logged-in {
+    background: #27ae60;
+}
+
+#loginBtn.logged-in:hover {
+    background: #1e8449;
+}
+
+#loginModal .modal-content {
+    max-width: 400px;
+}
+
+#loginError {
+    color: #e74c3c;
+    font-size: 14px;
+    padding: 8px;
+    background: #fdf0ef;
+    border-radius: 4px;
+    border: 1px solid #f5c6cb;
+}
+
+/* Book status select */
+.status-select {
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    max-width: 120px;
+}
+.status-select.status-done { background: #d4edda; border-color: #c3e6cb; }
+.status-select.status-reading { background: #cce5ff; border-color: #b8daff; }
+.status-select.status-paused { background: #fff3cd; border-color: #ffeaa7; }
+.status-select.status-abandoned { background: #f8d7da; border-color: #f5c6cb; }
+
+.col-status { width: 120px; text-align: center; }
+
+.status-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.status-badge.status-done { background: #d4edda; color: #155724; }
+.status-badge.status-reading { background: #cce5ff; color: #004085; }
+.status-badge.status-paused { background: #fff3cd; color: #856404; }
+.status-badge.status-abandoned { background: #f8d7da; color: #721c24; }

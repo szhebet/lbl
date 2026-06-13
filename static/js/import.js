@@ -95,6 +95,16 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function switchToImportTab() {
+    var adminTabs = document.querySelectorAll('.admin-tab');
+    if (adminTabs.length > 0) {
+        document.querySelectorAll('.admin-tab').forEach(function(t) { t.classList.remove('active'); });
+        document.querySelectorAll('.admin-content').forEach(function(c) { c.classList.remove('active'); });
+        var importTab = document.querySelector('.admin-tab[data-tab="import"]');
+        var importContent = document.getElementById('tab-import');
+        if (importTab) importTab.classList.add('active');
+        if (importContent) importContent.classList.add('active');
+        return;
+    }
     var tabs = document.querySelectorAll('.tab');
     var contents = document.querySelectorAll('.tab-content');
     tabs.forEach(function(t) { t.classList.remove('active'); });
@@ -109,20 +119,27 @@ function switchToImportTab() {
 
 function showImportProgress(dirPath, total) {
     switchToImportTab();
-    var container = document.getElementById('directoryResult');
-    var panel = document.createElement('div');
-    panel.className = 'import-progress-panel';
-    panel.id = 'importProgressPanel';
-    panel.innerHTML = '<div class="import-progress-header">' +
-        '<h4>\u0418\u043c\u043f\u043e\u0440\u0442 \u043a\u043d\u0438\u0433</h4>' +
-        '<span id="importProgressCount">0 / ' + total + '</span></div>' +
-        '<div class="import-progress-bar"><div id="importProgressFill" class="import-progress-fill" style="width:0%"></div></div>' +
-        '<div id="importCurrentFile" class="import-current-file"></div>' +
-        '<div id="importResults" class="import-results"></div>' +
-        '<button id="cancelImportBtn" class="btn btn-danger" style="display:none">\u041f\u0440\u0435\u0440\u0432\u0430\u0442\u044c \u0438\u043c\u043f\u043e\u0440\u0442</button>' +
-        '<div id="importFinalSummary" style="display:none"></div>';
-    container.innerHTML = '';
-    container.appendChild(panel);
+    var container = document.getElementById('importProgressArea') || document.getElementById('directoryResult');
+    var panel = document.getElementById('importProgressPanel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'import-progress-panel';
+        panel.id = 'importProgressPanel';
+        panel.innerHTML = '<div class="import-progress-header">' +
+            '<h4>\u0418\u043c\u043f\u043e\u0440\u0442 \u043a\u043d\u0438\u0433</h4>' +
+            '<span id="importProgressCount">0 / ' + total + '</span></div>' +
+            '<div class="import-progress-bar"><div id="importProgressFill" class="import-progress-fill" style="width:0%"></div></div>' +
+            '<div id="importCurrentFile" class="import-current-file"></div>' +
+            '<div id="importResults" class="import-results"></div>' +
+            '<button id="cancelImportBtn" class="btn btn-danger" style="display:none">\u041f\u0440\u0435\u0440\u0432\u0430\u0442\u044c \u0438\u043c\u043f\u043e\u0440\u0442</button>' +
+            '<div id="importFinalSummary" style="display:none"></div>';
+        container.innerHTML = '';
+        container.appendChild(panel);
+    } else {
+        var countEl = document.getElementById('importProgressCount');
+        if (countEl) countEl.textContent = '0 / ' + total;
+    }
+    container.style.display = '';
 
     document.getElementById('cancelImportBtn').addEventListener('click', async function() {
         try {
@@ -281,6 +298,10 @@ function checkImportOnLoad() {
                 showImportProgress('', state.total);
                 updateImportUI(state);
                 startImportPolling();
+            } else if (state.items && state.items.length > 0) {
+                showImportProgress('', state.total);
+                updateImportUI(state);
+                finishImportUI(state);
             }
         })
         .catch(function() {});
@@ -290,18 +311,16 @@ function checkImportStatus() {
     fetch(API_BASE + '/import/status')
         .then(function(r) { return r.json(); })
         .then(function(state) {
-            if (state.running || (state.items && state.items.length > 0 && !state.running)) {
-                if (state.running) {
+            if (state.running) {
+                showImportProgress('', state.total);
+                updateImportUI(state);
+                startImportPolling();
+            } else if (state.items && state.items.length > 0) {
+                var container = document.getElementById('importProgressArea') || document.getElementById('directoryResult');
+                if (container) {
                     showImportProgress('', state.total);
                     updateImportUI(state);
-                    startImportPolling();
-                } else {
-                    var container = document.getElementById('directoryResult');
-                    if (container) {
-                        showImportProgress('', state.total);
-                        updateImportUI(state);
-                        finishImportUI(state);
-                    }
+                    finishImportUI(state);
                 }
             }
         })

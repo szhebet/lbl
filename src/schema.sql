@@ -40,8 +40,19 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
+-- Устройства пользователей (fingerprint)
+CREATE TABLE IF NOT EXISTS user_devices (
+    id                 SERIAL PRIMARY KEY,
+    user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_name        VARCHAR(255) NOT NULL,
+    device_fingerprint VARCHAR(255) NOT NULL,
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(device_name),
+    UNIQUE(device_fingerprint)
+);
+
 -- ============================================================
--- ТАБЛИЦЫ АУТЕНТИФИКАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
+-- ФОРМАТЫ КНИГ
 -- ============================================================
 
 -- Форматы книг
@@ -306,6 +317,31 @@ CREATE TABLE IF NOT EXISTS reading_progress (
     notes            TEXT,
     updated_at       TIMESTAMP DEFAULT NOW()
 );
+
+-- Статусы книг пользователей
+DO $$ BEGIN
+    CREATE TYPE user_book_status AS ENUM ('Не заполнено', 'Прочитано', 'Читаю', 'Отложил', 'Бросил');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS user_books (
+    id            SERIAL PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    edition_id    INTEGER NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
+    status        user_book_status NOT NULL DEFAULT 'Не заполнено',
+    review        TEXT NOT NULL DEFAULT '',
+    rating        INTEGER CHECK (rating >= 1 AND rating <= 10),
+    date_started  DATE,
+    date_read     DATE,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, edition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_books_user_id ON user_books(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_books_edition_id ON user_books(edition_id);
+CREATE INDEX IF NOT EXISTS idx_user_books_status ON user_books(status);
 
 -- ============================================================
 -- ПОИСК ДУБЛИКАТОВ
