@@ -38,6 +38,43 @@ func authMiddleware() gin.HandlerFunc {
 	}
 }
 
+func adminAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+		tokenStr := authHeader[7:]
+		claims, err := validateToken(tokenStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
+			return
+		}
+		if uid, ok := claims["user_id"].(float64); ok {
+			c.Set("user_id", int(uid))
+		}
+		role, _ := claims["role"].(string)
+		c.Set("role", role)
+		if role == "viewer" || role == "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Недостаточно прав"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func adminOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("role")
+		if role != "admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Требуются права администратора"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func getUserBook(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, _ := c.Get("user_id")

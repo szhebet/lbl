@@ -6,6 +6,28 @@ let booksSortBy = 'original_title';
 let booksSortOrder = 'asc';
 let userBookStatuses = {};
 
+function promptLogin() {
+    if (typeof openLoginModal === 'function') {
+        openLoginModal();
+    } else {
+        alert('Необходимо авторизоваться');
+    }
+}
+
+function handleAuthFailure() {
+    if (typeof authToken !== 'undefined') { authToken = ''; }
+    if (typeof authUser !== 'undefined') { authUser = null; }
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    userBookStatuses = {};
+    var btn = document.getElementById('loginBtn');
+    if (btn) {
+        btn.textContent = 'Авторизоваться';
+        btn.classList.remove('logged-in');
+    }
+    promptLogin();
+}
+
 // Load user's book statuses if logged in
 async function loadUserBookStatuses() {
     var token = localStorage.getItem('auth_token');
@@ -18,6 +40,8 @@ async function loadUserBookStatuses() {
             var list = await res.json();
             userBookStatuses = {};
             list.forEach(function(ub) { userBookStatuses[ub.edition_id] = ub; });
+        } else if (res.status === 401) {
+            handleAuthFailure();
         }
     } catch(e) {}
 }
@@ -45,7 +69,7 @@ function getStatusClass(status) {
 
 async function setUserBookStatus(editionId, status) {
     var token = localStorage.getItem('auth_token');
-    if (!token) { alert('Необходимо авторизоваться'); return; }
+    if (!token) { promptLogin(); return; }
     try {
         var res = await fetch(API_BASE + '/user/books/' + editionId, {
             method: 'PUT',
@@ -56,6 +80,8 @@ async function setUserBookStatus(editionId, status) {
             var ub = await res.json();
             userBookStatuses[editionId] = ub;
             refreshCurrentView();
+        } else if (res.status === 401) {
+            handleAuthFailure();
         }
     } catch(e) {}
 }

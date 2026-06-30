@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"log"
 	"net/http"
 	"time"
 
@@ -36,7 +37,7 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query(`SELECT id, username, COALESCE(email,''), role, created_at FROM users ORDER BY username`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -44,13 +45,18 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var u AdminUser
 			if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 			users = append(users, u)
 		}
 		c.JSON(http.StatusOK, users)
 	}
+}
+
+func adminInternalError(c *gin.Context, err error) {
+	log.Printf("Admin internal error: %v", err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "Внутренняя ошибка сервера"})
 }
 
 func adminGetUser(db *sql.DB) gin.HandlerFunc {
@@ -64,7 +70,7 @@ func adminGetUser(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, u)
@@ -133,27 +139,27 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 			}
 			_, err = db.Exec("UPDATE users SET password_hash = $1 WHERE id = $2", string(hash), id)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 		}
 		if req.Email != nil {
 			_, err := db.Exec("UPDATE users SET email = NULLIF($1,'') WHERE id = $2", *req.Email, id)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 		}
 		if req.Role != nil {
 			_, err := db.Exec("UPDATE users SET role = $1 WHERE id = $2", *req.Role, id)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 		}
 		_, err := db.Exec("UPDATE users SET updated_at = NOW() WHERE id = $1", id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		var user AdminUser
@@ -172,7 +178,7 @@ func adminDeleteUser(db *sql.DB) gin.HandlerFunc {
 		id := c.Param("id")
 		res, err := db.Exec("DELETE FROM users WHERE id = $1", id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		n, _ := res.RowsAffected()
@@ -198,7 +204,7 @@ func adminGetPersons(db *sql.DB) gin.HandlerFunc {
 			FROM persons p ORDER BY p.last_name, p.first_name
 		`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -207,7 +213,7 @@ func adminGetPersons(db *sql.DB) gin.HandlerFunc {
 			var p PersonData
 			if err := rows.Scan(&p.ID, &p.FirstName, &p.MiddleName, &p.LastName,
 				&p.Pseudonym, &p.BirthDate, &p.DeathDate, &p.Biography, &p.PhotoURL, &p.BooksCount); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 			persons = append(persons, p)
@@ -275,7 +281,7 @@ func adminUpdatePerson(db *sql.DB) gin.HandlerFunc {
 			WHERE id = $8
 		`, req.FirstName, req.MiddleName, req.LastName, req.Pseudonym, req.BirthDate, req.DeathDate, req.Biography, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		var p PersonData
@@ -301,7 +307,7 @@ func adminDeletePerson(db *sql.DB) gin.HandlerFunc {
 		id := c.Param("id")
 		res, err := db.Exec("DELETE FROM persons WHERE id = $1", id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		n, _ := res.RowsAffected()
@@ -350,7 +356,7 @@ func adminDeleteTag(db *sql.DB) gin.HandlerFunc {
 		id := c.Param("id")
 		res, err := db.Exec("DELETE FROM tags WHERE id = $1", id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		n, _ := res.RowsAffected()
@@ -377,7 +383,7 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 			ORDER BY g.name
 		`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -395,7 +401,7 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 			var parentID sql.NullInt64
 			var desc sql.NullString
 			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc, &g.ParentName, &g.BooksCount); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 			if parentID.Valid {
@@ -419,7 +425,7 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 			FROM tags t ORDER BY t.name
 		`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			adminInternalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -435,7 +441,7 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 			var t AdminTag
 			var color sql.NullString
 			if err := rows.Scan(&t.ID, &t.Name, &color, &t.Description, &t.BooksCount); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				adminInternalError(c, err)
 				return
 			}
 			if color.Valid {

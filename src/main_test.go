@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"libapp/src/config"
 )
 
@@ -715,7 +717,7 @@ func TestUpdateBookExtendedDuplicateISBN(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
-	assert.Contains(t, w.Body.String(), "unique")
+	assert.Contains(t, w.Body.String(), "Внутренняя ошибка сервера")
 }
 
 func TestUpdateBookExtendedTitleChange(t *testing.T) {
@@ -1415,4 +1417,99 @@ func TestGetGenreTreeWithFilters(t *testing.T) {
 		r.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
+}
+
+func TestSetUserBookStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Set up JWT secret
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create a test user
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) 
+		VALUES ($1, $2, 'viewer') 
+		RETURNING id
+	`, "testuser_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	// Generate a token
+	token := generateToken(userID, "testuser", "viewer")
+	require.NotEmpty(t, token)
+
+	// Get an existing edition_id from the test database
+	var editionID int
+	err = db.QueryRow("SELECT id FROM editions LIMIT 1").Scan(&editionID)
+	require.NoError(t, err, "No editions found in test database")
+
+	// Set up the router with auth middleware
+	r := gin.New()
+
+	// Register user book routes
+	userBooks := r.Group("/api/v1/user/books")
+	userBooks.Use(authMiddleware())
+	{
+		userBooks.PUT("/:edition_id", setUserBook(db))
+	}
+
+	// Send PUT request to set reading status
+	body := map[string]string{"status": "Прочитано"}
+	bodyJSON, _ := json.Marshal(body)
+	req, _ := http.NewRequest("PUT", "/api/v1/user/books/"+strconv.Itoa(editionID), bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Debug: print response
+	t.Logf("Response status: %d, body: %s", w.Code, w.Body.String())
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Verify the status was saved in the database
+	var savedStatus string
+	err = db.QueryRow(`
+		SELECT status::text FROM user_books WHERE user_id = $1 AND edition_id = $2
+	`, userID, editionID).Scan(&savedStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "Прочитано", savedStatus)
+
+	// Clean up
+	db.Exec("DELETE FROM user_books WHERE user_id = $1 AND edition_id = $2", userID, editionID)
+}
+
+func TestSetUserBookStatusUnauthenticated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var editionID int
+	err := db.QueryRow("SELECT id FROM editions LIMIT 1").Scan(&editionID)
+	require.NoError(t, err)
+
+	r := gin.New()
+	userBooks := r.Group("/api/v1/user/books")
+	userBooks.Use(authMiddleware())
+	{
+		userBooks.PUT("/:edition_id", setUserBook(db))
+	}
+
+	// Send PUT without auth header
+	body := map[string]string{"status": "Прочитано"}
+	bodyJSON, _ := json.Marshal(body)
+	req, _ := http.NewRequest("PUT", "/api/v1/user/books/"+strconv.Itoa(editionID), bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
 }

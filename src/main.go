@@ -402,6 +402,11 @@ type UpdateBookRequest struct {
 	Publisher   *string `json:"publisher,omitempty"`
 }
 
+func internalError(c *gin.Context, err error) {
+	log.Printf("Internal error: %v", err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "Внутренняя ошибка сервера"})
+}
+
 func normalizeYear(year sql.NullInt64) sql.NullInt64 {
 	if year.Valid && year.Int64 == 0 {
 		return sql.NullInt64{Valid: false}
@@ -468,7 +473,11 @@ func main() {
 
 	importManager = NewImportManager(db, cfg)
 
+	initJWTSecret(cfg.Server.JWTSecret)
+	initTokenTTL(cfg.Server.TokenTTL)
+
 	r := gin.Default()
+	r.MaxMultipartMemory = 100 << 20 // 100 MB max for all uploads
 
 	r.Use(func(c *gin.Context) {
 		c.Set("db", db)
@@ -524,14 +533,20 @@ func main() {
 		}
 	}
 
-	// Admin API routes
+	// Admin API routes (require editor+ authentication)
 	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
 	{
-		admin.GET("/users", adminGetUsers(db))
-		admin.GET("/users/:id", adminGetUser(db))
-		admin.POST("/users", adminCreateUser(db))
-		admin.PUT("/users/:id", adminUpdateUser(db))
-		admin.DELETE("/users/:id", adminDeleteUser(db))
+		// User management — admin only
+		adminUsers := admin.Group("/users")
+		adminUsers.Use(adminOnlyMiddleware())
+		{
+			adminUsers.GET("", adminGetUsers(db))
+			adminUsers.GET("/:id", adminGetUser(db))
+			adminUsers.POST("", adminCreateUser(db))
+			adminUsers.PUT("/:id", adminUpdateUser(db))
+			adminUsers.DELETE("/:id", adminDeleteUser(db))
+		}
 		admin.GET("/persons", adminGetPersons(db))
 		admin.POST("/persons", adminCreatePerson(db))
 		admin.PUT("/persons/:id", adminUpdatePerson(db))
@@ -557,8 +572,8 @@ func main() {
 	r.PUT("/api/v1/shelf/clear", clearShelf(db))
 	r.GET("/api/v1/shelf/count", getShelfCount(db))
 
-	// Debug endpoints (always available)
-	r.GET("/debug/goroutines", func(c *gin.Context) {
+	// Debug endpoints (admin only)
+	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
 		c.Data(http.StatusOK, "text/plain; charset=utf-8", buf[:n])
@@ -576,6 +591,8 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 		cfg := getConfig(c)
 
 		editionID := c.Param("id")
+
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
 
 		file, header, err := c.Request.FormFile("cover")
 		if err != nil {
@@ -656,7 +673,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 			"upload_date":       "upload_date",
 			"authors":          "authors",
 			"available_formats": "available_formats",
-			"year":             "COALESCE(year, 0)",
+			"year":             "NULLIF(year, 0)",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {
@@ -664,6 +681,10 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		}
 		if sortOrder != "desc" {
 			sortOrder = "asc"
+		}
+		nullsLast := ""
+		if sortBy == "year" {
+			nullsLast = " NULLS LAST"
 		}
 
 		whereClause := " WHERE 1=1"
@@ -717,7 +738,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		countQuery := "SELECT COUNT(*) FROM book_details" + whereClause
 		err := db.QueryRow(countQuery, args...).Scan(&total)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -731,14 +752,14 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
 				on_shelf, shelf_order
 			FROM book_details%s
-			ORDER BY %s %s
+			ORDER BY %s %s%s
 			LIMIT $%d OFFSET $%d
-		`, whereClause, sortCol, sortOrder, argNum, argNum+1)
+		`, whereClause, sortCol, sortOrder, nullsLast, argNum, argNum+1)
 		queryArgs := append(args, limit, offset)
 
 		rows, err := db.Query(query, queryArgs...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -754,7 +775,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 				&book.OnShelf, &book.ShelfOrder,
 			); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			book.Year = normalizeYear(book.Year)
@@ -762,7 +783,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		}
 
 		if err = rows.Err(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -874,7 +895,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 
 		var total int
 		if err := db.QueryRow("SELECT COUNT(*) FROM book_details"+whereClause, countArgs...).Scan(&total); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -883,7 +904,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 
 		rows, err := db.Query(sqlQuery, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -899,7 +920,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
 				&book.OnShelf, &book.ShelfOrder,
 			); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			book.Year = normalizeYear(book.Year)
@@ -945,7 +966,7 @@ func getBook(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1437,7 +1458,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		var total int
 		err := db.QueryRow(countQuery, whereArgs...).Scan(&total)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1451,7 +1472,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		var totalWorks int
 		err = db.QueryRow("SELECT COUNT(DISTINCT w.id) "+worksFrom, whereArgs...).Scan(&totalWorks)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1466,7 +1487,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		var totalEditions int
 		err = db.QueryRow("SELECT COUNT(DISTINCT ef.id) "+filesFrom, whereArgs...).Scan(&totalEditions)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1489,7 +1510,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 
 		rows, err := db.Query(query, queryArgs...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -1498,7 +1519,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var author AuthorWithBooks
 			if err := rows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -1528,7 +1549,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 
 			bookRows, err := db.Query(booksQuery, bookArgs...)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -1540,7 +1561,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 				var uploadDate sql.NullString
 				if err := bookRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
 					bookRows.Close()
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			if year.Valid && year.Int64 != 0 {
@@ -1565,7 +1586,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			formatRows, err := db.Query(formatQuery, book.ID)
 				if err != nil {
 					bookRows.Close()
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 
@@ -1575,7 +1596,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
 						formatRows.Close()
 						bookRows.Close()
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						internalError(c, err)
 						return
 					}
 					formats = append(formats, format)
@@ -1595,7 +1616,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		}
 
 		if err = rows.Err(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1789,7 +1810,7 @@ func updatePerson(db *sql.DB) gin.HandlerFunc {
 			WHERE id = $8
 		`, req.FirstName, req.MiddleName, req.LastName, req.Pseudonym, req.BirthDate, req.DeathDate, req.Biography, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1809,7 +1830,7 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1822,7 +1843,7 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			FROM works WHERE id = $1
 		`, workID).Scan(&work.ID, &work.OriginalTitle, &work.OriginalLanguage, &work.FirstPublished, &work.WorkType, &work.Annotation, &work.WordCount)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		bookData.Work = &work
@@ -1834,7 +1855,7 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			FROM editions WHERE id = $1
 		`, id).Scan(&edition.ID, &edition.Title, &edition.Language, &edition.ISBN, &edition.EAN, &edition.UDC, &edition.BBK, &edition.Publisher, &edition.Year, &edition.City, &edition.Pages, &edition.Series, &edition.SeriesNumber, &edition.Annotation, &edition.Source, &edition.IsComplete, &edition.Quality, &edition.UploadDate)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		bookData.Edition = &edition
@@ -1847,14 +1868,14 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			WHERE wc.work_id = $1
 		`, workID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var author AuthorData
 			if err := rows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.Role); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			bookData.Authors = append(bookData.Authors, author)
@@ -1868,14 +1889,14 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			WHERE wg.work_id = $1
 		`, workID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var genre GenreData
 			if err := rows.Scan(&genre.ID, &genre.Name); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			bookData.Genres = append(bookData.Genres, genre)
@@ -1889,14 +1910,14 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			WHERE ef.edition_id = $1
 		`, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var file FileData
 			if err := rows.Scan(&file.ID, &file.FormatID, &file.FormatName, &file.FilePath, &file.FileSize, &file.PageCount, &file.HasOCR, &file.IsPrimary); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			bookData.Files = append(bookData.Files, file)
@@ -1910,14 +1931,14 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			WHERE et.edition_id = $1
 		`, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var tag TagData
 			if err := rows.Scan(&tag.ID, &tag.Name); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			bookData.Tags = append(bookData.Tags, tag)
@@ -1931,14 +1952,14 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 			ORDER BY sort_order
 		`, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var toc TOCEntryData
 			if err := rows.Scan(&toc.ID, &toc.ParentID, &toc.Level, &toc.Title, &toc.Position, &toc.SortOrder); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			bookData.TOC = append(bookData.TOC, toc)
@@ -1946,6 +1967,63 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, bookData)
 	}
+}
+
+var allowedWorkFields = map[string]bool{
+	"original_title":    true,
+	"original_language": true,
+	"first_published":   true,
+	"work_type":         true,
+	"annotation":        true,
+	"word_count":        true,
+}
+
+var allowedEditionFields = map[string]bool{
+	"title":         true,
+	"language":      true,
+	"isbn":          true,
+	"ean":           true,
+	"udc":           true,
+	"bbk":           true,
+	"publisher":     true,
+	"year":          true,
+	"city":          true,
+	"pages":         true,
+	"series":        true,
+	"series_number": true,
+	"annotation":    true,
+	"source":        true,
+	"is_complete":   true,
+	"quality":       true,
+}
+
+func safeUpdateFields(data map[string]interface{}, allowed map[string]bool) ([]string, []interface{}, int) {
+	updates := []string{}
+	args := []interface{}{}
+	argNum := 1
+
+	for key, value := range data {
+		if !allowed[key] {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
+				args = append(args, value)
+				argNum++
+			}
+		case int, int64, float64:
+			updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
+			args = append(args, value)
+			argNum++
+		case bool:
+			updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
+			args = append(args, value)
+			argNum++
+		}
+	}
+	return updates, args, argNum
 }
 
 // updateBookExtended updates extended book data
@@ -1960,7 +2038,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 
 		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer func() {
@@ -1978,71 +2056,29 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Update work - iterate over all provided fields
+		// Update work - only allowed fields
 		if len(req.Work) > 0 {
-			updates := []string{}
-			args := []interface{}{}
-			argNum := 1
-
-			for key, value := range req.Work {
-				switch v := value.(type) {
-				case string:
-					if v != "" {
-						updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-						args = append(args, value)
-						argNum++
-					}
-				case int, int64, float64:
-					updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-					args = append(args, value)
-					argNum++
-				case bool:
-					updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-					args = append(args, value)
-					argNum++
-				}
-			}
+			updates, args, argNum := safeUpdateFields(req.Work, allowedWorkFields)
 
 			if len(updates) > 0 {
 				args = append(args, workID)
 				_, err = tx.Exec("UPDATE works SET "+strings.Join(updates, ", ")+", updated_at = NOW() WHERE id = $"+strconv.Itoa(argNum), args...)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			}
 		}
 
-		// Update edition - iterate over all provided fields
+		// Update edition - only allowed fields
 		if len(req.Edition) > 0 {
-			updates := []string{}
-			args := []interface{}{}
-			argNum := 1
-
-			for key, value := range req.Edition {
-				switch v := value.(type) {
-				case string:
-					if v != "" {
-						updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-						args = append(args, value)
-						argNum++
-					}
-				case int, int64, float64:
-					updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-					args = append(args, value)
-					argNum++
-				case bool:
-					updates = append(updates, fmt.Sprintf("%s = $%d", key, argNum))
-					args = append(args, value)
-					argNum++
-				}
-			}
+			updates, args, argNum := safeUpdateFields(req.Edition, allowedEditionFields)
 
 			if len(updates) > 0 {
 				args = append(args, id)
 				_, err = tx.Exec("UPDATE editions SET "+strings.Join(updates, ", ")+", updated_at = NOW() WHERE id = $"+strconv.Itoa(argNum), args...)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			}
@@ -2052,7 +2088,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		if len(req.Authors) > 0 {
 			_, err = tx.Exec("DELETE FROM work_contributors WHERE work_id = $1", workID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -2069,7 +2105,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 						RETURNING id
 					`, author.LastName, author.FirstName).Scan(&personID)
 					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						internalError(c, err)
 						return
 					}
 				}
@@ -2084,7 +2120,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 					VALUES ($1, $2, $3)
 				`, workID, personID, role)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			}
@@ -2094,7 +2130,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		if len(req.Genres) > 0 {
 			_, err = tx.Exec("DELETE FROM work_genres WHERE work_id = $1", workID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -2104,7 +2140,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 					VALUES ($1, $2)
 				`, workID, genreID)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			}
@@ -2114,7 +2150,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		if len(req.Tags) > 0 {
 			_, err = tx.Exec("DELETE FROM edition_tags WHERE edition_id = $1", id)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -2124,7 +2160,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 					VALUES ($1, $2)
 				`, id, tagID)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 			}
@@ -2139,7 +2175,7 @@ func getGenres(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query("SELECT id, name, parent_id FROM genres ORDER BY name")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -2149,7 +2185,7 @@ func getGenres(db *sql.DB) gin.HandlerFunc {
 			var genre GenreData
 			var parentID sql.NullInt64
 			if err := rows.Scan(&genre.ID, &genre.Name, &parentID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			if parentID.Valid {
@@ -2177,7 +2213,7 @@ func createGenre(db *sql.DB) gin.HandlerFunc {
 		var genre GenreData
 		err := db.QueryRow("INSERT INTO genres (name) VALUES ($1) RETURNING id, name", req.Name).Scan(&genre.ID, &genre.Name)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -2202,7 +2238,7 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 
 		rows, err := db.Query(query, whereArgs...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -2213,7 +2249,7 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 			var parentID sql.NullInt64
 			var desc sql.NullString
 			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			if parentID.Valid {
@@ -2283,7 +2319,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 
 		aRows, err := db.Query(authorQuery, authorArgs...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer aRows.Close()
@@ -2292,7 +2328,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 		for aRows.Next() {
 			var author AuthorWithBooks
 			if err := aRows.Scan(&author.ID, &author.FirstName, &author.LastName); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -2316,7 +2352,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 
 			bRows, err := db.Query(booksQuery, bookArgs...)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -2328,7 +2364,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 				var uploadDate sql.NullString
 				if err := bRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
 					bRows.Close()
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 				if year.Valid {
@@ -2348,7 +2384,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 				`, book.ID)
 				if err != nil {
 					bRows.Close()
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					internalError(c, err)
 					return
 				}
 				var formats []FormatInfo
@@ -2357,7 +2393,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 					if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
 						formatRows.Close()
 						bRows.Close()
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						internalError(c, err)
 						return
 					}
 					formats = append(formats, fi)
@@ -2409,14 +2445,14 @@ func updateGenre(db *sql.DB) gin.HandlerFunc {
 			WHERE id = $4
 		`, req.Name, req.Description, req.ParentID, id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		var genre GenreData
 		err = db.QueryRow("SELECT id, name FROM genres WHERE id = $1", id).Scan(&genre.ID, &genre.Name)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -2431,31 +2467,31 @@ func deleteGenre(db *sql.DB) gin.HandlerFunc {
 
 		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer tx.Rollback()
 
 		// Remove genre-book associations
 		if _, err := tx.Exec("DELETE FROM work_genres WHERE genre_id = $1", id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		// Orphan child genres (set parent_id to NULL)
 		if _, err := tx.Exec("UPDATE genres SET parent_id = NULL WHERE parent_id = $1", id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		// Delete the genre itself
 		if _, err := tx.Exec("DELETE FROM genres WHERE id = $1", id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		if err := tx.Commit(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -2468,7 +2504,7 @@ func getTags(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query("SELECT id, name, COALESCE(color,''), COALESCE(description,'') FROM tags ORDER BY name")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -2477,7 +2513,7 @@ func getTags(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var tag TagData
 			if err := rows.Scan(&tag.ID, &tag.Name, &tag.Color, &tag.Description); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			tags = append(tags, tag)
@@ -2503,7 +2539,7 @@ func createTag(db *sql.DB) gin.HandlerFunc {
 		var tag TagData
 		err := db.QueryRow("INSERT INTO tags (name, color, description) VALUES ($1, NULLIF($2,''), NULLIF($3,'')) RETURNING id, name, COALESCE(color,''), COALESCE(description,'')", req.Name, req.Color, req.Description).Scan(&tag.ID, &tag.Name, &tag.Color, &tag.Description)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -2516,7 +2552,7 @@ func getPersons(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query("SELECT id, COALESCE(first_name, ''), last_name FROM persons ORDER BY last_name, first_name")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -2525,7 +2561,7 @@ func getPersons(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var person AuthorData
 			if err := rows.Scan(&person.ID, &person.FirstName, &person.LastName); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			persons = append(persons, person)
@@ -2547,7 +2583,7 @@ func getLanguages(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query("SELECT code, name, native_name FROM languages ORDER BY name")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -2556,7 +2592,7 @@ func getLanguages(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var lang LanguageData
 			if err := rows.Scan(&lang.Code, &lang.Name, &lang.NativeName); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			languages = append(languages, lang)
@@ -3027,6 +3063,17 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+func sanitizeBasename(name string) string {
+	name = filepath.Base(name)
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	base = sanitizeFilename(base)
+	if base == "" {
+		base = "unnamed"
+	}
+	return base + ext
+}
+
 func importUploadFiles() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
@@ -3051,6 +3098,12 @@ func importUploadFiles() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot create temp directory"})
 			return
 		}
+		cleanup := true
+		defer func() {
+			if cleanup {
+				os.RemoveAll(tmpDir)
+			}
+		}()
 
 		var savedFiles []string
 		for _, fh := range files {
@@ -3066,15 +3119,15 @@ func importUploadFiles() gin.HandlerFunc {
 			if err != nil {
 				continue
 			}
-			destPath := filepath.Join(tmpDir, fh.Filename)
+			safeName := sanitizeBasename(fh.Filename)
+			destPath := filepath.Join(tmpDir, safeName)
 			if err := os.WriteFile(destPath, data, 0644); err != nil {
 				continue
 			}
-			savedFiles = append(savedFiles, fh.Filename)
+			savedFiles = append(savedFiles, safeName)
 		}
 
 		if len(savedFiles) == 0 {
-			os.RemoveAll(tmpDir)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "No supported files found"})
 			return
 		}
@@ -3085,6 +3138,7 @@ func importUploadFiles() gin.HandlerFunc {
 			return
 		}
 
+		cleanup = false // Import manager will clean up on completion
 		c.JSON(http.StatusOK, gin.H{
 			"started": true,
 			"total":   len(savedFiles),
@@ -3263,6 +3317,24 @@ func getNextSubdir(baseDir string) string {
 	return fmt.Sprintf("%05d", maxDir)
 }
 
+func safeDirectoryPath(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") || strings.HasPrefix(cleaned, "~") {
+		return "", fmt.Errorf("invalid directory path")
+	}
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("path must be absolute")
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("directory does not exist")
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("path is not a directory")
+	}
+	return cleaned, nil
+}
+
 func startImport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dirPath := c.PostForm("directory")
@@ -3271,15 +3343,21 @@ func startImport() gin.HandlerFunc {
 			return
 		}
 
+		safePath, err := safeDirectoryPath(dirPath)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		var files []string
-		err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		err = filepath.Walk(safePath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
 			if info.IsDir() {
 				return nil
 			}
-			relPath, _ := filepath.Rel(dirPath, path)
+			relPath, _ := filepath.Rel(safePath, path)
 			if !isSupportedFile(relPath) {
 				return nil
 			}
@@ -3287,7 +3365,7 @@ func startImport() gin.HandlerFunc {
 			return nil
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot walk directory: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot walk directory"})
 			return
 		}
 
@@ -3296,7 +3374,7 @@ func startImport() gin.HandlerFunc {
 			return
 		}
 
-		err = importManager.Start(dirPath, files)
+		err = importManager.Start(safePath, files)
 		if err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -3338,7 +3416,7 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -3417,7 +3495,7 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 
 		_, err := db.Exec("UPDATE editions SET on_shelf = $1, shelf_order = CASE WHEN $1 THEN COALESCE(shelf_order, 0) + 1 ELSE shelf_order END WHERE id = $2", req.OnShelf, editionID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -3568,7 +3646,7 @@ func clearShelf(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		_, err := db.Exec("UPDATE editions SET on_shelf = false, shelf_order = 0 WHERE on_shelf = true")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -3581,7 +3659,7 @@ func getShelfCount(db *sql.DB) gin.HandlerFunc {
 		var count int
 		err := db.QueryRow("SELECT COUNT(*) FROM editions WHERE on_shelf = true").Scan(&count)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 

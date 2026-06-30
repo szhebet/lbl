@@ -117,36 +117,41 @@ function openLoginModal() {
                     });
                 }
             } else if (data.user_not_found) {
-                if (confirm('Пользователь "' + data.username + '" не найден, создать?')) {
-                    var regResponse = await fetch('/api/v1/auth/register', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            username: username,
-                            password: password,
-                            device_name: navigator.userAgent.substring(0, 100),
-                            device_fingerprint: fingerprint
-                        })
-                    });
-                    var regData = await regResponse.json();
-                    if (regResponse.ok && regData.token) {
-                        authToken = regData.token;
-                        authUser = regData.user;
-                        localStorage.setItem('auth_token', authToken);
-                        localStorage.setItem('auth_user', JSON.stringify(authUser));
-                        closeLoginModal();
-                        var btn2 = document.getElementById('loginBtn');
-                        if (btn2) {
-                            btn2.textContent = authUser.username;
-                            btn2.classList.add('logged-in');
+                if (confirm('Пользователь "' + username + '" не найден. Создать нового пользователя?')) {
+                    try {
+                        var regResponse = await fetch('/api/v1/auth/register', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                username: username,
+                                password: password,
+                                device_name: navigator.userAgent.substring(0, 100),
+                                device_fingerprint: fingerprint
+                            })
+                        });
+                        var regData = await regResponse.json();
+                        if (regResponse.ok && regData.token) {
+                            authToken = regData.token;
+                            authUser = regData.user;
+                            localStorage.setItem('auth_token', authToken);
+                            localStorage.setItem('auth_user', JSON.stringify(authUser));
+                            closeLoginModal();
+                            var btn2 = document.getElementById('loginBtn');
+                            if (btn2) {
+                                btn2.textContent = authUser.username;
+                                btn2.classList.add('logged-in');
+                            }
+                            if (typeof loadUserBookStatuses === 'function') {
+                                loadUserBookStatuses().then(function() {
+                                    if (typeof refreshCurrentView === 'function') refreshCurrentView();
+                                });
+                            }
+                        } else {
+                            errorEl.textContent = regData.error || 'Ошибка создания пользователя';
+                            errorEl.style.display = 'block';
                         }
-                        if (typeof loadUserBookStatuses === 'function') {
-                            loadUserBookStatuses().then(function() {
-                                if (typeof refreshCurrentView === 'function') refreshCurrentView();
-                            });
-                        }
-                    } else {
-                        errorEl.textContent = regData.error || 'Ошибка создания пользователя';
+                    } catch (regErr) {
+                        errorEl.textContent = 'Ошибка соединения: ' + regErr.message;
                         errorEl.style.display = 'block';
                     }
                 }

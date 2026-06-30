@@ -41,33 +41,54 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 			req.DeviceName = "Unknown device"
 		}
 
+		var userCount int
+		db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
+
+		if userCount == 0 {
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
+				return
+			}
+			var user User
+			err = db.QueryRow(`
+				INSERT INTO users (username, password_hash, role)
+				VALUES ($1, $2, 'admin')
+				RETURNING id, username, COALESCE(email, ''), role, created_at
+			`, req.Username, string(hashedPassword)).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
+				return
+			}
+			if req.DeviceFingerprint != "" {
+				db.Exec(`
+					INSERT INTO user_devices (user_id, device_name, device_fingerprint)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (device_fingerprint) DO UPDATE SET device_name = EXCLUDED.device_name
+				`, user.ID, req.DeviceName, req.DeviceFingerprint)
+			}
+			token := generateToken(user.ID, user.Username, user.Role)
+			c.JSON(http.StatusOK, AuthResponse{Token: token, User: user})
+			return
+		}
+
 		var user User
 		var passwordHash string
 		err := db.QueryRow(`
-			SELECT id, username, COALESCE(email, ''), role, created_at
+			SELECT id, username, COALESCE(email, ''), role, password_hash, created_at
 			FROM users WHERE username = $1
-		`, req.Username).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
+		`, req.Username).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &passwordHash, &user.CreatedAt)
 
 		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{
-				"user_not_found": true,
-				"username":       req.Username,
-			})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден", "user_not_found": true})
 			return
 		}
-
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка входа"})
 			return
 		}
 
-		err = db.QueryRow("SELECT password_hash FROM users WHERE id = $1", user.ID).Scan(&passwordHash)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-			return
-		}
-
-		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+		if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный пароль"})
 			return
 		}

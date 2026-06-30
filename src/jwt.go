@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
-
 var (
+	jwtSecret = []byte("your-secret-key-change-in-production")
+	tokenTTL  = 0 // hours; 0 = no expiration
 	ErrInvalidToken  = errors.New("invalid token")
 	ErrTokenExpired  = errors.New("token expired")
 )
@@ -20,7 +20,22 @@ type TokenClaims struct {
 	UserID   int    `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
-	Exp      int64  `json:"exp"`
+	Exp      int64  `json:"exp,omitempty"`
+}
+
+func initJWTSecret(secret string) {
+	if secret != "" {
+		jwtSecret = []byte(secret)
+	} else {
+		jwtSecret = []byte("your-secret-key-change-in-production")
+	}
+}
+
+func initTokenTTL(ttlHours int) {
+	tokenTTL = ttlHours
+	if tokenTTL < 0 {
+		tokenTTL = 0
+	}
 }
 
 func generateToken(userID int, username, role string) string {
@@ -28,7 +43,9 @@ func generateToken(userID int, username, role string) string {
 		UserID:   userID,
 		Username: username,
 		Role:     role,
-		Exp:      time.Now().Add(24 * time.Hour).Unix(),
+	}
+	if tokenTTL > 0 {
+		claims.Exp = time.Now().Add(time.Duration(tokenTTL) * time.Hour).Unix()
 	}
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))

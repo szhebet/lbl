@@ -3,6 +3,8 @@
 bind = "0.0.0.0"
 enable_delete = true
 log_level = "info"
+#jwt_secret = "change-this-to-a-random-string"
+#token_ttl = 24  # hours; 0 (or commented out) = no expiration
 
 [directories]
 bookarch = "bookarch"
