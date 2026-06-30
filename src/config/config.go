@@ -23,6 +23,8 @@ type ServerConfig struct {
 	Bind         string `toml:"bind"`
 	EnableDelete bool   `toml:"enable_delete"`
 	LogLevel     string `toml:"log_level"`
+	JWTSecret    string `toml:"jwt_secret"`
+	TokenTTL     int    `toml:"token_ttl"` // hours; 0 = no expiration
 }
 
 type DirectoriesConfig struct {

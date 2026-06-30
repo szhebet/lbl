@@ -5,6 +5,32 @@ let booksPage = 1;
 let booksSortBy = 'original_title';
 let booksSortOrder = 'asc';
 let userBookStatuses = {};
+let readlistPage = 1;
+let readlistSortBy = 'created_at';
+let readlistSortOrder = 'desc';
+var personMap = {};
+
+function promptLogin() {
+    if (typeof openLoginModal === 'function') {
+        openLoginModal();
+    } else {
+        alert('Необходимо авторизоваться');
+    }
+}
+
+function handleAuthFailure() {
+    if (typeof authToken !== 'undefined') { authToken = ''; }
+    if (typeof authUser !== 'undefined') { authUser = null; }
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
+    userBookStatuses = {};
+    var btn = document.getElementById('loginBtn');
+    if (btn) {
+        btn.textContent = 'Авторизоваться';
+        btn.classList.remove('logged-in');
+    }
+    promptLogin();
+}
 
 // Load user's book statuses if logged in
 async function loadUserBookStatuses() {
@@ -18,6 +44,8 @@ async function loadUserBookStatuses() {
             var list = await res.json();
             userBookStatuses = {};
             list.forEach(function(ub) { userBookStatuses[ub.edition_id] = ub; });
+        } else if (res.status === 401) {
+            handleAuthFailure();
         }
     } catch(e) {}
 }
@@ -27,11 +55,12 @@ function refreshCurrentView() {
     var booksTab = document.getElementById('tab-books') || document.getElementById('books');
     var activeAuthors = authorsTab && (authorsTab.classList.contains('active') || document.getElementById('tab-authors')?.classList.contains('active'));
     var activeBooks = booksTab && (booksTab.classList.contains('active') || document.getElementById('tab-books')?.classList.contains('active'));
-    // Check both tab naming conventions (admin uses tab-xxx, main page uses xxx)
     var mainAuthors = document.getElementById('authors')?.classList.contains('active');
     var mainBooks = document.getElementById('books')?.classList.contains('active');
+    var mainReadlist = document.getElementById('readlist')?.classList.contains('active');
     if (activeAuthors || mainAuthors) loadAuthors();
     if (activeBooks || mainBooks) loadBooks();
+    if (mainReadlist) loadReadlist();
 }
 
 function getUserBookStatus(editionId) {
@@ -45,7 +74,7 @@ function getStatusClass(status) {
 
 async function setUserBookStatus(editionId, status) {
     var token = localStorage.getItem('auth_token');
-    if (!token) { alert('Необходимо авторизоваться'); return; }
+    if (!token) { promptLogin(); return; }
     try {
         var res = await fetch(API_BASE + '/user/books/' + editionId, {
             method: 'PUT',
@@ -56,6 +85,8 @@ async function setUserBookStatus(editionId, status) {
             var ub = await res.json();
             userBookStatuses[editionId] = ub;
             refreshCurrentView();
+        } else if (res.status === 401) {
+            handleAuthFailure();
         }
     } catch(e) {}
 }
@@ -178,6 +209,9 @@ document.querySelectorAll('.tab').forEach(tab => {
             loadBooks();
         } else if (tab.dataset.tab === 'genres') {
             loadGenres();
+        } else if (tab.dataset.tab === 'readlist') {
+            loadReadlist();
+            loadReadlistNames();
         }
     });
 });
@@ -537,6 +571,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateShelfCount();
     fetchConfig();
     setupBooksTableEvents();
+    setupReadlistEvents();
     loadUserBookStatuses();
 });
 
@@ -2031,4 +2066,620 @@ function openTocEditor(editionId) {
 function closeModal() {
     const modal = document.getElementById('editModal');
     modal.classList.remove('active');
+}
+
+// ============ Список чтения ============
+
+var RL_API = API_BASE + '/user/readlist';
+
+function getAuthHeaders() {
+    var token = localStorage.getItem('auth_token');
+    var h = { 'Content-Type': 'application/json' };
+    if (token) h['Authorization'] = 'Bearer ' + token;
+    return h;
+}
+
+async function loadReadlist() {
+    var container = document.getElementById('readlistTableContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="loading">Загрузка...</div>';
+
+    var listname = document.getElementById('readlistNameFilter').value;
+    var bookname = document.getElementById('readlistBookFilter').value.trim();
+    var author = document.getElementById('readlistAuthorFilter').value.trim();
+    var limit = 50;
+    var offset = (readlistPage - 1) * limit;
+
+    var url = RL_API + '?limit=' + limit + '&offset=' + offset +
+        '&sort_by=' + readlistSortBy + '&sort_order=' + readlistSortOrder;
+    if (listname) url += '&listname=' + encodeURIComponent(listname);
+    if (bookname) url += '&bookname=' + encodeURIComponent(bookname);
+    if (author) url += '&author=' + encodeURIComponent(author);
+
+    try {
+        var res = await fetch(url, { headers: getAuthHeaders() });
+        if (res.status === 401) { handleAuthFailure(); return; }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        renderReadlistTable(data);
+        renderReadlistPagination(data.total, readlistPage, limit);
+    } catch (err) {
+        container.innerHTML = '<div class="error">Ошибка загрузки: ' + escapeHtml(err.message) + '</div>';
+    }
+}
+
+function renderReadlistTable(data) {
+    var container = document.getElementById('readlistTableContainer');
+    var items = data.items || [];
+
+    if (items.length === 0) {
+        container.innerHTML = '<div class="empty">Записи не найдены</div>';
+        return;
+    }
+
+    var html = '<table class="books-table"><thead><tr>';
+    html += '<th class="col-library">_</th>';
+    html += '<th class="col-date sortable" data-sort-by="created_at">Дата создания' + getReadlistSortIcon('created_at') + '</th>';
+    html += '<th class="col-num sortable" data-sort-by="priority">Приоритет' + getReadlistSortIcon('priority') + '</th>';
+    html += '<th class="col-title sortable" data-sort-by="bookname">Название книги' + getReadlistSortIcon('bookname') + '</th>';
+    html += '<th class="col-author sortable" data-sort-by="author">Автор' + getReadlistSortIcon('author') + '</th>';
+    html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
+    html += '<th class="col-format">Формат</th>';
+    html += '<th class="col-shelf">Полка</th>';
+    html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
+
+    items.forEach(function(item) {
+        var dateStr = item.created_at ? item.created_at.substring(0, 10) : '';
+        var priority = item.priority;
+        var bookname = escapeHtml(item.bookname || '');
+        var authorname = escapeHtml(item.author || '');
+        var st = item.status || 'Не заполнено';
+        var hasBook = item.edition_id != null;
+        var editionId = item.edition_id;
+        var formatName = item.format_name || '';
+        var onShelf = item.on_shelf;
+        var shelfIcon = onShelf ? '★' : '☆';
+        var shelfTitle = onShelf ? 'Убрать с полки' : 'Добавить на полку';
+
+        html += '<tr data-id="' + item.id + '">';
+        html += '<td class="col-library">' + (hasBook ? '✓' : '—') + '</td>';
+        html += '<td class="col-date">' + escapeHtml(dateStr) + '</td>';
+        html += '<td class="col-num">' + priority + '</td>';
+        html += '<td class="col-title">' + bookname + '</td>';
+        html += '<td class="col-author">' + authorname + '</td>';
+        html += '<td class="col-status">' +
+            '<select class="status-select ' + getStatusClass(st) + '" data-rlid="' + item.id + '" onchange="setReadlistItemStatus(' + item.id + ', this.value)">';
+        ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
+            html += '<option value="' + s + '"' + (s === st ? ' selected' : '') + '>' + s + '</option>';
+        });
+        html += '</select></td>';
+        html += '<td class="col-format">';
+        if (hasBook && formatName) {
+            html += '<a href="#" class="readlist-download-link" data-edition-id="' + editionId + '">' + escapeHtml(formatName) + '</a>';
+        } else {
+            html += '—';
+        }
+        html += '</td>';
+        html += '<td class="col-shelf">';
+        if (hasBook) {
+            html += '<a href="#" class="readlist-shelf-toggle" data-edition-id="' + editionId + '" data-on-shelf="' + onShelf + '" title="' + shelfTitle + '">' + shelfIcon + '</a>';
+        } else {
+            html += '—';
+        }
+        html += '</td>';
+        html += '<td class="col-actions">';
+        html += '<button class="btn btn-small edit-readlist-btn" data-id="' + item.id + '" title="Редактировать">✎</button>';
+        html += '<button class="btn btn-small delete-readlist-btn" data-id="' + item.id + '" title="Удалить">✕</button>';
+        html += '</td></tr>';
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+
+    container.querySelectorAll('th.sortable').forEach(function(th) {
+        th.addEventListener('click', function(e) {
+            var sortBy = this.dataset.sortBy;
+            if (sortBy) {
+                if (readlistSortBy === sortBy) {
+                    readlistSortOrder = readlistSortOrder === 'asc' ? 'desc' : 'asc';
+                } else {
+                    readlistSortBy = sortBy;
+                    readlistSortOrder = 'asc';
+                }
+                readlistPage = 1;
+                loadReadlist();
+            }
+        });
+    });
+}
+
+function getReadlistSortIcon(sortBy) {
+    if (readlistSortBy !== sortBy) return ' ↕';
+    return readlistSortOrder === 'asc' ? ' ▲' : ' ▼';
+}
+
+function renderReadlistPagination(total, page, limit) {
+    var totalPages = Math.ceil(total / limit);
+    var topEl = document.getElementById('readlistPagination');
+    var bottomEl = document.getElementById('readlistPaginationBottom');
+    if (!topEl) return;
+
+    if (totalPages <= 1) {
+        topEl.innerHTML = '<span class="page-info">' + total + ' записей</span>';
+        if (bottomEl) bottomEl.innerHTML = '';
+        return;
+    }
+
+    var html = '<span class="page-info">' + total + ' записей, стр. ' + page + ' из ' + totalPages + '</span>';
+    if (page > 1) {
+        html += '<button class="pagination-btn" data-page="1">&laquo;</button>';
+        html += '<button class="pagination-btn" data-page="' + (page - 1) + '">&lsaquo;</button>';
+    }
+    var start = Math.max(1, page - 2);
+    var end = Math.min(totalPages, page + 2);
+    for (var i = start; i <= end; i++) {
+        html += '<button class="pagination-btn' + (i === page ? ' active' : '') + '" data-page="' + i + '">' + i + '</button>';
+    }
+    if (page < totalPages) {
+        html += '<button class="pagination-btn" data-page="' + (page + 1) + '">&rsaquo;</button>';
+        html += '<button class="pagination-btn" data-page="' + totalPages + '">&raquo;</button>';
+    }
+
+    topEl.innerHTML = html;
+    if (bottomEl) bottomEl.innerHTML = html;
+}
+
+function setupReadlistEvents() {
+    var container = document.getElementById('readlistTableContainer');
+    if (!container) return;
+
+    // Filter apply/clear
+    document.getElementById('applyReadlistFilters')?.addEventListener('click', function() {
+        readlistPage = 1;
+        loadReadlist();
+    });
+    document.getElementById('clearReadlistFilters')?.addEventListener('click', function() {
+        document.getElementById('readlistBookFilter').value = '';
+        document.getElementById('readlistAuthorFilter').value = '';
+        document.getElementById('readlistNameFilter').value = '';
+        readlistPage = 1;
+        loadReadlist();
+    });
+
+    // Enter key in filters
+    ['readlistBookFilter', 'readlistAuthorFilter'].forEach(function(id) {
+        var input = document.getElementById(id);
+        if (input) {
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    readlistPage = 1;
+                    loadReadlist();
+                }
+            });
+        }
+    });
+
+    // Listname filter change
+    document.getElementById('readlistNameFilter')?.addEventListener('change', function() {
+        readlistPage = 1;
+        loadReadlist();
+    });
+
+    // Create button
+    document.getElementById('createReadlistBtn')?.addEventListener('click', function() {
+        openCreateReadlistModal();
+    });
+
+    // Author text input → filter select
+    var rlAuthorInput = document.getElementById('rlAuthor');
+    var rlAuthorSelect = document.getElementById('rlAuthorSelect');
+    if (rlAuthorInput) {
+        rlAuthorInput.addEventListener('input', function() {
+            var val = this.value.toLowerCase();
+            var opts = rlAuthorSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                var matches = opts[i].textContent.toLowerCase().indexOf(val) !== -1;
+                opts[i].style.display = matches ? '' : 'none';
+                if (matches) matched.push(opts[i]);
+            }
+            if (matched.length === 0) {
+                document.getElementById('rlAuthorId').value = '';
+            } else if (matched.length === 1) {
+                matched[0].selected = true;
+                document.getElementById('rlAuthorId').value = matched[0].value;
+                if (this.value !== matched[0].textContent) {
+                    this.value = matched[0].textContent;
+                }
+            }
+            if (!val) {
+                document.getElementById('rlAuthorId').value = '';
+            }
+            rlAuthorSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
+        });
+    }
+    // Author select change → fill text
+    if (rlAuthorSelect) {
+        rlAuthorSelect.addEventListener('change', function() {
+            if (this.value) {
+                document.getElementById('rlAuthor').value = this.options[this.selectedIndex].textContent;
+                document.getElementById('rlAuthorId').value = this.value;
+            } else {
+                document.getElementById('rlAuthorId').value = '';
+            }
+        });
+    }
+
+    // Book text input → filter select
+    var rlBookInput = document.getElementById('rlBookname');
+    var rlBookSelect = document.getElementById('rlBookSelect');
+    if (rlBookInput) {
+        rlBookInput.addEventListener('input', function() {
+            var val = this.value.toLowerCase();
+            var opts = rlBookSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                var matches = opts[i].textContent.toLowerCase().indexOf(val) !== -1;
+                opts[i].style.display = matches ? '' : 'none';
+                if (matches) matched.push(opts[i]);
+            }
+            if (matched.length === 0) {
+                document.getElementById('rlBookId').value = '';
+            } else if (matched.length === 1) {
+                matched[0].selected = true;
+                document.getElementById('rlBookId').value = matched[0].value;
+                var matchedTitle = matched[0].dataset.title || matched[0].textContent;
+                if (this.value !== matchedTitle) {
+                    this.value = matchedTitle;
+                }
+                var firstAuthor = matched[0].dataset.firstAuthor || '';
+                if (firstAuthor) {
+                    document.getElementById('rlAuthor').value = firstAuthor;
+                    var aid = personMap[firstAuthor.toLowerCase()];
+                    document.getElementById('rlAuthorId').value = aid || '';
+                }
+            }
+            if (!val) {
+                document.getElementById('rlBookId').value = '';
+            }
+            rlBookSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
+        });
+    }
+    if (rlBookSelect) {
+        rlBookSelect.addEventListener('change', function() {
+            if (this.value) {
+                var opt = this.options[this.selectedIndex];
+                document.getElementById('rlBookname').value = opt.dataset.title || opt.textContent;
+                document.getElementById('rlBookId').value = this.value;
+                var firstAuthor = opt.dataset.firstAuthor || '';
+                if (firstAuthor) {
+                    document.getElementById('rlAuthor').value = firstAuthor;
+                    var aid = personMap[firstAuthor.toLowerCase()];
+                    document.getElementById('rlAuthorId').value = aid || '';
+                }
+            } else {
+                document.getElementById('rlBookId').value = '';
+            }
+        });
+    }
+
+    // Create/Edit form submit
+    document.getElementById('readlistForm')?.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var editId = document.getElementById('rlEditId').value;
+        var authorIdVal = document.getElementById('rlAuthorId').value;
+        var authorId = authorIdVal ? parseInt(authorIdVal) : null;
+        var bookIdVal = document.getElementById('rlBookId').value;
+        var bookId = bookIdVal ? parseInt(bookIdVal) : null;
+        var data = {
+            listname: document.getElementById('rlListname').value.trim(),
+            bookname: document.getElementById('rlBookname').value.trim(),
+            author: document.getElementById('rlAuthor').value.trim(),
+            priority: parseInt(document.getElementById('rlPriority').value) || 0,
+            author_id: authorId,
+            book_id: bookId,
+            comment: document.getElementById('rlComment').value.trim(),
+            status: document.getElementById('rlStatus').value
+        };
+
+        if (!data.listname) { alert('Укажите название списка'); return; }
+
+        try {
+            var url = RL_API;
+            var method = 'POST';
+            if (editId) {
+                url += '/' + editId;
+                method = 'PUT';
+            }
+            var res = await fetch(url, {
+                method: method,
+                headers: getAuthHeaders(),
+                body: JSON.stringify(data)
+            });
+            if (res.status === 401) { handleAuthFailure(); return; }
+            if (!res.ok) {
+                var err = await res.json();
+                alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                return;
+            }
+            closeReadlistModal();
+            loadReadlist();
+            loadReadlistNames();
+        } catch (err) {
+            alert('Ошибка: ' + err.message);
+        }
+    });
+
+    // Double-click on row → edit
+    container.addEventListener('dblclick', function(e) {
+        var row = e.target.closest('tr[data-id]');
+        if (row) {
+            openEditReadlistModal(row.dataset.id);
+        }
+    });
+
+    // Event delegation for table actions
+    container.addEventListener('click', function(e) {
+        var editBtn = e.target.closest('.edit-readlist-btn');
+        if (editBtn) {
+            e.stopPropagation();
+            openEditReadlistModal(editBtn.dataset.id);
+            return;
+        }
+
+        var deleteBtn = e.target.closest('.delete-readlist-btn');
+        if (deleteBtn) {
+            e.preventDefault();
+            var id = deleteBtn.dataset.id;
+            if (!confirm('Удалить запись из списка чтения?')) return;
+            (async function() {
+                try {
+                    var r = await fetch(RL_API + '/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+                    if (r.status === 401) { handleAuthFailure(); return; }
+                    if (r.ok) {
+                        loadReadlist();
+                        loadReadlistNames();
+                    } else {
+                        var err = await r.json();
+                        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                    }
+                } catch (err) { alert('Ошибка: ' + err.message); }
+            })();
+            return;
+        }
+
+        var downloadLink = e.target.closest('.readlist-download-link');
+        if (downloadLink) {
+            e.preventDefault();
+            var eid = downloadLink.dataset.editionId;
+            window.location.href = API_BASE + '/books/' + eid + '/download';
+            return;
+        }
+
+        var shelfEl = e.target.closest('.readlist-shelf-toggle');
+        if (shelfEl) {
+            e.preventDefault();
+            var eid = shelfEl.dataset.editionId;
+            var onShelf = shelfEl.dataset.on_shelf === 'true';
+            (async function() {
+                try {
+                    var r = await fetch(API_BASE + '/books/' + eid + '/shelf', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ on_shelf: !onShelf })
+                    });
+                    if (r.ok) {
+                        shelfEl.dataset.on_shelf = !onShelf;
+                        shelfEl.textContent = !onShelf ? '★' : '☆';
+                        shelfEl.title = !onShelf ? 'Убрать с полки' : 'Добавить на полку';
+                        updateShelfCount();
+                    }
+                } catch (err) { console.error(err); }
+            })();
+            return;
+        }
+
+        var pageBtn = e.target.closest('.pagination-btn');
+        if (pageBtn) {
+            var p = parseInt(pageBtn.dataset.page);
+            if (p !== readlistPage) {
+                readlistPage = p;
+                loadReadlist();
+                window.scrollTo({ top: document.querySelector('.filters').offsetTop, behavior: 'smooth' });
+            }
+        }
+    });
+}
+
+async function loadReadlistNames() {
+    try {
+        var res = await fetch(RL_API + '/names', { headers: getAuthHeaders() });
+        if (!res.ok) return;
+        var names = await res.json();
+        var select = document.getElementById('readlistNameFilter');
+        if (!select) return;
+        var currentVal = select.value;
+        select.innerHTML = '<option value="">Все списки</option>';
+        var seen = {};
+        names.forEach(function(n) {
+            if (!seen[n]) {
+                seen[n] = true;
+                var opt = document.createElement('option');
+                opt.value = n;
+                opt.textContent = n;
+                select.appendChild(opt);
+            }
+        });
+        if (currentVal) select.value = currentVal;
+    } catch(e) {}
+}
+
+async function loadAuthorSelect() {
+    var select = document.getElementById('rlAuthorSelect');
+    if (!select) return;
+    try {
+        var res = await fetch(API_BASE + '/persons');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var persons = await res.json();
+        personMap = {};
+        select.innerHTML = '<option value="">— выберите автора —</option>';
+        persons.forEach(function(p) {
+            var name = p.last_name + ' ' + p.first_name;
+            personMap[name.trim().toLowerCase()] = p.id;
+            var opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = name;
+            select.appendChild(opt);
+        });
+    } catch(e) {
+        select.innerHTML = '<option value="">— ошибка загрузки —</option>';
+    }
+}
+
+async function loadBookSelect() {
+    var select = document.getElementById('rlBookSelect');
+    if (!select) return;
+    try {
+        var res = await fetch(API_BASE + '/books?limit=9999');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        var books = data.books || [];
+        select.innerHTML = '<option value="">— выберите книгу —</option>';
+        var seen = {};
+        books.forEach(function(b) {
+            var title = (b.edition_title || b.original_title || '').trim();
+            if (!title || seen[title]) return;
+            seen[title] = true;
+            var opt = document.createElement('option');
+            opt.value = b.edition_id;
+            opt.dataset.title = title;
+            var author = '';
+            if (typeof b.authors === 'string') {
+                author = b.authors;
+            } else if (b.authors && typeof b.authors.String === 'string') {
+                author = b.authors.String;
+            }
+            var firstAuthor = author ? author.split(',')[0].trim() : '';
+            opt.dataset.firstAuthor = firstAuthor;
+            opt.textContent = title + (author ? ' (' + author + ')' : '');
+            select.appendChild(opt);
+        });
+    } catch(e) {
+        select.innerHTML = '<option value="">— ошибка загрузки —</option>';
+    }
+}
+
+function openCreateReadlistModal() {
+    document.getElementById('readlistModalTitle').textContent = 'Новая запись';
+    document.getElementById('rlEditId').value = '';
+    document.getElementById('rlListname').value = document.getElementById('readlistNameFilter').value || 'default';
+    document.getElementById('rlBookname').value = '';
+    document.getElementById('rlBookId').value = '';
+    document.getElementById('rlBookSelect').style.display = 'none';
+    document.getElementById('rlAuthor').value = '';
+    document.getElementById('rlAuthorId').value = '';
+    document.getElementById('rlAuthorSelect').style.display = 'none';
+    document.getElementById('rlPriority').value = '0';
+    document.getElementById('rlComment').value = '';
+    document.getElementById('rlStatus').value = 'Не заполнено';
+    document.getElementById('readlistModal').style.display = 'block';
+    document.getElementById('readlistModal').classList.add('active');
+    loadAuthorSelect();
+    loadBookSelect();
+}
+
+async function openEditReadlistModal(id) {
+    try {
+        var res = await fetch(RL_API + '?limit=1&offset=0&sort_by=created_at&sort_order=desc', {
+            headers: getAuthHeaders()
+        });
+        if (!res.ok) return;
+        // We need to fetch the specific item. Use the listing and filter by id (client-side).
+        // Better approach: fetch all (or use a dedicated GET endpoint).
+        // For simplicity, we'll refetch the list with a large limit and find the item.
+        var allRes = await fetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
+        if (!allRes.ok) return;
+        var data = await allRes.json();
+        var items = data.items || [];
+        var item = null;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].id == id) { item = items[i]; break; }
+        }
+        if (!item) { alert('Запись не найдена'); return; }
+
+        document.getElementById('readlistModalTitle').textContent = 'Редактирование записи';
+        document.getElementById('rlEditId').value = item.id;
+        document.getElementById('rlListname').value = item.listname || 'default';
+        document.getElementById('rlBookname').value = item.bookname || '';
+        document.getElementById('rlBookId').value = item.book_id || '';
+        document.getElementById('rlBookSelect').style.display = 'none';
+        document.getElementById('rlAuthor').value = item.author || '';
+        document.getElementById('rlAuthorId').value = item.author_id || '';
+        document.getElementById('rlAuthorSelect').style.display = 'none';
+        document.getElementById('rlPriority').value = item.priority || 0;
+        document.getElementById('rlComment').value = item.comment || '';
+        document.getElementById('rlStatus').value = item.status || 'Не заполнено';
+        document.getElementById('readlistModal').style.display = 'block';
+        document.getElementById('readlistModal').classList.add('active');
+        loadAuthorSelect().then(function() {
+            if (item.author_id) {
+                var sel = document.getElementById('rlAuthorSelect');
+                for (var i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].value == item.author_id) {
+                        sel.value = item.author_id;
+                        break;
+                    }
+                }
+            }
+        });
+        loadBookSelect().then(function() {
+            if (item.book_id) {
+                var sel = document.getElementById('rlBookSelect');
+                for (var i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].value == item.book_id) {
+                        sel.value = item.book_id;
+                        break;
+                    }
+                }
+            }
+        });
+    } catch (err) {
+        alert('Ошибка: ' + err.message);
+    }
+}
+
+function closeReadlistModal() {
+    var modal = document.getElementById('readlistModal');
+    modal.style.display = 'none';
+    modal.classList.remove('active');
+}
+
+async function setReadlistItemStatus(id, status) {
+    var token = localStorage.getItem('auth_token');
+    if (!token) { promptLogin(); return; }
+    try {
+        var allRes = await fetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
+        if (!allRes.ok) { if (allRes.status === 401) handleAuthFailure(); return; }
+        var data = await allRes.json();
+        var items = data.items || [];
+        var item = null;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].id == id) { item = items[i]; break; }
+        }
+        if (!item) return;
+        item.status = status;
+        var res = await fetch(RL_API + '/' + id, {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(item)
+        });
+        if (res.status === 401) { handleAuthFailure(); return; }
+        if (!res.ok) {
+            var err = await res.json();
+            alert('Ошибка: ' + (err.error || ''));
+        }
+    } catch(e) {}
 }
