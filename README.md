@@ -28,6 +28,52 @@
 | DOC | LLM (первые 3 страницы) | OLE2 + UTF-16LE (mscfb) |
 | ZIP | Автоопределение формата внутри | FB2, EPUB, PDF, DOC, DOCX |
 
+
+## Быстрый старт
+Проще всего установить через docker compose, см раздел ниже
+
+### Docker Compose
+
+```bash
+git clone https://github.com/szhebet/lbl.git
+cd lbl
+
+cp config.toml.example config.toml
+cp env.example .env
+# Отредактировать .env (пароль, пути)
+
+docker compose up -d --build
+```
+
+Приложение: http://localhost:9092
+
+
+Для тех, кто ищет варианты посложнее...
+### Локальный запуск
+
+#### Требования
+
+- Go 1.25+
+- PostgreSQL 17+
+
+#### Инструкции
+
+```bash
+git clone https://github.com/szhebet/lbl.git
+cd lbl
+
+# Копировать и отредактировать конфиг
+cp config.toml.example config.toml
+
+# Сборка
+go build -o library_app ./src/
+
+# Запуск (БД должна быть доступна, схема создаётся автоматически)
+./library_app
+```
+
+Приложение доступно по адресу: http://localhost:9091
+
 ## Конфигурация
 
 Приложение читает настройки в следующем порядке (последний имеет наивысший приоритет):
@@ -100,45 +146,6 @@
 - Токен передаётся в заголовке `Authorization: Bearer <token>`.
 - Хранится в `localStorage` на фронтенде.
 
-## Быстрый старт
-
-### Требования
-
-- Go 1.25+
-- PostgreSQL 17+
-
-### Локальный запуск
-
-```bash
-git clone https://github.com/szhebet/lbl.git
-cd lbl
-
-# Копировать и отредактировать конфиг
-cp config.toml.example config.toml
-
-# Сборка
-go build -o library_app ./src/
-
-# Запуск (БД должна быть доступна, схема создаётся автоматически)
-./library_app
-```
-
-Приложение доступно по адресу: http://localhost:9091
-
-### Docker Compose
-
-```bash
-git clone https://github.com/szhebet/lbl.git
-cd lbl
-
-cp config.toml.example config.toml
-cp env.example .env
-# Отредактировать .env (пароль, пути)
-
-docker compose up -d --build
-```
-
-Приложение: http://localhost:9092
 
 ## API
 
