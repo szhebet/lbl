@@ -230,6 +230,22 @@
         </div>
     </div>
 
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="editForm">
+                <div id="modalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/import.js"></script>
@@ -291,6 +307,11 @@
 
     document.getElementById('adminModal').addEventListener('click', function(e) {
         if (e.target === this) closeAdminModal();
+    });
+
+    document.addEventListener('click', function(e) {
+        var modal = document.getElementById('editModal');
+        if (e.target === modal) closeModal();
     });
 
     // ─── Shared: filter + sort + render ───────────────────────
