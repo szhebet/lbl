@@ -2,7 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -202,5 +204,330 @@ func listUserBooks(db *sql.DB) gin.HandlerFunc {
 			books = append(books, ub)
 		}
 		c.JSON(http.StatusOK, books)
+	}
+}
+
+// ReadList types
+
+type ReadListItem struct {
+	ID         int    `json:"id"`
+	Listname   string `json:"listname"`
+	Bookname   string `json:"bookname"`
+	Author     string `json:"author"`
+	Priority   int    `json:"priority"`
+	AuthorID   *int   `json:"author_id"`
+	BookID     *int   `json:"book_id"`
+	UserID     int    `json:"user_id"`
+	Comment    string `json:"comment"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+	FormatName string `json:"format_name"`
+	OnShelf    bool   `json:"on_shelf"`
+	EditionID  *int   `json:"edition_id"`
+}
+
+type CreateReadListRequest struct {
+	Listname string `json:"listname"`
+	Bookname string `json:"bookname"`
+	Author   string `json:"author"`
+	Priority int    `json:"priority"`
+	AuthorID *int   `json:"author_id"`
+	BookID   *int   `json:"book_id"`
+	Comment  string `json:"comment"`
+	Status   string `json:"status"`
+}
+
+var validReadListStatuses = map[string]bool{
+	"Не заполнено": true, "Прочитано": true, "Читаю": true,
+	"Отложил": true, "Бросил": true,
+}
+
+func getReadListItems(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusOK, gin.H{"total": 0, "items": []interface{}{}})
+			return
+		}
+
+		listname := c.Query("listname")
+		bookname := c.Query("bookname")
+		author := c.Query("author")
+		sortBy := c.DefaultQuery("sort_by", "created_at")
+		sortOrder := c.DefaultQuery("sort_order", "desc")
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+		allowedSorts := map[string]string{
+			"created_at": "rl.created_at",
+			"priority":   "rl.priority",
+			"bookname":   "rl.bookname",
+			"author":     "rl.author",
+			"status":     "rl.status",
+		}
+		sortCol, ok := allowedSorts[sortBy]
+		if !ok {
+			sortCol = "rl.created_at"
+		}
+		if sortOrder != "desc" {
+			sortOrder = "asc"
+		}
+
+		whereClause := "WHERE rl.user_id = $1"
+		args := []interface{}{uid}
+		argNum := 2
+
+		if listname != "" {
+			whereClause += fmt.Sprintf(" AND rl.listname = $%d", argNum)
+			args = append(args, listname)
+			argNum++
+		}
+		if bookname != "" {
+			whereClause += fmt.Sprintf(" AND rl.bookname ILIKE $%d", argNum)
+			args = append(args, "%"+bookname+"%")
+			argNum++
+		}
+		if author != "" {
+			whereClause += fmt.Sprintf(" AND rl.author ILIKE $%d", argNum)
+			args = append(args, "%"+author+"%")
+			argNum++
+		}
+
+		// Count
+		var total int
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM read_list rl %s", whereClause)
+		db.QueryRow(countQuery, args...).Scan(&total)
+
+		// Fetch
+		query := fmt.Sprintf(`
+			SELECT rl.id, rl.listname, rl.bookname, rl.author, rl.priority,
+				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
+				rl.created_at,
+				COALESCE(f.name, '') AS format_name,
+				COALESCE(e.on_shelf, false) AS on_shelf,
+				e.id AS edition_id
+			FROM read_list rl
+			LEFT JOIN editions e ON e.id = rl.book_id
+			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+			LEFT JOIN formats f ON f.id = ef.format_id
+			%s
+			ORDER BY %s %s
+			LIMIT $%d OFFSET $%d
+		`, whereClause, sortCol, sortOrder, argNum, argNum+1)
+		args = append(args, limit, offset)
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var items = make([]ReadListItem, 0)
+		for rows.Next() {
+			var item ReadListItem
+			var editionID sql.NullInt64
+			if err := rows.Scan(&item.ID, &item.Listname, &item.Bookname, &item.Author,
+				&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
+				&item.Comment, &item.Status, &item.CreatedAt,
+				&item.FormatName, &item.OnShelf, &editionID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			if editionID.Valid {
+				eid := int(editionID.Int64)
+				item.EditionID = &eid
+			}
+			items = append(items, item)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"total": total, "items": items})
+	}
+}
+
+func createReadListItem(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		var req CreateReadListRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if req.Listname == "" {
+			req.Listname = "default"
+		}
+		if !validReadListStatuses[req.Status] {
+			req.Status = "Не заполнено"
+		}
+
+		var item ReadListItem
+		var editionID sql.NullInt64
+		err := db.QueryRow(`
+			INSERT INTO read_list (listname, bookname, author, priority, author_id, book_id, user_id, comment, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::user_book_status)
+			RETURNING id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, created_at
+		`, req.Listname, req.Bookname, req.Author, req.Priority, req.AuthorID, req.BookID,
+			uid, req.Comment, req.Status).Scan(
+			&item.ID, &item.Listname, &item.Bookname, &item.Author,
+			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
+			&item.Comment, &item.Status, &item.CreatedAt)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Fetch format_name and on_shelf
+		if item.BookID != nil {
+			db.QueryRow(`
+				SELECT COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
+				FROM editions e
+				LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+				LEFT JOIN formats f ON f.id = ef.format_id
+				WHERE e.id = $1
+			`, *item.BookID).Scan(&item.FormatName, &item.OnShelf, &editionID)
+			if editionID.Valid {
+				eid := int(editionID.Int64)
+				item.EditionID = &eid
+			}
+		}
+
+		c.JSON(http.StatusCreated, item)
+	}
+}
+
+func updateReadListItem(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		id := c.Param("id")
+
+		var req CreateReadListRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if !validReadListStatuses[req.Status] {
+			req.Status = "Не заполнено"
+		}
+
+		result, err := db.Exec(`
+			UPDATE read_list SET
+				listname = $1, bookname = $2, author = $3, priority = $4,
+				author_id = $5, book_id = $6, comment = $7, status = $8::user_book_status
+			WHERE id = $9 AND user_id = $10
+		`, req.Listname, req.Bookname, req.Author, req.Priority,
+			req.AuthorID, req.BookID, req.Comment, req.Status, id, uid)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
+			return
+		}
+
+		var item ReadListItem
+		var editionID sql.NullInt64
+		err = db.QueryRow(`
+			SELECT rl.id, rl.listname, rl.bookname, rl.author, rl.priority,
+				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text, rl.created_at,
+				COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
+			FROM read_list rl
+			LEFT JOIN editions e ON e.id = rl.book_id
+			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+			LEFT JOIN formats f ON f.id = ef.format_id
+			WHERE rl.id = $1 AND rl.user_id = $2
+		`, id, uid).Scan(
+			&item.ID, &item.Listname, &item.Bookname, &item.Author,
+			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
+			&item.Comment, &item.Status, &item.CreatedAt,
+			&item.FormatName, &item.OnShelf, &editionID)
+		if editionID.Valid {
+			eid := int(editionID.Int64)
+			item.EditionID = &eid
+		}
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, item)
+	}
+}
+
+func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		id := c.Param("id")
+
+		result, err := db.Exec("DELETE FROM read_list WHERE id = $1 AND user_id = $2", id, uid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
+			return
+		}
+
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func getReadListNames(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusOK, []interface{}{})
+			return
+		}
+
+		rows, err := db.Query(`
+			SELECT DISTINCT listname FROM read_list
+			WHERE user_id = $1 ORDER BY listname
+		`, uid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var names []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			names = append(names, name)
+		}
+		c.JSON(http.StatusOK, names)
 	}
 }

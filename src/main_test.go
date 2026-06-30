@@ -1513,3 +1513,326 @@ func TestSetUserBookStatusUnauthenticated(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 }
+
+func TestCreateReadListItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'viewer')
+		RETURNING id
+	`, "rl_test_create_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+	}
+
+	body := map[string]interface{}{
+		"listname": "testlist",
+		"bookname": "Test Book",
+		"author":   "Test Author",
+		"priority": 5,
+		"comment":  "test comment",
+		"status":   "Читаю",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	t.Logf("Response: %d, body: %s", w.Code, w.Body.String())
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var item ReadListItem
+	err = json.Unmarshal(w.Body.Bytes(), &item)
+	require.NoError(t, err)
+	assert.Equal(t, "testlist", item.Listname)
+	assert.Equal(t, "Test Book", item.Bookname)
+	assert.Equal(t, "Test Author", item.Author)
+	assert.Equal(t, 5, item.Priority)
+	assert.Equal(t, "test comment", item.Comment)
+	assert.Equal(t, "Читаю", item.Status)
+	assert.Equal(t, userID, item.UserID)
+	assert.NotZero(t, item.ID)
+}
+
+func TestGetReadListItems(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'viewer')
+		RETURNING id
+	`, "rl_test_list_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	// Insert a test item
+	_, err = db.Exec(`
+		INSERT INTO read_list (listname, bookname, author, priority, user_id, comment, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'Читаю'::user_book_status)
+	`, "default", "Book1", "Author1", 1, userID, "comment1")
+	require.NoError(t, err)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.GET("", getReadListItems(db))
+	}
+
+	req, _ := http.NewRequest("GET", "/api/v1/user/readlist", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, response.Total, 1)
+	assert.GreaterOrEqual(t, len(response.Items), 1)
+}
+
+func TestReadListItemAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Test without auth header
+	body := map[string]interface{}{
+		"listname": "default",
+		"bookname": "B",
+		"author":   "A",
+		"status":   "Не заполнено",
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// GET without auth header
+	req2, _ := http.NewRequest("GET", "/api/v1/user/readlist", nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code) // authMiddleware is optional, returns empty
+}
+
+func TestReadListItemUserIsolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create two users
+	var user1ID, user2ID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_iso1_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&user1ID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id IN ($1,$2)", user1ID, user2ID)
+	defer db.Exec("DELETE FROM users WHERE id IN ($1,$2)", user1ID, user2ID)
+
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_iso2_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&user2ID)
+	require.NoError(t, err)
+
+	// User1 creates items
+	_, err = db.Exec(`
+		INSERT INTO read_list (listname, bookname, author, priority, user_id, status)
+		VALUES ('default', 'User1Book', 'User1Author', 1, $1, 'Читаю'::user_book_status)
+	`, user1ID)
+	require.NoError(t, err)
+
+	token2 := generateToken(user2ID, "user2", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.GET("", getReadListItems(db))
+	}
+
+	req, _ := http.NewRequest("GET", "/api/v1/user/readlist", nil)
+	req.Header.Set("Authorization", "Bearer "+token2)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, 0, response.Total, "User2 should not see User1's items")
+}
+
+func TestReadListItemUpdateDelete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_upd_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	// Create item
+	var itemID int
+	err = db.QueryRow(`
+		INSERT INTO read_list (listname, bookname, author, priority, user_id, status)
+		VALUES ('oldlist', 'OldBook', 'OldAuthor', 1, $1, 'Не заполнено'::user_book_status)
+		RETURNING id
+	`, userID).Scan(&itemID)
+	require.NoError(t, err)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.DELETE("/:id", deleteReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Update
+	updateBody := map[string]interface{}{
+		"listname": "newlist",
+		"bookname": "NewBook",
+		"author":   "NewAuthor",
+		"priority": 10,
+		"comment":  "updated",
+		"status":   "Прочитано",
+	}
+	bodyJSON, _ := json.Marshal(updateBody)
+	req, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+strconv.Itoa(itemID), bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	t.Logf("Update response: %d, body: %s", w.Code, w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated ReadListItem
+	err = json.Unmarshal(w.Body.Bytes(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "newlist", updated.Listname)
+	assert.Equal(t, "NewBook", updated.Bookname)
+	assert.Equal(t, "Прочитано", updated.Status)
+	assert.Equal(t, 10, updated.Priority)
+
+	// Delete
+	req2, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+strconv.Itoa(itemID), nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusNoContent, w2.Code)
+
+	// Verify deleted
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM read_list WHERE id = $1", itemID).Scan(&count)
+	assert.Equal(t, 0, count)
+}
+
+func TestReadListNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_names_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	// Create items with different listnames
+	_, err = db.Exec(`
+		INSERT INTO read_list (listname, bookname, user_id, status) VALUES
+		('favorites', 'B1', $1, 'Не заполнено'::user_book_status),
+		('favorites', 'B2', $1, 'Не заполнено'::user_book_status),
+		('wishlist', 'B3', $1, 'Не заполнено'::user_book_status)
+	`, userID)
+	require.NoError(t, err)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.GET("/names", getReadListNames(db))
+	}
+
+	req, _ := http.NewRequest("GET", "/api/v1/user/readlist/names", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var names []string
+	err = json.Unmarshal(w.Body.Bytes(), &names)
+	require.NoError(t, err)
+	assert.Contains(t, names, "favorites")
+	assert.Contains(t, names, "wishlist")
+	assert.Len(t, names, 2)
+}

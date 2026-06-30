@@ -48,7 +48,13 @@ var embeddedMigration21 string
 //go:embed migration_2.2.sql
 var embeddedMigration22 string
 
-const currentDBVersion = "2.2"
+//go:embed migration_2.3.sql
+var embeddedMigration23 string
+
+//go:embed migration_2.4.sql
+var embeddedMigration24 string
+
+const currentDBVersion = "2.4"
 
 type migration struct {
 	Version     string
@@ -81,6 +87,16 @@ var migrations = []migration{
 		Version:     "2.2",
 		Description: "Add user_books table",
 		SQL:         stripSchema(embeddedMigration22),
+	},
+	{
+		Version:     "2.3",
+		Description: "Add read_list table",
+		SQL:         stripSchema(embeddedMigration23),
+	},
+	{
+		Version:     "2.4",
+		Description: "Triggers for read_list ↔ user_books status sync",
+		SQL:         stripSchema(embeddedMigration24),
 	},
 }
 
@@ -530,6 +546,17 @@ func main() {
 			userBooks.GET("", listUserBooks(db))
 			userBooks.GET("/:edition_id", getUserBook(db))
 			userBooks.PUT("/:edition_id", setUserBook(db))
+		}
+
+		// Read list (requires auth)
+		readList := r.Group("/api/v1/user/readlist")
+		readList.Use(authMiddleware())
+		{
+			readList.GET("", getReadListItems(db))
+			readList.POST("", createReadListItem(db))
+			readList.GET("/names", getReadListNames(db))
+			readList.PUT("/:id", updateReadListItem(db))
+			readList.DELETE("/:id", deleteReadListItem(db))
 		}
 	}
 
@@ -3557,7 +3584,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Моя полка</title>
+    <title>Общая полка</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <style>
         .shelf-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -3573,7 +3600,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 <body>
     <div class="container">
         <a href="/" class="back-link">← Назад к библиотеке</a>
-        <h1>📚 Моя полка</h1>
+        <h1>📚 Общая полка</h1>
         <p>Книг на полке: ` + fmt.Sprintf("%d", len(books)) + `</p>
         ` + func() string {
             if len(books) > 0 {

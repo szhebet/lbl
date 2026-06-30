@@ -14,6 +14,7 @@
             <button class="tab active" data-tab="authors">Авторы</button>
             <button class="tab" data-tab="books">Книги</button>
             <button class="tab" data-tab="genres">Жанры</button>
+            <button class="tab" data-tab="readlist">Список чтения</button>
             <span class="tabs-spacer"></span>
             <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
             <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
@@ -117,10 +118,93 @@
                     <div class="loading">Загрузка...</div>
                 </div>
             </div>
+
+            <!-- Вкладка Список чтения -->
+            <div id="readlist" class="tab-content">
+                <div class="filters">
+                    <div class="filter-group">
+                        <input type="hidden" id="readlistUserId" value="">
+                        <select id="readlistNameFilter" class="filter-select">
+                            <option value="">Все списки</option>
+                            <option value="default">default</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="readlistBookFilter" placeholder="Поиск по названию...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="readlistAuthorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <button id="applyReadlistFilters" class="btn">Применить</button>
+                    <button id="clearReadlistFilters" class="btn btn-secondary">Очистить</button>
+                    <button id="createReadlistBtn" class="btn btn-primary" style="margin-left:auto">Создать</button>
+                </div>
+
+                <div class="pagination" id="readlistPagination"></div>
+                <div id="readlistTableContainer">
+                    <div class="loading">Загрузка...</div>
+                </div>
+                <div class="pagination" id="readlistPaginationBottom"></div>
+            </div>
         </main>
     </div>
 
     <!-- Модальное окно для редактирования -->
+    <!-- Модальное окно для создания элемента списка чтения -->
+    <div id="readlistModal" class="modal" style="display:none">
+        <div class="modal-content" style="max-width:500px">
+            <div class="modal-header">
+                <h2 id="readlistModalTitle">Новая запись</h2>
+                <button class="modal-close" onclick="closeReadlistModal()">&times;</button>
+            </div>
+            <form id="readlistForm" style="padding:20px">
+                <input type="hidden" id="rlEditId" value="">
+                <div class="form-group">
+                    <label for="rlListname">Список:</label>
+                    <input type="text" id="rlListname" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="rlBookname">Название книги:</label>
+                    <input type="hidden" id="rlBookId" value="">
+                    <input type="text" id="rlBookname" class="form-input" autocomplete="off" placeholder="Начните вводить название...">
+                    <select id="rlBookSelect" class="form-input" size="5" style="margin-top:5px;display:none">
+                        <option value="">— книги не загружены —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rlAuthor">Автор:</label>
+                    <input type="hidden" id="rlAuthorId" value="">
+                    <input type="text" id="rlAuthor" class="form-input" autocomplete="off" placeholder="Начните вводить автора...">
+                    <select id="rlAuthorSelect" class="form-input" size="5" style="margin-top:5px;display:none">
+                        <option value="">— авторы не загружены —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rlPriority">Приоритет:</label>
+                    <input type="number" id="rlPriority" class="form-input" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="rlComment">Комментарий:</label>
+                    <textarea id="rlComment" class="form-input" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="rlStatus">Статус:</label>
+                    <select id="rlStatus" class="filter-select">
+                        <option value="Не заполнено">Не заполнено</option>
+                        <option value="Прочитано">Прочитано</option>
+                        <option value="Читаю">Читаю</option>
+                        <option value="Отложил">Отложил</option>
+                        <option value="Бросил">Бросил</option>
+                    </select>
+                </div>
+                <div class="modal-footer" style="padding:0;border:none;margin-top:15px">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeReadlistModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="editModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
