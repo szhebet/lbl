@@ -492,7 +492,11 @@ func main() {
 	initJWTSecret(cfg.Server.JWTSecret)
 	initTokenTTL(cfg.Server.TokenTTL)
 
-	r := gin.Default()
+	if cfg.Server.LogLevel != "debug" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery())
 	r.MaxMultipartMemory = 100 << 20 // 100 MB max for all uploads
 
 	r.Use(func(c *gin.Context) {
@@ -525,6 +529,7 @@ func main() {
 		api.GET("/tags", getTags(db))
 		api.POST("/tags", createTag(db))
 		api.GET("/persons", getPersons(db))
+		api.GET("/persons/:id", getPerson(db))
 		api.GET("/languages", getLanguages(db))
 		api.POST("/auth/login", loginUser(db))
 		api.POST("/auth/register", createUser(db))
@@ -2112,7 +2117,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		}
 
 		// Update authors - first remove all existing
-		if len(req.Authors) > 0 {
+		if req.Authors != nil {
 			_, err = tx.Exec("DELETE FROM work_contributors WHERE work_id = $1", workID)
 			if err != nil {
 				internalError(c, err)
@@ -2154,7 +2159,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		}
 
 		// Update genres
-		if len(req.Genres) > 0 {
+		if req.Genres != nil {
 			_, err = tx.Exec("DELETE FROM work_genres WHERE work_id = $1", workID)
 			if err != nil {
 				internalError(c, err)
@@ -2174,7 +2179,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 		}
 
 		// Update tags
-		if len(req.Tags) > 0 {
+		if req.Tags != nil {
 			_, err = tx.Exec("DELETE FROM edition_tags WHERE edition_id = $1", id)
 			if err != nil {
 				internalError(c, err)
@@ -2595,6 +2600,32 @@ func getPersons(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, persons)
+	}
+}
+
+func getPerson(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var p PersonData
+		err := db.QueryRow(`
+			SELECT id, COALESCE(first_name,'') as first_name, COALESCE(middle_name,'') as middle_name, last_name,
+				pseudonym, birth_date, death_date, biography, photo_url,
+				COALESCE((SELECT COUNT(DISTINCT w.id) FROM work_contributors wc
+					JOIN works w ON w.id = wc.work_id
+					JOIN editions e ON e.work_id = w.id
+					WHERE wc.person_id = persons.id), 0) as books_count
+			FROM persons WHERE id = $1
+		`, id).Scan(&p.ID, &p.FirstName, &p.MiddleName, &p.LastName,
+			&p.Pseudonym, &p.BirthDate, &p.DeathDate, &p.Biography, &p.PhotoURL, &p.BooksCount)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Person not found"})
+				return
+			}
+			internalError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, p)
 	}
 }
 

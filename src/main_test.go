@@ -1836,3 +1836,306 @@ func TestReadListNames(t *testing.T) {
 	assert.Contains(t, names, "wishlist")
 	assert.Len(t, names, 2)
 }
+
+func TestUpdateBookExtendedRemoveAllAuthors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	r.POST("/api/v1/books", createBook(db))
+	r.PUT("/books/:id/extended", updateBookExtended(db))
+	r.GET("/books/:id/extended", getBookExtended(db))
+
+	// Create book with author
+	newBook := CreateBookRequest{
+		Title:    "Remove Authors Test",
+		Author:   "Author To Remove",
+		Language: "eng",
+	}
+	bookJSON, _ := json.Marshal(newBook)
+	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
+	req.Body = io.NopCloser(bytes.NewReader(bookJSON))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created BookDetails
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+	editionID := created.EditionID
+
+	// Verify author exists in work_contributors
+	var workID int
+	err = db.QueryRow("SELECT work_id FROM editions WHERE id = $1", editionID).Scan(&workID)
+	require.NoError(t, err)
+
+	var initialContributors int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_contributors WHERE work_id = $1", workID).Scan(&initialContributors)
+	require.NoError(t, err)
+	require.Greater(t, initialContributors, 0, "Book should have at least one author")
+
+	// Send empty authors array to remove all authors
+	updateReq := map[string]interface{}{
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
+	}
+	updateJSON, _ := json.Marshal(updateReq)
+	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
+	req.Body = io.NopCloser(bytes.NewReader(updateJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify all authors are removed from work_contributors
+	var remainingContributors int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_contributors WHERE work_id = $1", workID).Scan(&remainingContributors)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, remainingContributors, "All authors should be removed")
+
+	// Verify the GET endpoint also returns empty authors list
+	req, _ = http.NewRequest("GET", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var extended map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &extended)
+	authors, ok := extended["authors"].([]interface{})
+	if !ok {
+		assert.Nil(t, extended["authors"], "authors should be nil or empty")
+	} else {
+		assert.Equal(t, 0, len(authors), "GET should return empty authors list")
+	}
+}
+
+func TestUpdateBookExtendedRemoveAllGenres(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	r.POST("/api/v1/books", createBook(db))
+	r.PUT("/books/:id/extended", updateBookExtended(db))
+	r.GET("/books/:id/extended", getBookExtended(db))
+
+	// Create book
+	newBook := CreateBookRequest{
+		Title:    "Remove Genres Test",
+		Author:   "Genre Remove Author",
+		Language: "eng",
+	}
+	bookJSON, _ := json.Marshal(newBook)
+	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
+	req.Body = io.NopCloser(bytes.NewReader(bookJSON))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created BookDetails
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	var workID int
+	err = db.QueryRow("SELECT work_id FROM editions WHERE id = $1", created.EditionID).Scan(&workID)
+	require.NoError(t, err)
+
+	// Manually add a genre and link it
+	var genreID int
+	err = db.QueryRow("INSERT INTO genres (name) VALUES ('DetectiveGenreTest') ON CONFLICT (name) DO NOTHING RETURNING id").Scan(&genreID)
+	if err == sql.ErrNoRows {
+		err = db.QueryRow("SELECT id FROM genres WHERE name = 'DetectiveGenreTest'").Scan(&genreID)
+	}
+	require.NoError(t, err)
+	_, err = db.Exec("INSERT INTO work_genres (work_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", workID, genreID)
+	require.NoError(t, err)
+
+	// Verify genre exists
+	var initialGenres int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_genres WHERE work_id = $1", workID).Scan(&initialGenres)
+	require.NoError(t, err)
+	require.Greater(t, initialGenres, 0, "Book should have at least one genre")
+
+	// Send empty genres array
+	updateReq := map[string]interface{}{
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
+	}
+	updateJSON, _ := json.Marshal(updateReq)
+	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(created.EditionID)+"/extended", nil)
+	req.Body = io.NopCloser(bytes.NewReader(updateJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify all genres are removed
+	var remaining int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_genres WHERE work_id = $1", workID).Scan(&remaining)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, remaining, "All genres should be removed")
+}
+
+func TestUpdateBookExtendedRemoveAllTags(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	r.POST("/api/v1/books", createBook(db))
+	r.PUT("/books/:id/extended", updateBookExtended(db))
+	r.GET("/books/:id/extended", getBookExtended(db))
+
+	// Create book
+	newBook := CreateBookRequest{
+		Title:    "Remove Tags Test",
+		Author:   "Tag Remove Author",
+		Language: "eng",
+	}
+	bookJSON, _ := json.Marshal(newBook)
+	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
+	req.Body = io.NopCloser(bytes.NewReader(bookJSON))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created BookDetails
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	// Add a tag to the book
+	var tagID int
+	err = db.QueryRow("INSERT INTO tags (name) VALUES ('testtag_remove') ON CONFLICT (name) DO NOTHING RETURNING id").Scan(&tagID)
+	if err == sql.ErrNoRows {
+		err = db.QueryRow("SELECT id FROM tags WHERE name = 'testtag_remove'").Scan(&tagID)
+	}
+	require.NoError(t, err)
+
+	_, err = db.Exec("INSERT INTO edition_tags (edition_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", created.EditionID, tagID)
+	require.NoError(t, err)
+
+	// Verify tag exists
+	var initialTags int
+	err = db.QueryRow("SELECT COUNT(*) FROM edition_tags WHERE edition_id = $1", created.EditionID).Scan(&initialTags)
+	require.NoError(t, err)
+	require.Greater(t, initialTags, 0, "Book should have at least one tag")
+
+	// Send empty tags array
+	updateReq := map[string]interface{}{
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
+	}
+	updateJSON, _ := json.Marshal(updateReq)
+	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(created.EditionID)+"/extended", nil)
+	req.Body = io.NopCloser(bytes.NewReader(updateJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify all tags are removed
+	var remaining int
+	err = db.QueryRow("SELECT COUNT(*) FROM edition_tags WHERE edition_id = $1", created.EditionID).Scan(&remaining)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, remaining, "All tags should be removed")
+}
+
+func TestUpdateBookExtendedNilAuthorsKeepsExisting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	r.POST("/api/v1/books", createBook(db))
+	r.PUT("/books/:id/extended", updateBookExtended(db))
+
+	// Create book with author
+	newBook := CreateBookRequest{
+		Title:    "Nil Authors Test",
+		Author:   "Nil Author Person",
+		Language: "eng",
+	}
+	bookJSON, _ := json.Marshal(newBook)
+	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
+	req.Body = io.NopCloser(bytes.NewReader(bookJSON))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created BookDetails
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	var workID int
+	err = db.QueryRow("SELECT work_id FROM editions WHERE id = $1", created.EditionID).Scan(&workID)
+	require.NoError(t, err)
+
+	// Verify author exists
+	var initialContributors int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_contributors WHERE work_id = $1", workID).Scan(&initialContributors)
+	require.NoError(t, err)
+	require.Greater(t, initialContributors, 0)
+
+	// Send update WITHOUT authors field (should be nil in Go, keep existing authors)
+	updateReq := map[string]interface{}{
+		"work": map[string]interface{}{
+			"original_title": "Nil Authors Updated Title",
+		},
+		"edition": map[string]interface{}{},
+	}
+	updateJSON, _ := json.Marshal(updateReq)
+	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(created.EditionID)+"/extended", nil)
+	req.Body = io.NopCloser(bytes.NewReader(updateJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify authors are still there (unchanged)
+	var afterContributors int
+	err = db.QueryRow("SELECT COUNT(*) FROM work_contributors WHERE work_id = $1", workID).Scan(&afterContributors)
+	assert.NoError(t, err)
+	assert.Equal(t, initialContributors, afterContributors, "Authors should remain unchanged when authors field is not sent")
+
+	// Verify title was still updated
+	var title string
+	err = db.QueryRow("SELECT original_title FROM works WHERE id = $1", workID).Scan(&title)
+	assert.NoError(t, err)
+	assert.Equal(t, "Nil Authors Updated Title", title)
+}
