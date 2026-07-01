@@ -407,9 +407,13 @@ document.getElementById('editForm')?.addEventListener('submit', async (e) => {
             }
 
             closeModal();
-            const state = saveExpandedState();
-            state.keepFocus = { type: 'book', id: id };
-            loadAuthorsWithState(state);
+            if (document.getElementById('authorsTree')) {
+                const state = saveExpandedState();
+                state.keepFocus = { type: 'book', id: id };
+                loadAuthorsWithState(state);
+            } else {
+                loadBooks();
+            }
         } else if (editType === 'genre') {
             const name = document.getElementById('genre_name').value.trim();
             if (!name) {
@@ -530,11 +534,11 @@ function collectExtendedBookData() {
                 });
             }
         } else {
-            const select = row.querySelector('.author-select');
+            const hiddenId = row.querySelector('.author-id');
             const roleSelect = row.querySelector('.author-role');
-            if (select && select.value) {
+            if (hiddenId && hiddenId.value) {
                 authors.push({
-                    id: parseInt(select.value),
+                    id: parseInt(hiddenId.value),
                     role: roleSelect ? roleSelect.value : 'author'
                 });
             }
@@ -1556,9 +1560,8 @@ async function openAuthorModal(author) {
     modal.classList.add('active');
 
     try {
-        const res = await fetch(API_BASE + '/admin/persons');
-        const all = await res.json();
-        const p = all.find(a => a.id == author.id) || {};
+        const res = await fetch(`${API_BASE}/persons/${author.id}`);
+        const p = await res.json();
         modalBody.innerHTML = `
             <form id="editForm">
                 <div class="form-group">
@@ -1685,11 +1688,20 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
     let authorsHtml = '';
     if (book.authors && book.authors.length > 0) {
         book.authors.forEach((author, idx) => {
-            const authorOptionHtml = `<option value="${author.id}" selected>${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</option>`;
-            const fullPersonsOptions = personsOptions.replace('<option value="">-- Выберите --</option>', `<option value="">-- Выберите --</option>${authorOptionHtml}`);
+            const authorName = `${author.last_name} ${author.first_name || ''}`.trim();
+            const personsOpts = personsArray.map(p =>
+                `<option value="${p.id}">${escapeHtml(p.last_name)} ${escapeHtml(p.first_name || '')}</option>`
+            ).join('');
             authorsHtml += `
                 <div class="author-row" data-idx="${idx}">
-                    <select name="author_id_${idx}" class="author-select">${fullPersonsOptions}</select>
+                    <input type="hidden" class="author-id" value="${author.id}">
+                    <div class="author-autocomplete-group">
+                        <input type="text" class="author-autocomplete" value="${escapeHtml(authorName)}" autocomplete="off" placeholder="Начните вводить автора...">
+                        <select class="author-popup" size="5" style="display:none;margin-top:2px;width:100%">
+                            <option value="">-- Выберите --</option>
+                            ${personsOpts}
+                        </select>
+                    </div>
                     <select name="author_role_${idx}" class="author-role">
                         <option value="author" ${author.role === 'author' ? 'selected' : ''}>Автор</option>
                         <option value="translator" ${author.role === 'translator' ? 'selected' : ''}>Переводчик</option>
@@ -1935,25 +1947,79 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
         const selected = this.selectedOptions.length;
         document.getElementById('selected_tags_count').textContent = selected;
     });
+
+    document.querySelectorAll('#authors-container .author-row').forEach(function(row) {
+        var input = row.querySelector('.author-autocomplete');
+        var popup = row.querySelector('.author-popup');
+        if (input && popup) setupAuthorAutocomplete(input, popup);
+    });
+}
+
+function setupAuthorAutocomplete(input, popup) {
+    if (!input || !popup) return;
+    input.addEventListener('input', function() {
+        var val = this.value.toLowerCase();
+        var opts = popup.options;
+        var matched = [];
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].value === '') continue;
+            var matches = opts[i].textContent.toLowerCase().indexOf(val) !== -1;
+            opts[i].style.display = matches ? '' : 'none';
+            if (matches) matched.push(opts[i]);
+        }
+        var row = this.closest('.author-row');
+        var hiddenId = row ? row.querySelector('.author-id') : null;
+        if (matched.length === 0) {
+            if (hiddenId) hiddenId.value = '';
+        } else if (matched.length === 1) {
+            matched[0].selected = true;
+            if (hiddenId) hiddenId.value = matched[0].value;
+            if (this.value !== matched[0].textContent) {
+                this.value = matched[0].textContent;
+            }
+        }
+        if (!val) {
+            if (hiddenId) hiddenId.value = '';
+        }
+        popup.style.display = (val && matched.length !== 1) ? '' : 'none';
+    });
+    popup.addEventListener('change', function() {
+        var row = input.closest('.author-row');
+        var hiddenId = row ? row.querySelector('.author-id') : null;
+        if (this.value) {
+            input.value = this.options[this.selectedIndex].textContent;
+            if (hiddenId) hiddenId.value = this.value;
+        } else {
+            if (hiddenId) hiddenId.value = '';
+        }
+        this.style.display = 'none';
+    });
 }
 
 function addAuthorRow() {
     const container = document.getElementById('authors-container');
-    const idx = container.querySelectorAll('.author-row').length;
-
     fetch(`${API_BASE}/persons`)
         .then(res => res.json())
         .then(persons => {
             const personsArray = Array.isArray(persons) ? persons : [];
-            const options = `<option value="">-- Выберите --</option>` +
-                personsArray.map(p => `<option value="${p.id}">${escapeHtml(p.last_name)} ${escapeHtml(p.first_name || '')}</option>`).join('');
+            const idx = container.querySelectorAll('.author-row').length;
+            const personsOpts = personsArray.map(p =>
+                `<option value="${p.id}">${escapeHtml(p.last_name)} ${escapeHtml(p.first_name || '')}</option>`
+            ).join('');
 
             const div = document.createElement('div');
             div.className = 'author-row';
             div.dataset.idx = idx;
             div.innerHTML = `
-                <select name="author_id_${idx}" class="author-select">${options}</select>
-                <select name="author_role_${idx}" class="author-role">
+                <input type="hidden" class="author-id" value="">
+                <div class="author-autocomplete-group">
+                    <input type="text" class="author-autocomplete" autocomplete="off" placeholder="Начните вводить автора...">
+                    <select class="author-popup" size="5" style="display:none;margin-top:2px;width:100%">
+                        <option value="">-- Выберите --</option>
+                        ${personsOpts}
+                    </select>
+                </div>
+                <select class="author-role">
                     <option value="author">Автор</option>
                     <option value="translator">Переводчик</option>
                     <option value="editor">Редактор</option>
@@ -1962,6 +2028,9 @@ function addAuthorRow() {
                 <button type="button" class="btn-remove-author" onclick="removeAuthorRow(this)">✕</button>
             `;
             container.appendChild(div);
+            var input = div.querySelector('.author-autocomplete');
+            var popup = div.querySelector('.author-popup');
+            if (input && popup) setupAuthorAutocomplete(input, popup);
         });
 }
 

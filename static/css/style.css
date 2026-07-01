@@ -1010,3 +1010,48 @@ header h1 {
 .status-badge.status-reading { background: #cce5ff; color: #004085; }
 .status-badge.status-paused { background: #fff3cd; color: #856404; }
 .status-badge.status-abandoned { background: #f8d7da; color: #721c24; }
+
+.author-autocomplete-group {
+    position: relative;
+    flex: 1;
+    min-width: 200px;
+}
+.author-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.author-row .author-autocomplete {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+.author-row .author-autocomplete:focus {
+    outline: none;
+    border-color: #3498db;
+}
+.author-row .author-popup {
+    position: absolute;
+    z-index: 10;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    left: 0;
+    right: 0;
+}
+.author-row .author-role {
+    width: 130px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.author-row .btn-remove-author {
+    flex-shrink: 0;
+    margin-top: 4px;
+}
