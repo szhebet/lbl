@@ -3,9 +3,11 @@ package main
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -29,6 +31,15 @@ type AuthResponse struct {
 	User  User   `json:"user"`
 }
 
+func setSessionCookie(c *gin.Context, token string, ttlHours int) {
+	maxAge := ttlHours * 3600
+	if maxAge <= 0 {
+		maxAge = 86400
+	}
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("session_token", token, maxAge, "/", "", false, true)
+}
+
 func loginUser(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req LoginRequest
@@ -41,23 +52,47 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 			req.DeviceName = "Unknown device"
 		}
 
+			// Use advisory lock to prevent race conditions on first-user creation
+		tx, err := db.Begin()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+			return
+		}
+		defer func() {
+			if err != nil {
+				tx.Rollback()
+			} else {
+				tx.Commit()
+			}
+		}()
+
+		_, err = tx.Exec("SELECT pg_advisory_xact_lock(42)")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+			return
+		}
+
 		var userCount int
-		db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
+		tx.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
 
 		if userCount == 0 {
 			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
 				return
 			}
 			var user User
-			err = db.QueryRow(`
+			err = tx.QueryRow(`
 				INSERT INTO users (username, password_hash, role)
 				VALUES ($1, $2, 'admin')
 				RETURNING id, username, COALESCE(email, ''), role, created_at
 			`, req.Username, string(hashedPassword)).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
+				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+					c.JSON(http.StatusConflict, gin.H{"error": "Пользователь уже существует"})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
 				return
 			}
 			if req.DeviceFingerprint != "" {
@@ -68,28 +103,29 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 				`, user.ID, req.DeviceName, req.DeviceFingerprint)
 			}
 			token := generateToken(user.ID, user.Username, user.Role)
+			setSessionCookie(c, token, tokenTTL)
 			c.JSON(http.StatusOK, AuthResponse{Token: token, User: user})
 			return
 		}
 
 		var user User
 		var passwordHash string
-		err := db.QueryRow(`
+		err = tx.QueryRow(`
 			SELECT id, username, COALESCE(email, ''), role, password_hash, created_at
 			FROM users WHERE username = $1
 		`, req.Username).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &passwordHash, &user.CreatedAt)
 
 		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден", "user_not_found": true})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверное имя пользователя или пароль"})
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка входа"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
 			return
 		}
 
 		if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный пароль"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверное имя пользователя или пароль"})
 			return
 		}
 
@@ -102,6 +138,7 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 		}
 
 		token := generateToken(user.ID, user.Username, user.Role)
+		setSessionCookie(c, token, tokenTTL)
 
 		c.JSON(http.StatusOK, AuthResponse{
 			Token: token,
@@ -115,6 +152,11 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 		var req LoginRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if len(req.Password) < minPasswordLength {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Пароль должен быть не менее " + strconv.Itoa(minPasswordLength) + " символов"})
 			return
 		}
 
@@ -155,6 +197,7 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 		}
 
 		token := generateToken(user.ID, user.Username, user.Role)
+		setSessionCookie(c, token, tokenTTL)
 
 		c.JSON(http.StatusCreated, AuthResponse{
 			Token: token,

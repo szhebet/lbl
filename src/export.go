@@ -19,7 +19,7 @@ func exportBooksJSON(db *sql.DB) gin.HandlerFunc {
 			ORDER BY original_title
 		`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -64,7 +64,7 @@ func exportBooksCSV(db *sql.DB) gin.HandlerFunc {
 			ORDER BY original_title
 		`)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()

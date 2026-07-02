@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -447,6 +448,75 @@ func recognizeBook(text string, cfg *config.Config) *utils.LLMResult {
 	return utils.RecognizeBook(text, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Token, cfg.LLM.Prompt, cfg.LLM.Prompt2, cfg.LLM.Timeout, true)
 }
 
+// ---- Rate limiting ----
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]int
+	window   time.Duration
+	limit    int
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	rl := &rateLimiter{
+		attempts: make(map[string]int),
+		window:   window,
+		limit:    limit,
+	}
+	go func() {
+		for {
+			time.Sleep(window)
+			rl.mu.Lock()
+			rl.attempts = make(map[string]int)
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+func (rl *rateLimiter) allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.attempts[key]++
+	return rl.attempts[key] <= rl.limit
+}
+
+var loginLimiter = newRateLimiter(10, time.Minute)
+var registerLimiter = newRateLimiter(5, time.Minute)
+var writeLimiter = newRateLimiter(60, time.Minute)
+
+func rateLimitMiddleware(rl *rateLimiter) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		key := c.ClientIP()
+		if uid, exists := c.Get("user_id"); exists {
+			key = fmt.Sprintf("u:%d", uid.(int))
+		}
+		if !rl.allow(key) {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+			return
+		}
+		c.Next()
+	}
+}
+
+// ---- Security headers middleware ----
+
+func securityHeadersMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "same-origin")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'")
+		c.Header("Strict-Transport-Security", "max-age=31533600; includeSubDomains")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		c.Next()
+	}
+}
+
+// ---- Min password length ----
+
+const minPasswordLength = 6
+
 func main() {
 	cfg, err := config.Load("")
 	if err != nil {
@@ -496,7 +566,7 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger(), gin.Recovery(), securityHeadersMiddleware())
 	r.MaxMultipartMemory = 100 << 20 // 100 MB max for all uploads
 
 	r.Use(func(c *gin.Context) {
@@ -505,64 +575,82 @@ func main() {
 		c.Next()
 	})
 
-// API routes
+// Auth routes (rate-limited, no JWT required)
+	auth := r.Group("/api/v1/auth")
+	{
+		auth.POST("/login", func(c *gin.Context) {
+			ip := c.ClientIP()
+			if !loginLimiter.allow(ip) {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+				return
+			}
+			loginUser(db)(c)
+		})
+		auth.POST("/register", func(c *gin.Context) {
+			ip := c.ClientIP()
+			if !registerLimiter.allow(ip) {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+				return
+			}
+			createUser(db)(c)
+		})
+	}
+
+	// Read-only guest routes
 	api := r.Group("/api/v1")
 	{
 		setupOPDSRoutes(api, db)
 
 		api.GET("/books", getBooks(db))
 		api.GET("/books/search", searchBooks(db))
-		api.POST("/books", createBook(db))
 		api.GET("/books/:id", getBook(db))
-		api.PUT("/books/:id", updateBook(db))
-		api.DELETE("/books/:id", deleteBook(db))
 		api.GET("/books/:id/extended", getBookExtended(db))
-		api.PUT("/books/:id/extended", updateBookExtended(db))
 		api.GET("/authors", getAuthors(db))
-		api.PUT("/persons/:id", updatePerson(db))
 		api.GET("/genres", getGenres(db))
 		api.GET("/genres/tree", getGenreTree(db))
 		api.GET("/genres/:id/authors", getGenreAuthors(db))
-		api.POST("/genres", createGenre(db))
-		api.PUT("/genres/:id", updateGenre(db))
-		api.DELETE("/genres/:id", deleteGenre(db))
 		api.GET("/tags", getTags(db))
-		api.POST("/tags", createTag(db))
 		api.GET("/persons", getPersons(db))
 		api.GET("/persons/:id", getPerson(db))
 		api.GET("/languages", getLanguages(db))
-		api.POST("/auth/login", loginUser(db))
-		api.POST("/auth/register", createUser(db))
 		api.GET("/config", getAppConfig())
-		
-		api.POST("/import/file", importBookFile(db))
-		api.POST("/import/upload", importUploadFiles())
-		api.POST("/import/directory", startImport())
 		api.GET("/import/status", getImportStatus())
-		api.POST("/import/cancel", cancelImport())
-		api.POST("/books/:id/cover", uploadCover(db))
 		api.GET("/books/:id/download", downloadBook(db))
-		api.PUT("/books/:id/shelf", updateBookShelf(db))
+		api.GET("/shelf/count", getShelfCount(db))
+	}
 
-		// User-book status (requires auth, optional)
-		userBooks := r.Group("/api/v1/user/books")
-		userBooks.Use(authMiddleware())
-		{
-			userBooks.GET("", listUserBooks(db))
-			userBooks.GET("/:edition_id", getUserBook(db))
-			userBooks.PUT("/:edition_id", setUserBook(db))
-		}
+	// Write API routes (require auth)
+	write := r.Group("/api/v1")
+	write.Use(requireAuthMiddleware())
+	write.Use(rateLimitMiddleware(writeLimiter))
+	{
+		write.POST("/books", createBook(db))
+		write.PUT("/books/:id", updateBook(db))
+		write.DELETE("/books/:id", deleteBook(db))
+		write.PUT("/books/:id/extended", updateBookExtended(db))
+		write.PUT("/persons/:id", updatePerson(db))
+		write.POST("/genres", createGenre(db))
+		write.PUT("/genres/:id", updateGenre(db))
+		write.DELETE("/genres/:id", deleteGenre(db))
+		write.POST("/tags", createTag(db))
+		write.POST("/import/file", importBookFile(db))
+		write.POST("/import/upload", importUploadFiles())
+		write.POST("/import/directory", startImport())
+		write.POST("/import/cancel", cancelImport())
+		write.POST("/books/:id/cover", uploadCover(db))
+		write.PUT("/books/:id/shelf", updateBookShelf(db))
 
-		// Read list (requires auth)
-		readList := r.Group("/api/v1/user/readlist")
-		readList.Use(authMiddleware())
-		{
-			readList.GET("", getReadListItems(db))
-			readList.POST("", createReadListItem(db))
-			readList.GET("/names", getReadListNames(db))
-			readList.PUT("/:id", updateReadListItem(db))
-			readList.DELETE("/:id", deleteReadListItem(db))
-		}
+		// User-book status
+		write.GET("/user/books", listUserBooks(db))
+		write.GET("/user/books/:edition_id", getUserBook(db))
+		write.PUT("/user/books/:edition_id", setUserBook(db))
+
+		// Read list
+		write.GET("/user/readlist", getReadListItems(db))
+		write.POST("/user/readlist", createReadListItem(db))
+		write.GET("/user/readlist/names", getReadListNames(db))
+		write.PUT("/user/readlist/:id", updateReadListItem(db))
+		write.DELETE("/user/readlist/:id", deleteReadListItem(db))
 	}
 
 	// Admin API routes (require editor+ authentication)
@@ -601,8 +689,7 @@ func main() {
 		c.File("./templates/admin.html")
 	})
 	r.GET("/shelf/", getShelfPage(db))
-	r.PUT("/api/v1/shelf/clear", clearShelf(db))
-	r.GET("/api/v1/shelf/count", getShelfCount(db))
+	r.GET("/api/v1/shelf/clear", clearShelf(db))
 
 	// Debug endpoints (admin only)
 	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
@@ -1018,7 +1105,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 		// Start transaction
 		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer func() {
@@ -1041,7 +1128,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 		var langExists bool
 		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM languages WHERE code = $1)", languageID).Scan(&langExists)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		if !langExists {
@@ -1057,7 +1144,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 			RETURNING id
 		`, req.Title, languageID, req.PublishedYear, "novel", req.Description, 0).Scan(&workID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1096,7 +1183,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 				SELECT id FROM persons WHERE last_name = $1 AND (first_name = $2 OR (first_name IS NULL AND $2 = ''))
 			`, lastName, firstName).Scan(&personID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 		}
@@ -1108,7 +1195,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 			ON CONFLICT DO NOTHING
 		`, workID, personID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1120,7 +1207,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 			RETURNING id
 		`, workID, req.Title, languageID, "Self-published", req.PublishedYear, "Self-published", 0, req.Description, "good", "manual").Scan(&editionID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1128,7 +1215,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 		var formatID int
 		err = tx.QueryRow("SELECT id FROM formats WHERE name = 'EPUB'").Scan(&formatID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1138,7 +1225,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 			VALUES ($1, $2, $3, $4)
 		`, editionID, formatID, "/books/manual_upload.epub", true)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1163,7 +1250,7 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 		book.Year = normalizeYear(book.Year)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1184,7 +1271,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 		// Start transaction
 		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer func() {
@@ -1208,7 +1295,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1231,7 +1318,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				WHERE w.id = $1
 			`, workID).Scan(&currentOriginalTitle, &currentOriginalLanguage, &currentFirstPublished, &currentAnnotation)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -1263,7 +1350,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				WHERE id = $5
 			`, newTitle, newLanguage, newYear, newAnnotation, workID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 		}
@@ -1289,7 +1376,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				WHERE e.id = $1
 			`, editionID).Scan(&currentEditionTitle, &currentPublisher, &currentYear, &currentCity, &currentPages, &currentAnnotation, &currentQuality)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 
@@ -1321,7 +1408,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 				WHERE id = $5
 			`, newEditionTitle, newPublisher, newYear, newAnnotation, editionID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 		}
@@ -1347,7 +1434,7 @@ func updateBook(db *sql.DB) gin.HandlerFunc {
 		book.Year = normalizeYear(book.Year)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -1363,7 +1450,7 @@ func deleteBook(db *sql.DB) gin.HandlerFunc {
 		// Start transaction
 		tx, err := db.Begin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer func() {
@@ -1378,7 +1465,7 @@ func deleteBook(db *sql.DB) gin.HandlerFunc {
 		var exists bool
 		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM editions WHERE id = $1)", id).Scan(&exists)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		if !exists {
@@ -1390,21 +1477,21 @@ func deleteBook(db *sql.DB) gin.HandlerFunc {
 		var workID int
 		err = tx.QueryRow("SELECT work_id FROM editions WHERE id = $1", id).Scan(&workID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		// Delete edition (will cascade to edition_files, reading_progress, etc.)
 		_, err = tx.Exec("DELETE FROM editions WHERE id = $1", id)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
 		// Clean up orphaned work (no remaining editions)
 		_, err = tx.Exec("DELETE FROM works WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM editions WHERE work_id = $1)", workID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -3051,6 +3138,8 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
 
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 50<<20)
+
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
@@ -3062,7 +3151,7 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 		ext := strings.ToLower(filepath.Ext(filename))
 
 		if !isSupportedFile(filename) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported format: %s", ext)})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported format: " + ext})
 			return
 		}
 
@@ -3375,7 +3464,7 @@ func getNextSubdir(baseDir string) string {
 	return fmt.Sprintf("%05d", maxDir)
 }
 
-func safeDirectoryPath(path string) (string, error) {
+func safeDirectoryPath(path string, allowedBase string) (string, error) {
 	cleaned := filepath.Clean(path)
 	if strings.Contains(cleaned, "..") || strings.HasPrefix(cleaned, "~") {
 		return "", fmt.Errorf("invalid directory path")
@@ -3390,6 +3479,14 @@ func safeDirectoryPath(path string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("path is not a directory")
 	}
+	absAllowed, err := filepath.Abs(allowedBase)
+	if err != nil {
+		return "", fmt.Errorf("invalid allowed base path")
+	}
+	rel, err := filepath.Rel(absAllowed, cleaned)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("directory is not within allowed import path: %s", absAllowed)
+	}
 	return cleaned, nil
 }
 
@@ -3401,9 +3498,10 @@ func startImport() gin.HandlerFunc {
 			return
 		}
 
-		safePath, err := safeDirectoryPath(dirPath)
+		cfg := getConfig(c)
+		safePath, err := safeDirectoryPath(dirPath, cfg.Directories.Bookarch)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Directory is not within allowed import path"})
 			return
 		}
 
@@ -3610,7 +3708,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			books = append(books, book)
 		}
 
-		html := `<!DOCTYPE html>
+		page := `<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -3666,21 +3764,21 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download" class="download">⬇ Скачать</a>`
 			}
 
-			html += `<tr>
-                <td>` + escapeXML(book.Authors) + `</td>
-                <td>` + escapeXML(book.Title) + `</td>
+			page += `<tr>
+                <td>` + html.EscapeString(book.Authors) + `</td>
+                <td>` + html.EscapeString(book.Title) + `</td>
                 <td class="size">` + sizeStr + `</td>
                 <td>` + downloadLink + `</td>
             </tr>`
 		}
 
-		html += `</tbody>
+		page += `</tbody>
         </table>
         <script>
         async function clearShelf() {
             if (!confirm('Удалить все книги с полки?')) return;
             try {
-                const response = await fetch('/api/v1/shelf/clear', { method: 'PUT' });
+                const response = await fetch('/api/v1/shelf/clear');
                 if (response.ok) {
                     window.location.reload();
                 } else {
@@ -3692,11 +3790,10 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         }
         </script>
     </div>
-</body>
-</html>`
+</body></html>`
 
 		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, html)
+		c.String(http.StatusOK, page)
 	}
 }
 

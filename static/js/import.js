@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var formData = new FormData();
             formData.append('file', file);
             try {
-                var response = await fetch(API_BASE + '/import/file', { method: 'POST', body: formData });
+                var response = await apiFetch(API_BASE + '/import/file', { method: 'POST', body: formData });
                 var data = await response.json();
                 if (response.ok) {
                     var html;
@@ -77,7 +77,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var formData = new FormData();
             formData.append('directory', dirPath);
             try {
-                var response = await fetch(API_BASE + '/import/directory', { method: 'POST', body: formData });
+                var response = await apiFetch(API_BASE + '/import/directory', { method: 'POST', body: formData });
                 var data = await response.json();
                 if (response.ok && data.started) {
                     showImportProgress(dirPath, data.total);
@@ -143,7 +143,7 @@ function showImportProgress(dirPath, total) {
 
     document.getElementById('cancelImportBtn').addEventListener('click', async function() {
         try {
-            await fetch(API_BASE + '/import/cancel', { method: 'POST' });
+            await apiFetch(API_BASE + '/import/cancel', { method: 'POST' });
         } catch (e) {}
     });
 
@@ -159,7 +159,7 @@ function startImportPolling() {
 }
 
 function pollImportStatus() {
-    fetch(API_BASE + '/import/status')
+    apiFetch(API_BASE + '/import/status')
         .then(function(r) { return r.json(); })
         .then(function(state) {
             updateImportUI(state);
@@ -291,7 +291,7 @@ function finishImportUI(state) {
 }
 
 function checkImportOnLoad() {
-    fetch(API_BASE + '/import/status')
+    apiFetch(API_BASE + '/import/status')
         .then(function(r) { return r.json(); })
         .then(function(state) {
             if (state.running) {
@@ -308,7 +308,7 @@ function checkImportOnLoad() {
 }
 
 function checkImportStatus() {
-    fetch(API_BASE + '/import/status')
+    apiFetch(API_BASE + '/import/status')
         .then(function(r) { return r.json(); })
         .then(function(state) {
             if (state.running) {

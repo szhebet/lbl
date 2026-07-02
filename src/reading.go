@@ -40,6 +40,52 @@ func authMiddleware() gin.HandlerFunc {
 	}
 }
 
+func checkUserExists(c *gin.Context, userID int) bool {
+	db, exists := c.Get("db")
+	if !exists {
+		return true
+	}
+	sqlDB, ok := db.(*sql.DB)
+	if !ok {
+		return true
+	}
+	var existsInDB bool
+	err := sqlDB.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", userID).Scan(&existsInDB)
+	if err != nil || !existsInDB {
+		return false
+	}
+	return true
+}
+
+func requireAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+		tokenStr := authHeader[7:]
+		claims, err := validateToken(tokenStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
+			return
+		}
+		var userID int
+		if uid, ok := claims["user_id"].(float64); ok {
+			userID = int(uid)
+			c.Set("user_id", userID)
+		}
+		if role, ok := claims["role"].(string); ok {
+			c.Set("role", role)
+		}
+		if userID > 0 && !checkUserExists(c, userID) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Пользователь не найден или заблокирован"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func adminAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -53,14 +99,34 @@ func adminAuthMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
 			return
 		}
+		var userID int
 		if uid, ok := claims["user_id"].(float64); ok {
-			c.Set("user_id", int(uid))
+			userID = int(uid)
+			c.Set("user_id", userID)
 		}
 		role, _ := claims["role"].(string)
 		c.Set("role", role)
 		if role == "viewer" || role == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Недостаточно прав"})
 			return
+		}
+		if userID > 0 && !checkUserExists(c, userID) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Пользователь не найден или заблокирован"})
+			return
+		}
+		if userID > 0 {
+			db, exists := c.Get("db")
+			if exists {
+				sqlDB, ok := db.(*sql.DB)
+				if ok {
+					var currentRole string
+					err := sqlDB.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&currentRole)
+					if err != nil || (currentRole != "admin" && currentRole != "editor") {
+						c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Недостаточно прав"})
+						return
+					}
+				}
+			}
 		}
 		c.Next()
 	}
@@ -99,7 +165,7 @@ func getUserBook(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, ub)
@@ -152,7 +218,7 @@ func setUserBook(db *sql.DB) gin.HandlerFunc {
 				updated_at = CURRENT_TIMESTAMP
 		`, uid, editionID, req.Status, req.Review, req.Rating)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		var ub UserBook
@@ -164,7 +230,7 @@ func setUserBook(db *sql.DB) gin.HandlerFunc {
 			&ub.Review, &ub.Rating, &ub.DateStarted, &ub.DateRead,
 			&ub.CreatedAt, &ub.UpdatedAt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, ub)
@@ -188,7 +254,7 @@ func listUserBooks(db *sql.DB) gin.HandlerFunc {
 			ORDER BY ub.updated_at DESC
 		`, uid)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -198,7 +264,7 @@ func listUserBooks(db *sql.DB) gin.HandlerFunc {
 			if err := rows.Scan(&ub.ID, &ub.UserID, &ub.EditionID, &ub.Status,
 				&ub.Review, &ub.Rating, &ub.DateStarted, &ub.DateRead,
 				&ub.CreatedAt, &ub.UpdatedAt); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			books = append(books, ub)
@@ -319,7 +385,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 
 		rows, err := db.Query(query, args...)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -332,7 +398,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 				&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
 				&item.Comment, &item.Status, &item.CreatedAt,
 				&item.FormatName, &item.OnShelf, &editionID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			if editionID.Valid {
@@ -381,7 +447,7 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 			&item.Comment, &item.Status, &item.CreatedAt)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -434,7 +500,7 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 			req.AuthorID, req.BookID, req.Comment, req.Status, id, uid)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -466,7 +532,7 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		}
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 
@@ -487,7 +553,7 @@ func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
 
 		result, err := db.Exec("DELETE FROM read_list WHERE id = $1 AND user_id = $2", id, uid)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		rows, _ := result.RowsAffected()
@@ -514,7 +580,7 @@ func getReadListNames(db *sql.DB) gin.HandlerFunc {
 			WHERE user_id = $1 ORDER BY listname
 		`, uid)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()
@@ -523,7 +589,7 @@ func getReadListNames(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				internalError(c, err)
 				return
 			}
 			names = append(names, name)

@@ -2,16 +2,19 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 )
 
 var (
-	jwtSecret = []byte("your-secret-key-change-in-production")
-	tokenTTL  = 0 // hours; 0 = no expiration
+	jwtSecret []byte
+	tokenTTL  = 24 // hours; default 24h
 	ErrInvalidToken  = errors.New("invalid token")
 	ErrTokenExpired  = errors.New("token expired")
 )
@@ -26,15 +29,23 @@ type TokenClaims struct {
 func initJWTSecret(secret string) {
 	if secret != "" {
 		jwtSecret = []byte(secret)
-	} else {
-		jwtSecret = []byte("your-secret-key-change-in-production")
+		return
 	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		log.Fatal("Failed to generate JWT secret: ", err)
+	}
+	jwtSecret = []byte(hex.EncodeToString(buf))
+	log.Println("Generated random JWT secret (set jwt_secret in config for persistence)")
 }
 
 func initTokenTTL(ttlHours int) {
 	tokenTTL = ttlHours
 	if tokenTTL < 0 {
-		tokenTTL = 0
+		tokenTTL = 24
+	}
+	if tokenTTL == 0 {
+		tokenTTL = 24
 	}
 }
 
@@ -65,9 +76,10 @@ func validateToken(tokenString string) (map[string]interface{}, error) {
 	}
 
 	header, payload, signature := parts[0], parts[1], parts[2]
-	expectedSignature := computeHMAC(header + "." + payload)
 
-	if signature != expectedSignature {
+	expected := computeHMACBytes(header + "." + payload)
+	sigBytes, err := base64.RawURLEncoding.DecodeString(signature)
+	if err != nil || !hmac.Equal(sigBytes, expected) {
 		return nil, ErrInvalidToken
 	}
 
@@ -91,9 +103,13 @@ func validateToken(tokenString string) (map[string]interface{}, error) {
 }
 
 func computeHMAC(message string) string {
+	return base64.RawURLEncoding.EncodeToString(computeHMACBytes(message))
+}
+
+func computeHMACBytes(message string) []byte {
 	h := hmac.New(sha256.New, jwtSecret)
 	h.Write([]byte(message))
-	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+	return h.Sum(nil)
 }
 
 func splitToken(token string) []string {
