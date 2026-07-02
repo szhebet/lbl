@@ -3,7 +3,9 @@
 bind = "0.0.0.0"
 enable_delete = true
 log_level = "info"
-#jwt_secret = "change-this-to-a-random-string"
+# Секретный ключ для подписи JWT-токенов. ОБЯЗАТЕЛЬНО замените на свой случайный ключ перед запуском.
+# Сгенерировать: openssl rand -hex 32
+jwt_secret = "CHANGE_ME_TO_A_RANDOM_SECRET_KEY"
 #token_ttl = 24  # hours; 0 (or commented out) = no expiration
 
 [directories]

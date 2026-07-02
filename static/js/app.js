@@ -10,6 +10,14 @@ let readlistSortBy = 'created_at';
 let readlistSortOrder = 'desc';
 var personMap = {};
 
+function apiFetch(path, options) {
+    const token = localStorage.getItem('auth_token');
+    if (!options) options = {};
+    if (!options.headers) options.headers = {};
+    if (token) options.headers['Authorization'] = 'Bearer ' + token;
+    return fetch(path, options);
+}
+
 function promptLogin() {
     if (typeof openLoginModal === 'function') {
         openLoginModal();
@@ -37,7 +45,7 @@ async function loadUserBookStatuses() {
     var token = localStorage.getItem('auth_token');
     if (!token) { userBookStatuses = {}; return; }
     try {
-        var res = await fetch(API_BASE + '/user/books', {
+        var res = await apiFetch(API_BASE + '/user/books', {
             headers: { 'Authorization': 'Bearer ' + token }
         });
         if (res.ok) {
@@ -76,7 +84,7 @@ async function setUserBookStatus(editionId, status) {
     var token = localStorage.getItem('auth_token');
     if (!token) { promptLogin(); return; }
     try {
-        var res = await fetch(API_BASE + '/user/books/' + editionId, {
+        var res = await apiFetch(API_BASE + '/user/books/' + editionId, {
             method: 'PUT',
             headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: status })
@@ -137,7 +145,7 @@ document.getElementById('folderInput')?.addEventListener('change', async (e) => 
             formData.append('files', file);
         }
 
-        const response = await fetch(API_BASE + '/import/upload', {
+        const response = await apiFetch(API_BASE + '/import/upload', {
             method: 'POST',
             body: formData
         });
@@ -246,7 +254,7 @@ document.getElementById('addToShelfBtn')?.addEventListener('click', async () => 
     
     for (const id of bookIds) {
         try {
-            const response = await fetch(`${API_BASE}/books/${id}/shelf`, {
+            const response = await apiFetch(`${API_BASE}/books/${id}/shelf`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ on_shelf: true })
@@ -269,7 +277,7 @@ document.getElementById('clearShelfBtn')?.addEventListener('click', async () => 
     if (!confirm('Удалить все книги с полки?')) return;
     
     try {
-        const response = await fetch(`${API_BASE}/shelf/clear`, { method: 'PUT' });
+        const response = await apiFetch(`${API_BASE}/shelf/clear`, { method: 'PUT' });
         if (response.ok) {
             alert('Полка очищена');
             updateShelfCount();
@@ -284,7 +292,7 @@ document.getElementById('clearShelfBtn')?.addEventListener('click', async () => 
 document.getElementById('clearShelfBooksBtn')?.addEventListener('click', async () => {
     if (!confirm('Удалить все книги с полки?')) return;
     try {
-        const response = await fetch(`${API_BASE}/shelf/clear`, { method: 'PUT' });
+        const response = await apiFetch(`${API_BASE}/shelf/clear`, { method: 'PUT' });
         if (response.ok) {
             alert('Полка очищена');
             updateShelfCount();
@@ -378,7 +386,7 @@ document.getElementById('editForm')?.addEventListener('submit', async (e) => {
                 return;
             }
 
-            const response = await fetch(`${API_BASE}/persons/${id}`, {
+            const response = await apiFetch(`${API_BASE}/persons/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
@@ -395,7 +403,7 @@ document.getElementById('editForm')?.addEventListener('submit', async (e) => {
             loadAuthorsWithState(state);
         } else if (editType === 'book') {
             const data = collectExtendedBookData();
-            const response = await fetch(`${API_BASE}/books/${id}/extended`, {
+            const response = await apiFetch(`${API_BASE}/books/${id}/extended`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
@@ -424,7 +432,7 @@ document.getElementById('editForm')?.addEventListener('submit', async (e) => {
             const parentId = parentSelect ? parentSelect.value : '';
             const body = { name: name };
             if (parentId) body.parent_id = parseInt(parentId);
-            const response = await fetch(`${API_BASE}/genres/${id}`, {
+            const response = await apiFetch(`${API_BASE}/genres/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -585,7 +593,7 @@ async function fetchConfig() {
 
 async function updateShelfCount() {
     try {
-        const response = await fetch(`${API_BASE}/shelf/count`);
+        const response = await apiFetch(`${API_BASE}/shelf/count`);
         const data = await response.json();
         document.querySelectorAll('.shelf-count').forEach(el => {
             el.textContent = `(${data.count})`;
@@ -642,7 +650,7 @@ async function loadAuthors() {
     const page = authorsPage;
 
     try {
-        const response = await fetch(`${API_BASE}/authors?author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}&genre=${encodeURIComponent(genreFilter)}&page=${page}&limit=50`);
+        const response = await apiFetch(`${API_BASE}/authors?author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}&genre=${encodeURIComponent(genreFilter)}&page=${page}&limit=50`);
 
         if (!response.ok) {
             throw new Error('Ошибка загрузки данных');
@@ -688,7 +696,7 @@ function loadAuthorsWithState(state) {
     let genreFilter = document.getElementById('genreFilter').value.trim();
     const page = authorsPage;
 
-    fetch(`${API_BASE}/authors?author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}&genre=${encodeURIComponent(genreFilter)}&page=${page}&limit=50`)
+    apiFetch(`${API_BASE}/authors?author=${encodeURIComponent(authorFilter)}&book=${encodeURIComponent(bookFilter)}&genre=${encodeURIComponent(genreFilter)}&page=${page}&limit=50`)
         .then(res => {
             if (!res.ok) throw new Error('Ошибка загрузки данных');
             return res.json();
@@ -801,7 +809,7 @@ async function loadBooks() {
     if (dateTo) url += `&date_to=${encodeURIComponent(dateTo)}`;
 
     try {
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         renderBooksTable(data);
@@ -823,7 +831,7 @@ async function loadGenres() {
             url += `?genre=${encodeURIComponent(genreFilter)}`;
         }
 
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         if (!response.ok) throw new Error('Ошибка загрузки жанров');
 
         const data = await response.json();
@@ -889,7 +897,7 @@ function renderGenreNode(genre, container, depth) {
             const name = btn.dataset.name;
             if (!confirm(`Удалить жанр "${name}"? Книги не будут удалены.`)) return;
             try {
-                const res = await fetch(`${API_BASE}/genres/${genreId}`, { method: 'DELETE' });
+                const res = await apiFetch(`${API_BASE}/genres/${genreId}`, { method: 'DELETE' });
                 if (!res.ok) {
                     const err = await res.json();
                     alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
@@ -956,7 +964,7 @@ async function loadGenreAuthors(genreId, container) {
         if (bookFilter) params.push('book=' + encodeURIComponent(bookFilter));
         if (params.length > 0) url += '?' + params.join('&');
 
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         if (!response.ok) throw new Error('Ошибка загрузки');
         const data = await response.json();
         const authors = data.authors || [];
@@ -1025,7 +1033,7 @@ async function loadGenreAuthors(genreId, container) {
                         const editionId = checkbox.dataset.id;
                         const onShelf = checkbox.checked;
                         try {
-                            const response = await fetch(`${API_BASE}/books/${editionId}/shelf`, {
+                            const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
                                 method: 'PUT',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ on_shelf: onShelf })
@@ -1059,7 +1067,7 @@ async function loadGenreAuthors(genreId, container) {
                             const title = btn.dataset.title;
                             if (!confirm(`Удалить книгу "${title}"?`)) return;
                             try {
-                                const res = await fetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
+                                const res = await apiFetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
                                 if (!res.ok) {
                                     const err = await res.json();
                                     alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
@@ -1105,7 +1113,7 @@ async function openGenreModal(genre) {
 
     let parentOptions = '<option value="">Нет родителя</option>';
     try {
-        const res = await fetch(`${API_BASE}/genres`);
+        const res = await apiFetch(`${API_BASE}/genres`);
         const allGenres = await res.json();
         allGenres.forEach(g => {
             if (g.id != genre.id) {
@@ -1306,7 +1314,7 @@ function setupBooksTableEvents() {
                 if (!confirm(`Удалить книгу "${title}"?`)) return;
                 (async () => {
                     try {
-                        const r = await fetch(`${API_BASE}/books/${id}`, { method: 'DELETE' });
+                        const r = await apiFetch(`${API_BASE}/books/${id}`, { method: 'DELETE' });
                         if (!r.ok) {
                             const err = await r.json();
                             alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
@@ -1327,7 +1335,7 @@ function setupBooksTableEvents() {
                 const onShelf = shelfEl.dataset.on_shelf === 'true';
                 (async () => {
                     try {
-                        const r = await fetch(`${API_BASE}/books/${id}/shelf`, {
+                        const r = await apiFetch(`${API_BASE}/books/${id}/shelf`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ on_shelf: !onShelf })
@@ -1452,7 +1460,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                     const onShelf = checkbox.checked;
                     
                     try {
-                        const response = await fetch(`${API_BASE}/books/${editionId}/shelf`, {
+                        const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ on_shelf: onShelf })
@@ -1486,7 +1494,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                         const title = btn.dataset.title;
                         if (!confirm(`Удалить книгу "${title}"?`)) return;
                         try {
-                            const res = await fetch(`${API_BASE}/books/${editionId}`, {
+                            const res = await apiFetch(`${API_BASE}/books/${editionId}`, {
                                 method: 'DELETE'
                             });
                             if (!res.ok) {
@@ -1560,7 +1568,7 @@ async function openAuthorModal(author) {
     modal.classList.add('active');
 
     try {
-        const res = await fetch(`${API_BASE}/persons/${author.id}`);
+        const res = await apiFetch(`${API_BASE}/persons/${author.id}`);
         const p = await res.json();
         modalBody.innerHTML = `
             <form id="editForm">
@@ -1616,15 +1624,15 @@ async function openBookModal(book) {
     modal.classList.add('active');
 
     try {
-        const response = await fetch(`${API_BASE}/books/${book.id}/extended`);
+        const response = await apiFetch(`${API_BASE}/books/${book.id}/extended`);
         if (!response.ok) throw new Error('Ошибка загрузки данных');
         const data = await response.json();
 
         const [genresRes, tagsRes, personsRes, languagesRes] = await Promise.all([
-            fetch(`${API_BASE}/genres`),
-            fetch(`${API_BASE}/tags`),
-            fetch(`${API_BASE}/persons`),
-            fetch(`${API_BASE}/languages`)
+            apiFetch(`${API_BASE}/genres`),
+            apiFetch(`${API_BASE}/tags`),
+            apiFetch(`${API_BASE}/persons`),
+            apiFetch(`${API_BASE}/languages`)
         ]);
 
         const genres = await genresRes.json();
@@ -1998,7 +2006,7 @@ function setupAuthorAutocomplete(input, popup) {
 
 function addAuthorRow() {
     const container = document.getElementById('authors-container');
-    fetch(`${API_BASE}/persons`)
+    apiFetch(`${API_BASE}/persons`)
         .then(res => res.json())
         .then(persons => {
             const personsArray = Array.isArray(persons) ? persons : [];
@@ -2076,7 +2084,7 @@ async function addNewGenre() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/genres`, {
+        const response = await apiFetch(`${API_BASE}/genres`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name })
@@ -2106,7 +2114,7 @@ async function addNewTag() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/tags`, {
+        const response = await apiFetch(`${API_BASE}/tags`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name })
@@ -2166,7 +2174,7 @@ async function loadReadlist() {
     if (author) url += '&author=' + encodeURIComponent(author);
 
     try {
-        var res = await fetch(url, { headers: getAuthHeaders() });
+        var res = await apiFetch(url, { headers: getAuthHeaders() });
         if (res.status === 401) { handleAuthFailure(); return; }
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var data = await res.json();
@@ -2463,7 +2471,7 @@ function setupReadlistEvents() {
                 url += '/' + editId;
                 method = 'PUT';
             }
-            var res = await fetch(url, {
+            var res = await apiFetch(url, {
                 method: method,
                 headers: getAuthHeaders(),
                 body: JSON.stringify(data)
@@ -2506,7 +2514,7 @@ function setupReadlistEvents() {
             if (!confirm('Удалить запись из списка чтения?')) return;
             (async function() {
                 try {
-                    var r = await fetch(RL_API + '/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+                    var r = await apiFetch(RL_API + '/' + id, { method: 'DELETE', headers: getAuthHeaders() });
                     if (r.status === 401) { handleAuthFailure(); return; }
                     if (r.ok) {
                         loadReadlist();
@@ -2535,7 +2543,7 @@ function setupReadlistEvents() {
             var onShelf = shelfEl.dataset.on_shelf === 'true';
             (async function() {
                 try {
-                    var r = await fetch(API_BASE + '/books/' + eid + '/shelf', {
+                    var r = await apiFetch(API_BASE + '/books/' + eid + '/shelf', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ on_shelf: !onShelf })
@@ -2565,7 +2573,7 @@ function setupReadlistEvents() {
 
 async function loadReadlistNames() {
     try {
-        var res = await fetch(RL_API + '/names', { headers: getAuthHeaders() });
+        var res = await apiFetch(RL_API + '/names', { headers: getAuthHeaders() });
         if (!res.ok) return;
         var names = await res.json();
         var select = document.getElementById('readlistNameFilter');
@@ -2590,7 +2598,7 @@ async function loadAuthorSelect() {
     var select = document.getElementById('rlAuthorSelect');
     if (!select) return;
     try {
-        var res = await fetch(API_BASE + '/persons');
+        var res = await apiFetch(API_BASE + '/persons');
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var persons = await res.json();
         personMap = {};
@@ -2612,7 +2620,7 @@ async function loadBookSelect() {
     var select = document.getElementById('rlBookSelect');
     if (!select) return;
     try {
-        var res = await fetch(API_BASE + '/books?limit=9999');
+        var res = await apiFetch(API_BASE + '/books?limit=9999');
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var data = await res.json();
         var books = data.books || [];
@@ -2662,14 +2670,14 @@ function openCreateReadlistModal() {
 
 async function openEditReadlistModal(id) {
     try {
-        var res = await fetch(RL_API + '?limit=1&offset=0&sort_by=created_at&sort_order=desc', {
+        var res = await apiFetch(RL_API + '?limit=1&offset=0&sort_by=created_at&sort_order=desc', {
             headers: getAuthHeaders()
         });
         if (!res.ok) return;
         // We need to fetch the specific item. Use the listing and filter by id (client-side).
         // Better approach: fetch all (or use a dedicated GET endpoint).
         // For simplicity, we'll refetch the list with a large limit and find the item.
-        var allRes = await fetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
+        var allRes = await apiFetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
         if (!allRes.ok) return;
         var data = await allRes.json();
         var items = data.items || [];
@@ -2730,7 +2738,7 @@ async function setReadlistItemStatus(id, status) {
     var token = localStorage.getItem('auth_token');
     if (!token) { promptLogin(); return; }
     try {
-        var allRes = await fetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
+        var allRes = await apiFetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
         if (!allRes.ok) { if (allRes.status === 401) handleAuthFailure(); return; }
         var data = await allRes.json();
         var items = data.items || [];
@@ -2740,7 +2748,7 @@ async function setReadlistItemStatus(id, status) {
         }
         if (!item) return;
         item.status = status;
-        var res = await fetch(RL_API + '/' + id, {
+        var res = await apiFetch(RL_API + '/' + id, {
             method: 'PUT',
             headers: getAuthHeaders(),
             body: JSON.stringify(item)

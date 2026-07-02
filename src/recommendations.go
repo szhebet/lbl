@@ -141,7 +141,7 @@ func getRecommendationsByAuthor(db *sql.DB) gin.HandlerFunc {
 
 		rows, err := db.Query(query, authorID, limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			internalError(c, err)
 			return
 		}
 		defer rows.Close()

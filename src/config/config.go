@@ -73,7 +73,6 @@ func DefaultConfig() *Config {
 			Port:     5432,
 			Name:     "library",
 			User:     "postgres",
-			Password: "postgres",
 			SSLMode:  "disable",
 			DataDir:  "/var/lib/postgresql/data",
 		},
