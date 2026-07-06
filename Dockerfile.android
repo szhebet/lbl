@@ -1,0 +1,44 @@
+# ============================================================
+# Dockerfile for TWA Android APK build
+# Requires: library-app-android-sdk image (build via build-apk-sdk.sh)
+# Build: docker build -t library-app-android -f Dockerfile.android .
+# Extract: docker create --name lib-android-tmp library-app-android && \
+#          docker cp lib-android-tmp:/output/app-release.apk ./android-apk/ && \
+#          docker rm lib-android-tmp
+# ============================================================
+FROM library-app-android-sdk:latest
+
+# Copy the TWA project
+COPY src_android/ ./src_android/
+
+# Copy certificates for APK signing and resource bundling
+COPY certres/ ./certres/
+
+# Generate development keystore if not present
+RUN if [ ! -f certres/android.keystore ]; then \
+        keytool -genkey -v -keystore certres/android.keystore -alias library-app \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Home Library, OU=Development, O=Library, L=Moscow, S=Russia, C=RU" && \
+        echo "Generated development keystore"; \
+    fi
+
+# Copy CA cert into Android raw resources
+RUN mkdir -p src_android/app/src/main/res/raw && \
+    if [ -f certres/ca.crt ]; then \
+        cp certres/ca.crt src_android/app/src/main/res/raw/ca_cert.crt; \
+    fi
+
+# Build the APKs using Gradle 8.5 directly
+WORKDIR /build/src_android
+RUN gradle assembleDebug assembleRelease --no-daemon
+
+# Copy the APKs to /output/
+RUN mkdir -p /output && \
+    find . -name "*.apk" -type f -exec cp {} /output/ \;
+
+# Output
+RUN echo "" && \
+    echo "=== APKs built successfully ===" && \
+    ls -lh /output/ && \
+    echo ""

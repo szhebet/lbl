@@ -1,0 +1,36 @@
+{
+  "packageName": "app.library.twa",
+  "host": "library-app.local",
+  "launcherName": "Библиотека",
+  "display": "standalone",
+  "themeColor": "#1a1a2e",
+  "themeColorDark": "#1a1a2e",
+  "navigationColor": "#1a1a2e",
+  "navigationColorDark": "#1a1a2e",
+  "navigationDividerColor": "#1a1a2e",
+  "navigationDividerColorDark": "#1a1a2e",
+  "backgroundColor": "#f5f5f5",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://library-app.local/static/favicon.ico",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "../certres/android.keystore",
+    "alias": "library-app"
+  },
+  "appVersionName": "1.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": true
+    }
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "orientation": "default",
+  "fingerprints": []
+}

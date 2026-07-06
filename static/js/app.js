@@ -224,11 +224,6 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
 });
 
-document.getElementById('applyFilters')?.addEventListener('click', () => {
-    authorsPage = 1;
-    loadAuthors();
-});
-
 document.getElementById('clearFilters')?.addEventListener('click', () => {
     document.getElementById('authorFilter').value = '';
     document.getElementById('bookFilter').value = '';
@@ -313,11 +308,7 @@ document.getElementById('clearShelfBooksBtn')?.addEventListener('click', async (
             loadAuthors();
         }
     });
-});
-
-document.getElementById('applyBookFilters')?.addEventListener('click', () => {
-    booksPage = 1;
-    loadBooks();
+    input.addEventListener('blur', () => { authorsPage = 1; loadAuthors(); });
 });
 
 document.getElementById('clearBookFilters')?.addEventListener('click', () => {
@@ -342,11 +333,8 @@ document.getElementById('clearBookFilters')?.addEventListener('click', () => {
                 loadBooks();
             }
         });
+        input.addEventListener('blur', () => { booksPage = 1; loadBooks(); });
     }
-});
-
-document.getElementById('applyGenreFilters')?.addEventListener('click', () => {
-    loadGenres();
 });
 
 document.getElementById('clearGenreFilters')?.addEventListener('click', () => {
@@ -365,6 +353,7 @@ document.getElementById('clearGenreFilters')?.addEventListener('click', () => {
                 loadGenres();
             }
         });
+        input.addEventListener('blur', () => { loadGenres(); });
     }
 });
 
@@ -2310,11 +2299,7 @@ function setupReadlistEvents() {
     var container = document.getElementById('readlistTableContainer');
     if (!container) return;
 
-    // Filter apply/clear
-    document.getElementById('applyReadlistFilters')?.addEventListener('click', function() {
-        readlistPage = 1;
-        loadReadlist();
-    });
+    // Filter clear
     document.getElementById('clearReadlistFilters')?.addEventListener('click', function() {
         document.getElementById('readlistBookFilter').value = '';
         document.getElementById('readlistAuthorFilter').value = '';
@@ -2323,7 +2308,7 @@ function setupReadlistEvents() {
         loadReadlist();
     });
 
-    // Enter key in filters
+    // Enter key and blur in filters
     ['readlistBookFilter', 'readlistAuthorFilter'].forEach(function(id) {
         var input = document.getElementById(id);
         if (input) {
@@ -2333,6 +2318,10 @@ function setupReadlistEvents() {
                     readlistPage = 1;
                     loadReadlist();
                 }
+            });
+            input.addEventListener('blur', function() {
+                readlistPage = 1;
+                loadReadlist();
             });
         }
     });

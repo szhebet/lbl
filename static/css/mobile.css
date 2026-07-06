@@ -1,0 +1,566 @@
+/* ============================================================
+   Mobile-only overrides (applied when body.android class present)
+   X-Platform: android header injected by Go server
+   ============================================================ */
+
+body.android {
+    font-size: 16px;
+}
+
+/* ============================================================
+   Mobile Top Bar (admin left, user avatar right)
+   ============================================================ */
+body.android .mobile-top-bar {
+    display: flex;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    height: 48px;
+    background: #2c3e50;
+    color: #fff;
+    z-index: 9999;
+    padding: 0 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+body.android .mobile-admin-btn,
+body.android .mobile-back-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    color: #fff;
+    text-decoration: none;
+    font-size: 18px;
+    font-weight: 700;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    transition: background 0.2s;
+}
+body.android .mobile-admin-btn:hover,
+body.android .mobile-back-btn:hover {
+    background: rgba(255,255,255,0.2);
+}
+
+body.android .mobile-top-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-left: 8px;
+    opacity: 0.8;
+}
+
+body.android .mobile-top-spacer {
+    flex: 1;
+}
+
+body.android .mobile-user-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: #3498db;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.2s;
+}
+body.android .mobile-user-btn:hover {
+    background: #2980b9;
+}
+body.android .mobile-user-btn.logged-in {
+    background: #27ae60;
+}
+body.android .mobile-user-btn.logged-in:hover {
+    background: #1e8449;
+}
+
+/* Hide desktop admin/login buttons in tabs on mobile */
+body.android .tabs .load-books-btn,
+body.android .tabs #loginBtn {
+    display: none;
+}
+
+body.android .container {
+    padding: 12px;
+}
+
+body.android header {
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+}
+
+body.android header h1 {
+    font-size: 1.3rem;
+}
+
+body.android .tabs {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px;
+}
+
+body.android .tab {
+    font-size: 0;
+    line-height: 0;
+    padding: 8px 10px;
+    flex: 1 1 auto;
+    text-align: center;
+    min-width: 0;
+    min-height: 44px;
+}
+body.android .tab::before {
+    content: attr(data-short);
+    font-size: 14px;
+    line-height: normal;
+    font-weight: 600;
+}
+body.android .tab.active {
+    font-size: 12px;
+    line-height: normal;
+    flex: 2 1 auto;
+}
+body.android .tab.active::before {
+    display: none;
+}
+
+body.android .tabs-spacer {
+    display: none;
+}
+body.android .load-books-btn {
+    font-size: 11px;
+    padding: 4px 8px;
+    min-height: 36px;
+    min-width: 44px;
+    text-align: center;
+}
+body.android #loginBtn {
+    font-size: 11px;
+    padding: 4px 8px;
+    min-height: 36px;
+    min-width: 44px;
+    text-align: center;
+}
+
+body.android .tab-content {
+    padding: 4px;
+}
+
+body.android .btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 11px;
+}
+
+body.android .btn-small {
+    min-height: 30px;
+    padding: 4px 6px;
+    font-size: 10px;
+}
+
+body.android .filters {
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px;
+}
+
+body.android .filter-group {
+    min-width: 0;
+    width: 100%;
+}
+
+body.android .filter-group input,
+body.android .filter-group select {
+    min-height: 32px;
+    font-size: 13px;
+}
+
+body.android .filter-date-row {
+    flex-direction: column;
+    gap: 4px;
+}
+
+body.android .filter-date-row .filter-group {
+    min-width: 0;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+body.android .filter-date-row .filter-group input {
+    width: 100%;
+    min-width: 0;
+}
+
+body.android .filter-date-actions {
+    width: 100%;
+    justify-content: center;
+}
+
+body.android .summary-row {
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+    font-size: 10px;
+}
+
+body.android .pagination {
+    flex-wrap: wrap;
+    gap: 2px;
+}
+
+body.android .pagination button {
+    min-height: 30px;
+    min-width: 30px;
+    font-size: 10px;
+}
+
+body.android .shelf-link {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+body.android .shelf-checkbox {
+    width: 22px;
+    height: 22px;
+}
+
+body.android #booksTableContainer,
+body.android #readlistTableContainer {
+    overflow: hidden;
+    width: 100%;
+}
+
+body.android .books-table {
+    font-size: 9px;
+    table-layout: fixed;
+    width: 100%;
+}
+
+body.android .books-table th,
+body.android .books-table td {
+    padding: 2px 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.android .books-table .col-num { width: 16px; text-align: center; }
+body.android .books-table .col-date { width: 48px; }
+body.android .books-table .col-title { width: auto; min-width: 0; }
+body.android .books-table .col-author { width: auto; min-width: 0; }
+body.android .books-table .col-year { width: 18px; text-align: center; }
+body.android .books-table .col-format { width: 26px; }
+body.android .books-table .col-shelf { width: 18px; text-align: center; }
+body.android .books-table .col-actions { width: 30px; text-align: center; }
+body.android .books-table .col-status { width: 36px; }
+body.android .books-table .col-library { width: 14px; text-align: center; }
+
+body.android .status-select {
+    font-size: 7px;
+    width: 100%;
+    max-width: 100%;
+    min-height: 20px;
+    padding: 0 1px;
+}
+
+body.android .tree-view {
+    font-size: 10px;
+    overflow: hidden;
+    width: 100%;
+}
+
+body.android .level-1 {
+    padding: 3px 4px;
+    font-size: 10px;
+    min-height: 28px;
+}
+
+body.android .level-2 {
+    padding: 2px 4px;
+    font-size: 10px;
+    min-height: 28px;
+}
+
+body.android .level-3 {
+    padding: 2px 4px;
+    font-size: 9px;
+    flex-wrap: wrap;
+}
+
+body.android .level-3 > span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.android .level-2-container,
+body.android .level-3-container {
+    margin-left: 12px;
+}
+
+body.android .modal-content {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    border-radius: 0;
+    height: 100%;
+    max-height: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+body.android .modal-body {
+    max-height: none;
+    flex: 1;
+    padding: 16px;
+}
+
+body.android .modal-header {
+    padding: 12px 16px;
+}
+
+body.android .modal-header h2 {
+    font-size: 1.1rem;
+}
+
+body.android .modal-footer {
+    padding: 12px 16px;
+    flex-direction: column;
+}
+
+body.android .modal-footer .btn {
+    width: 100%;
+}
+
+body.android .form-group input,
+body.android .form-group select,
+body.android .form-group textarea {
+    min-height: 44px;
+    font-size: 16px;
+}
+
+body.android #loginModal .modal-content {
+    max-width: none;
+    width: 100%;
+    margin: 0;
+    border-radius: 0;
+    height: 100%;
+}
+
+body.android #editForm {
+    padding: 16px;
+}
+
+body.android .author-row {
+    flex-direction: column;
+    gap: 4px;
+}
+
+body.android .author-row .author-role {
+    width: 100%;
+}
+
+body.android .author-autocomplete-group {
+    min-width: 0;
+    width: 100%;
+}
+
+body.android .genre-tree-item {
+    font-size: 13px;
+    padding: 8px;
+    min-height: 44px;
+}
+
+body.android .import-section {
+    padding: 12px;
+}
+
+body.android .file-input,
+body.android .directory-input {
+    min-height: 44px;
+    font-size: 14px;
+}
+
+body.android .import-progress-panel {
+    padding: 12px;
+}
+
+body.android .admin-tabs {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px;
+}
+
+body.android .admin-tab {
+    font-size: 0;
+    line-height: 0;
+    padding: 8px 10px;
+    flex: 1 1 auto;
+    text-align: center;
+    min-height: 44px;
+}
+body.android .admin-tab::before {
+    content: attr(data-short);
+    font-size: 13px;
+    line-height: normal;
+    font-weight: 600;
+}
+body.android .admin-tab.active {
+    font-size: 12px;
+    line-height: normal;
+    flex: 2 1 auto;
+}
+body.android .admin-tab.active::before {
+    display: none;
+}
+
+body.android .admin-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -10px;
+    padding: 0 10px;
+}
+
+body.android .admin-table {
+    font-size: 9px;
+    table-layout: fixed;
+    width: 100%;
+}
+
+body.android .admin-table th,
+body.android .admin-table td {
+    padding: 2px 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.android .admin-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+}
+
+body.android .admin-toolbar .filter-input {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+}
+
+body.android .expand-icon {
+    font-size: 16px;
+    padding: 4px;
+}
+
+body.android .genre-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    margin-bottom: 2px;
+}
+
+body.android .readlist-table {
+    font-size: 12px;
+}
+
+body.android .readlist-filters {
+    flex-direction: column;
+}
+
+body.android .back-link {
+    font-size: 14px;
+    padding: 8px 0;
+    display: block;
+}
+
+body.android h1 {
+    font-size: 1.3rem;
+}
+
+body.android h2 {
+    font-size: 1.1rem;
+}
+
+body.android .shelf-table {
+    font-size: 12px;
+    table-layout: fixed;
+    width: 100%;
+}
+
+body.android .shelf-table th,
+body.android .shelf-table td {
+    padding: 4px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.android .upload-preview {
+    padding: 10px;
+}
+
+body.android .results-list ul {
+    max-height: 200px;
+}
+
+/* ============================================================
+   Edit/delete buttons: compact on mobile
+   ============================================================ */
+body.android .edit-btn,
+body.android .edit-book-btn,
+body.android .edit-readlist-btn {
+    font-size: 0;
+    line-height: 0;
+    padding: 2px 4px;
+    cursor: pointer;
+    min-width: 26px;
+    min-height: 28px;
+}
+body.android .edit-btn::before,
+body.android .edit-book-btn::before,
+body.android .edit-readlist-btn::before {
+    content: "✎";
+    font-size: 14px;
+    line-height: 1;
+}
+body.android .delete-btn,
+body.android .delete-book-btn,
+body.android .delete-readlist-btn {
+    font-size: 0;
+    line-height: 0;
+    padding: 2px 4px;
+    cursor: pointer;
+    color: #e74c3c;
+    min-width: 26px;
+    min-height: 28px;
+}
+body.android .delete-btn::before,
+body.android .delete-book-btn::before,
+body.android .delete-readlist-btn::before {
+    content: "🗑";
+    font-size: 12px;
+    line-height: 1;
+}
+body.android button[onclick^="openTocEditor"] {
+    font-size: 0;
+    line-height: 0;
+    padding: 4px 6px;
+    cursor: pointer;
+}
+body.android button[onclick^="openTocEditor"]::before {
+    content: "\270E";
+    font-size: 14px;
+    line-height: 1;
+}

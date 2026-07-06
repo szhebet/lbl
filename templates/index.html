@@ -11,10 +11,10 @@
 
 
         <nav class="tabs">
-            <button class="tab active" data-tab="authors">Авторы</button>
-            <button class="tab" data-tab="books">Книги</button>
-            <button class="tab" data-tab="genres">Жанры</button>
-            <button class="tab" data-tab="readlist">Список чтения</button>
+            <button class="tab active" data-tab="authors" data-short="А">Авторы</button>
+            <button class="tab" data-tab="books" data-short="К">Книги</button>
+            <button class="tab" data-tab="genres" data-short="Ж">Жанры</button>
+            <button class="tab" data-tab="readlist" data-short="Ч">Список чтения</button>
             <span class="tabs-spacer"></span>
             <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
             <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
@@ -33,8 +33,7 @@
                         <div class="filter-group">
                             <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
                         </div>
-                    <button id="applyFilters" class="btn">Применить</button>
-                    <button id="clearFilters" class="btn btn-secondary">Очистить</button>
+                    <button id="clearFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
                     <span class="shelf-link">
                         <a href="/shelf/" class="shelf-link">📚 Полка<span class="shelf-count">(0)</span></a>
                         <button id="addToShelfBtn" class="btn btn-small">Добавить на полку</button>
@@ -81,8 +80,7 @@
                             <input type="date" id="bookDateTo">
                         </div>
                         <span class="filter-date-actions">
-                            <button id="applyBookFilters" class="btn">Применить</button>
-                            <button id="clearBookFilters" class="btn btn-secondary">Очистить</button>
+                            <button id="clearBookFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
                         </span>
                     </div>
                     <span class="shelf-link">
@@ -110,8 +108,7 @@
                     <div class="filter-group">
                         <input type="text" id="genreBookFilter" placeholder="Поиск по книге...">
                     </div>
-                    <button id="applyGenreFilters" class="btn">Применить</button>
-                    <button id="clearGenreFilters" class="btn btn-secondary">Очистить</button>
+                    <button id="clearGenreFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
                 </div>
 
                 <div class="tree-view" id="genresTree">
@@ -135,8 +132,7 @@
                     <div class="filter-group">
                         <input type="text" id="readlistAuthorFilter" placeholder="Поиск по автору...">
                     </div>
-                    <button id="applyReadlistFilters" class="btn">Применить</button>
-                    <button id="clearReadlistFilters" class="btn btn-secondary">Очистить</button>
+                    <button id="clearReadlistFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
                     <button id="createReadlistBtn" class="btn btn-primary" style="margin-left:auto">Создать</button>
                 </div>
 

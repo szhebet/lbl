@@ -1,0 +1,10 @@
+# Sensitive certificate files - do not commit
+ca.key
+ca.crt
+ca.srl
+server.key
+server.crt
+server.p12
+android.keystore
+assetlinks.json
+*.der

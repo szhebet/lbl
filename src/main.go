@@ -680,16 +680,41 @@ func main() {
 	// Serve static files
 	r.Static("/static", "./static")
 
-	// Serve templates
+	// Serve templates with mobile platform detection
+	mobileTopBarIndex := `<div class="mobile-top-bar">
+    <a href="/admin" class="mobile-admin-btn" title="Администрирование">А</a>
+    <span class="mobile-top-spacer"></span>
+    <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
+</div>`
+	mobileTopBarAdmin := `<div class="mobile-top-bar">
+    <a href="/" class="mobile-back-btn" title="Назад к библиотеке">←</a>
+    <span class="mobile-top-title">Админ</span>
+    <span class="mobile-top-spacer"></span>
+    <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
+</div>`
+	serveIndex := serveTemplate("./templates/index.html", "index.html", mobileTopBarIndex)
+	serveAdmin := serveTemplate("./templates/admin.html", "admin.html", mobileTopBarAdmin)
+	// isMobilePlatform checks if the request comes from a mobile app
+	isMobilePlatform := func(c *gin.Context) bool {
+		if c.GetHeader("X-Platform") == "android" {
+			return true
+		}
+		ua := c.GetHeader("User-Agent")
+		return strings.Contains(ua, "Android") || strings.Contains(ua, "Mobile")
+	}
 	r.GET("/", func(c *gin.Context) {
-		c.File("./templates/index.html")
+		serveIndex(c, isMobilePlatform(c))
 	})
-
 	r.GET("/admin", func(c *gin.Context) {
-		c.File("./templates/admin.html")
+		serveAdmin(c, isMobilePlatform(c))
 	})
 	r.GET("/shelf/", getShelfPage(db))
 	r.GET("/api/v1/shelf/clear", clearShelf(db))
+
+	// Digital Asset Links for TWA verification
+	r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
+		c.File("./certres/assetlinks.json")
+	})
 
 	// Debug endpoints (admin only)
 	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
@@ -699,7 +724,23 @@ func main() {
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Bind, cfg.Server.Port)
-	log.Printf("Starting server on %s\n", addr)
+
+	// Start HTTPS (TLS) with self-signed cert from certres/ if available
+	tlsCertFile := "./certres/server.crt"
+	tlsKeyFile := "./certres/server.key"
+	if _, err := os.Stat(tlsCertFile); err == nil {
+		tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
+		log.Printf("Starting HTTPS on %s\n", tlsAddr)
+		go func() {
+			if err := http.ListenAndServeTLS(tlsAddr, tlsCertFile, tlsKeyFile, r.Handler()); err != nil {
+				log.Printf("HTTPS server error: %v\n", err)
+			}
+		}()
+	} else {
+		log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
+	}
+
+	log.Printf("Starting HTTP on %s\n", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
@@ -3656,6 +3697,78 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Book shelf status updated"})
+	}
+}
+
+func serveTemplate(path, name, mobileTopBar string) func(c *gin.Context, isAndroid bool) {
+	tpl, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read template %s: %v", path, err)
+	}
+	htmlContent := string(tpl)
+
+	mobileCSS := `<link rel="stylesheet" href="/static/css/mobile.css">`
+	androidBody := `<body class="android">`
+	androidJS := `<script>
+(function(){
+var a=document.body.classList.contains('android');
+if(!a)return;
+var q=function(s){return document.querySelector(s)};
+var qa=function(s){return document.querySelectorAll(s)};
+
+/* Mobile user button: show first letter of username */
+function updateMobileUser(){
+var btn=document.getElementById('mobileUserBtn');
+if(!btn)return;
+try{
+var stored=localStorage.getItem('auth_user');
+if(stored){
+var user=JSON.parse(stored);
+if(user&&user.username){
+btn.textContent=user.username.charAt(0).toUpperCase();
+btn.classList.add('logged-in');
+return;
+}
+}
+}catch(e){}
+btn.textContent='\u2630';
+btn.classList.remove('logged-in');
+}
+window.updateMobileUser=updateMobileUser;
+updateMobileUser();
+setInterval(updateMobileUser,1000);
+document.getElementById('mobileUserBtn')?.addEventListener('click',function(){
+if(localStorage.getItem('auth_user')){
+localStorage.removeItem('auth_token');
+localStorage.removeItem('auth_user');
+window.location.reload();
+}else{
+var lb=document.getElementById('loginBtn');
+if(lb)lb.click();
+}
+});
+
+/* Re-apply user button when Books tab becomes active */
+['books','tab-books'].forEach(function(tabId){
+var el=document.getElementById(tabId);
+if(!el)return;
+var obs=new MutationObserver(function(){
+if(el.classList.contains('active'))updateMobileUser();
+});
+obs.observe(el,{attributes:true,attributeFilter:['class']});
+});
+})();
+</script>`
+
+	return func(c *gin.Context, isAndroid bool) {
+		if isAndroid {
+			html := strings.Replace(htmlContent, "</head>", mobileCSS+"\n</head>", 1)
+			html = strings.Replace(html, "<body>", androidBody+"\n    "+mobileTopBar, 1)
+			html = strings.Replace(html, "</body>", androidJS+"\n</body>", 1)
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+		} else {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(htmlContent))
+		}
 	}
 }
 
