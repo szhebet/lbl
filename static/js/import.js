@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (bookFile) {
         bookFile.addEventListener('change', function(e) {
             var file = e.target.files[0];
-            if (file) {
+            if (file && uploadPreview) {
                 var sizeMB = (file.size / (1024 * 1024)).toFixed(2);
                 uploadPreview.innerHTML = '<div class="preview-item"><strong>' + escapeHtml(file.name) + '</strong><span>' + sizeMB + ' MB</span></div>';
                 uploadPreview.style.display = 'block';
@@ -24,12 +24,13 @@ document.addEventListener('DOMContentLoaded', function() {
         uploadForm.addEventListener('submit', async function(e) {
             e.preventDefault();
             var fileInput = document.getElementById('bookFile');
+            if (!fileInput) return;
             var file = fileInput.files[0];
             if (!file) {
-                uploadResult.innerHTML = '<div class="error">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b</div>';
+                if (uploadResult) uploadResult.innerHTML = '<div class="error">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b</div>';
                 return;
             }
-            uploadResult.innerHTML = '<div class="loading">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
+            if (uploadResult) uploadResult.innerHTML = '<div class="loading">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...</div>';
             var formData = new FormData();
             formData.append('file', file);
             try {
@@ -47,17 +48,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         html += '<li><strong>\u042f\u0437\u044b\u043a:</strong> ' + (data.language || 'N/A') + '</li>';
                         html += '</ul></div>';
                     }
-                    uploadResult.innerHTML = html;
+                    if (uploadResult) uploadResult.innerHTML = html;
                     fileInput.value = '';
-                    uploadPreview.style.display = 'none';
-                    if (!data.duplicate && typeof loadAuthorsWithState === 'function') {
+                    if (uploadPreview) uploadPreview.style.display = 'none';
+                    if (!data.duplicate && typeof loadAuthorsWithState === 'function' && document.getElementById('authorsTree')) {
                         loadAuthorsWithState(saveExpandedState());
                     }
                 } else {
-                    uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430: ' + escapeHtml(data.error || '\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043e\u0448\u0438\u0431\u043a\u0430') + '</div>';
+                    if (uploadResult) uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430: ' + escapeHtml(data.error || '\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043e\u0448\u0438\u0431\u043a\u0430') + '</div>';
                 }
             } catch (error) {
-                uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438: ' + escapeHtml(error.message) + '</div>';
+                if (uploadResult) uploadResult.innerHTML = '<div class="error">\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438: ' + escapeHtml(error.message) + '</div>';
             }
         });
     }
@@ -68,12 +69,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         oldDirectoryHandler = async function(e) {
             e.preventDefault();
-            var dirPath = document.getElementById('directoryPath').value.trim();
+            var dirInput = document.getElementById('directoryPath');
+            if (!dirInput) return;
+            var dirPath = dirInput.value.trim();
             if (!dirPath) {
-                directoryResult.innerHTML = '<div class="error">\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0443\u0442\u044c \u043a \u043f\u0430\u043f\u043a\u0435</div>';
+                if (directoryResult) directoryResult.innerHTML = '<div class="error">\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0443\u0442\u044c \u043a \u043f\u0430\u043f\u043a\u0435</div>';
                 return;
             }
-            directoryResult.innerHTML = '<div class="loading">\u0418\u043c\u043f\u043e\u0440\u0442 \u0437\u0430\u043f\u0443\u0449\u0435\u043d...</div>';
+            if (directoryResult) directoryResult.innerHTML = '<div class="loading">\u0418\u043c\u043f\u043e\u0440\u0442 \u0437\u0430\u043f\u0443\u0449\u0435\u043d...</div>';
             var formData = new FormData();
             formData.append('directory', dirPath);
             try {
@@ -82,10 +85,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (response.ok && data.started) {
                     showImportProgress(dirPath, data.total);
                 } else {
-                    directoryResult.innerHTML = '<div class="error">' + escapeHtml(data.error || '\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0438\u043c\u043f\u043e\u0440\u0442\u0430') + '</div>';
+                    if (directoryResult) directoryResult.innerHTML = '<div class="error">' + escapeHtml(data.error || '\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0438\u043c\u043f\u043e\u0440\u0442\u0430') + '</div>';
                 }
             } catch (error) {
-                directoryResult.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
+                if (directoryResult) directoryResult.innerHTML = '<div class="error">' + escapeHtml(error.message) + '</div>';
             }
         };
         directoryForm.addEventListener('submit', oldDirectoryHandler);
@@ -285,7 +288,7 @@ function finishImportUI(state) {
         summaryEl.style.display = 'block';
     }
 
-    if (typeof loadAuthorsWithState === 'function') {
+    if (typeof loadAuthorsWithState === 'function' && document.getElementById('authorsTree')) {
         loadAuthorsWithState(saveExpandedState());
     }
 }

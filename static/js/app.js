@@ -1966,31 +1966,60 @@ function setupAuthorAutocomplete(input, popup) {
         }
         var row = this.closest('.author-row');
         var hiddenId = row ? row.querySelector('.author-id') : null;
-        if (matched.length === 0) {
-            if (hiddenId) hiddenId.value = '';
-        } else if (matched.length === 1) {
-            matched[0].selected = true;
-            if (hiddenId) hiddenId.value = matched[0].value;
-            if (this.value !== matched[0].textContent) {
-                this.value = matched[0].textContent;
+        if (hiddenId) hiddenId.value = '';
+        popup.style.display = (val && matched.length > 0) ? '' : 'none';
+    });
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            var val = this.value.toLowerCase();
+            if (!val) return;
+            var opts = popup.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
+                }
+            }
+            if (matched.length === 1) {
+                e.preventDefault();
+                fillAuthorSelection(this, popup, matched[0]);
             }
         }
-        if (!val) {
-            if (hiddenId) hiddenId.value = '';
+    });
+    input.addEventListener('blur', function() {
+        var val = this.value.toLowerCase();
+        if (!val) return;
+        var opts = popup.options;
+        var matched = [];
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].value === '') continue;
+            if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                matched.push(opts[i]);
+            }
         }
-        popup.style.display = (val && matched.length !== 1) ? '' : 'none';
+        if (matched.length === 1) {
+            fillAuthorSelection(this, popup, matched[0]);
+        }
     });
     popup.addEventListener('change', function() {
         var row = input.closest('.author-row');
         var hiddenId = row ? row.querySelector('.author-id') : null;
         if (this.value) {
-            input.value = this.options[this.selectedIndex].textContent;
-            if (hiddenId) hiddenId.value = this.value;
+            fillAuthorSelection(input, popup, this.options[this.selectedIndex]);
         } else {
             if (hiddenId) hiddenId.value = '';
         }
-        this.style.display = 'none';
     });
+}
+
+function fillAuthorSelection(input, popup, opt) {
+    opt.selected = true;
+    var row = input.closest('.author-row');
+    var hiddenId = row ? row.querySelector('.author-id') : null;
+    if (hiddenId) hiddenId.value = opt.value;
+    input.value = opt.textContent;
+    popup.style.display = 'none';
 }
 
 function addAuthorRow() {
@@ -2351,19 +2380,25 @@ function setupReadlistEvents() {
                 opts[i].style.display = matches ? '' : 'none';
                 if (matches) matched.push(opts[i]);
             }
-            if (matched.length === 0) {
-                document.getElementById('rlAuthorId').value = '';
-            } else if (matched.length === 1) {
-                matched[0].selected = true;
-                document.getElementById('rlAuthorId').value = matched[0].value;
-                if (this.value !== matched[0].textContent) {
-                    this.value = matched[0].textContent;
+            document.getElementById('rlAuthorId').value = '';
+            rlAuthorSelect.style.display = (val && matched.length > 0) ? '' : 'none';
+        });
+        rlAuthorInput.addEventListener('blur', function() {
+            var val = this.value.toLowerCase();
+            var opts = rlAuthorSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
                 }
             }
-            if (!val) {
-                document.getElementById('rlAuthorId').value = '';
+            if (matched.length === 1) {
+                matched[0].selected = true;
+                document.getElementById('rlAuthorId').value = matched[0].value;
+                this.value = matched[0].textContent;
+                rlAuthorSelect.style.display = 'none';
             }
-            rlAuthorSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
         });
     }
     // Author select change → fill text
@@ -2381,6 +2416,7 @@ function setupReadlistEvents() {
     // Book text input → filter select
     var rlBookInput = document.getElementById('rlBookname');
     var rlBookSelect = document.getElementById('rlBookSelect');
+    var rlBookSelectedValue = ''; // tracks actual selected book id
     if (rlBookInput) {
         rlBookInput.addEventListener('input', function() {
             var val = this.value.toLowerCase();
@@ -2392,44 +2428,65 @@ function setupReadlistEvents() {
                 opts[i].style.display = matches ? '' : 'none';
                 if (matches) matched.push(opts[i]);
             }
-            if (matched.length === 0) {
-                document.getElementById('rlBookId').value = '';
-            } else if (matched.length === 1) {
-                matched[0].selected = true;
-                document.getElementById('rlBookId').value = matched[0].value;
-                var matchedTitle = matched[0].dataset.title || matched[0].textContent;
-                if (this.value !== matchedTitle) {
-                    this.value = matchedTitle;
+            rlBookSelectedValue = '';
+            document.getElementById('rlBookId').value = '';
+            rlBookSelect.style.display = (val && matched.length > 0) ? '' : 'none';
+        });
+        rlBookInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                var val = this.value.toLowerCase();
+                if (!val) return;
+                var opts = rlBookSelect.options;
+                var matched = [];
+                for (var i = 0; i < opts.length; i++) {
+                    if (opts[i].value === '') continue;
+                    if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                        matched.push(opts[i]);
+                    }
                 }
-                var firstAuthor = matched[0].dataset.firstAuthor || '';
-                if (firstAuthor) {
-                    document.getElementById('rlAuthor').value = firstAuthor;
-                    var aid = personMap[firstAuthor.toLowerCase()];
-                    document.getElementById('rlAuthorId').value = aid || '';
+                if (matched.length === 1) {
+                    e.preventDefault();
+                    fillBookSelection(matched[0]);
                 }
             }
-            if (!val) {
-                document.getElementById('rlBookId').value = '';
+        });
+        rlBookInput.addEventListener('blur', function() {
+            var val = this.value.toLowerCase();
+            if (!val) return;
+            var opts = rlBookSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
+                }
             }
-            rlBookSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
+            if (matched.length === 1) {
+                fillBookSelection(matched[0]);
+            }
         });
     }
     if (rlBookSelect) {
         rlBookSelect.addEventListener('change', function() {
             if (this.value) {
-                var opt = this.options[this.selectedIndex];
-                document.getElementById('rlBookname').value = opt.dataset.title || opt.textContent;
-                document.getElementById('rlBookId').value = this.value;
-                var firstAuthor = opt.dataset.firstAuthor || '';
-                if (firstAuthor) {
-                    document.getElementById('rlAuthor').value = firstAuthor;
-                    var aid = personMap[firstAuthor.toLowerCase()];
-                    document.getElementById('rlAuthorId').value = aid || '';
-                }
+                fillBookSelection(this.options[this.selectedIndex]);
             } else {
                 document.getElementById('rlBookId').value = '';
             }
         });
+    }
+    function fillBookSelection(opt) {
+        opt.selected = true;
+        rlBookSelectedValue = opt.value;
+        document.getElementById('rlBookname').value = opt.dataset.title || opt.textContent;
+        document.getElementById('rlBookId').value = opt.value;
+        var firstAuthor = opt.dataset.firstAuthor || '';
+        if (firstAuthor) {
+            document.getElementById('rlAuthor').value = firstAuthor;
+            var aid = personMap[firstAuthor.toLowerCase()];
+            document.getElementById('rlAuthorId').value = aid || '';
+        }
+        rlBookSelect.style.display = 'none';
     }
 
     // Create/Edit form submit

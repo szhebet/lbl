@@ -304,6 +304,102 @@ lbl/
 └── README.md
 ```
 
+## TWA Android App
+
+TWA (Trusted Web Activity) упаковывает веб-приложение в Android APK через WebView.
+
+### Сборка APK
+
+```bash
+# Полная сборка (debug + release)
+./build-android.sh
+
+# Только debug
+./build-apk-debug.sh
+
+# Только release
+./build-apk-release.sh
+```
+
+APK будут в `android-apk/`:
+
+```bash
+adb install -r android-apk/app-debug.apk
+```
+
+### Настройка клиентского сертификата (mTLS)
+
+Для ограничения доступа к сайту с помощью клиентских сертификатов через nginx:
+
+1. **Сгенерировать сертификаты** (CA + серверный + клиентский):
+
+```bash
+cd certres
+./generate-certs.sh           # CA + сертификат сервера
+./generate-keystore.sh        # Keystore для подписи APK
+./generate-assetlinks.sh      # Digital Asset Links
+./generate-client-cert.sh     # Клиентский сертификат (для APK)
+```
+
+Скрипт `generate-client-cert.sh` проверяет наличие существующего сертификата и переиспользует его при повторном запуске.
+
+2. **Настроить nginx** — добавить в server block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name library-app.local;
+
+    ssl_certificate     /path/to/certres/server.crt;
+    ssl_certificate_key /path/to/certres/server.key;
+
+    # Client certificate authentication
+    ssl_client_certificate /path/to/certres/ca.crt;
+    ssl_verify_client on;
+    ssl_verify_depth 1;
+
+    # Если нужно разрешить доступ только конкретным клиентам:
+    # ssl_verify_client optional_no_ca;  # И проверять ${ssl_client_s_dn} в приложении
+
+    location / {
+        proxy_pass http://127.0.0.1:9091;
+        proxy_set_header X-Client-Cert $ssl_client_cert;
+        proxy_set_header X-Client-Verify $ssl_client_verify;
+    }
+}
+```
+
+3. **Сборка APK** автоматически включает клиентский сертификат (`client.p12` → `res/raw/client_cert.p12`). Приложение WebView отправляет сертификат при запросе со стороны сервера.
+
+4. **Файлы сертификатов:**
+
+| Файл | Назначение |
+|------|-----------|
+| `ca.crt` | Корневой сертификат CA (для nginx и APK) |
+| `ca.key` | Приватный ключ CA (не распространять) |
+| `server.crt` | Сертификат сервера (для nginx) |
+| `server.key` | Приватный ключ сервера (не распространять) |
+| `client.crt` | Клиентский сертификат (для белого списка nginx) |
+| `client.key` | Приватный ключ клиента (в APK) |
+| `client.p12` | PKCS12 для Android (встраивается в APK) |
+| `server.p12` | PKCS12 для Go TLS |
+
+### Структура Android-приложения
+
+```
+src_android/
+├── app/
+│   ├── build.gradle           # Копирование сертификатов в ресурсы
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── res/raw/
+│       │   ├── ca_cert.crt    # Сертификат CA (из certres/)
+│       │   └── client_cert.p12 # Клиентский сертификат (из certres/)
+│       └── java/app/library/twa/
+│           ├── Application.java
+│           └── MainActivity.java  # Отправка клиентского сертификата
+```
+
 ## Примечания
 
 - **Схема БД** создаётся автоматически при первом запуске (embedded `schema.sql` + миграции). База данных также создаётся автоматически, если не существует.

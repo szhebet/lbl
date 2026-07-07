@@ -14,11 +14,15 @@ fi
 
 echo "=== Building TWA APK in Docker (debug + release) ==="
 
-# Ensure CA cert is in the android raw resources
+# Generate client certificate if needed
+./certres/generate-client-cert.sh
+
+# Ensure CA cert + client cert are in the android raw resources
 mkdir -p src_android/app/src/main/res/raw
 cp certres/ca.crt src_android/app/src/main/res/raw/ca_cert.crt 2>/dev/null || true
+cp certres/client.p12 src_android/app/src/main/res/raw/client_cert.p12 2>/dev/null || true
 
-docker build -t library-app-android:latest -f Dockerfile.android .
+docker build --no-cache -t library-app-android:latest -f Dockerfile.android .
 
 rm -rf android-apk && mkdir -p android-apk
 docker create --name lib-android-tmp library-app-android:latest

@@ -9,9 +9,16 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import java.io.InputStream;
+import java.security.KeyStore;
+import java.security.Principal;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 import android.view.ViewGroup;
+import android.webkit.ClientCertRequest;
 import android.webkit.ConsoleMessage;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
@@ -135,6 +142,8 @@ public class MainActivity extends Activity {
         }
 
         webView.setWebViewClient(new WebViewClient() {
+            private boolean clientCertLoaded = false;
+
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 appendDebug("Loading: " + url);
@@ -183,9 +192,52 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onReceivedClientCertRequest(WebView view, ClientCertRequest request) {
+                appendDebug("Client certificate requested by: " + request.getHost());
+                provideClientCert(request);
+            }
+
+            @Override
             public void onLoadResource(WebView view, String url) {
                 if (url.startsWith("http")) {
                     appendDebug("  Resource: " + url);
+                }
+            }
+
+            private void provideClientCert(ClientCertRequest request) {
+                try {
+                    InputStream in = getResources().openRawResource(R.raw.client_cert);
+                    KeyStore ks = KeyStore.getInstance("PKCS12");
+                    ks.load(in, "changeit".toCharArray());
+                    in.close();
+
+                    Enumeration<String> aliases = ks.aliases();
+                    if (!aliases.hasMoreElements()) {
+                        appendDebug("No client cert alias found in PKCS12");
+                        request.cancel();
+                        return;
+                    }
+
+                    String alias = aliases.nextElement();
+                    PrivateKey privateKey = (PrivateKey) ks.getKey(alias, "changeit".toCharArray());
+                    if (privateKey == null) {
+                        appendDebug("No private key found for alias: " + alias);
+                        request.cancel();
+                        return;
+                    }
+
+                    java.security.cert.Certificate[] chain = ks.getCertificateChain(alias);
+                    X509Certificate[] x509Chain = new X509Certificate[chain.length];
+                    for (int i = 0; i < chain.length; i++) {
+                        x509Chain[i] = (X509Certificate) chain[i];
+                    }
+
+                    appendDebug("Proceeding with client certificate: " + alias
+                            + " (" + x509Chain[0].getSubjectDN().getName() + ")");
+                    request.proceed(privateKey, x509Chain);
+                } catch (Exception e) {
+                    appendDebug("Client cert error: " + e.getMessage());
+                    request.cancel();
                 }
             }
         });

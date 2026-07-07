@@ -49,8 +49,16 @@ dependencies {
 task copyCertificates(type: Copy) {
     from '../../certres'
     include 'ca.crt'
+    include 'client.p12'
     into 'src/main/res/raw'
     rename 'ca.crt', 'ca_cert.crt'
+    rename 'client.p12', 'client_cert.p12'
 }
 
+task generateClientCert(type: Exec) {
+    workingDir '../../certres'
+    commandLine 'bash', 'generate-client-cert.sh'
+}
+
+preBuild.dependsOn generateClientCert
 preBuild.dependsOn copyCertificates

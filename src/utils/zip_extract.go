@@ -68,6 +68,10 @@ func DetectZipContent(data []byte) (*ZipExtractResult, error) {
 			if looksLikeFB2(content) {
 				return &ZipExtractResult{Content: content, ContentType: ZipContentFB2}, nil
 			}
+			// Entry has .fb2 extension but is not FB2 — try as nested archive (FB2.ZIP disguised as .fb2)
+			if nested, nestErr := DetectZipContent(content); nestErr == nil {
+				return nested, nil
+			}
 		}
 	}
 

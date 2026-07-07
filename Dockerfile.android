@@ -23,15 +23,24 @@ RUN if [ ! -f certres/android.keystore ]; then \
         echo "Generated development keystore"; \
     fi
 
-# Copy CA cert into Android raw resources
+# Generate client certificate (or use existing)
+RUN if [ -f certres/ca.crt ] && [ -f certres/ca.key ]; then \
+        cd certres && bash generate-client-cert.sh; \
+    fi
+
+# Copy CA cert + client cert into Android raw resources
 RUN mkdir -p src_android/app/src/main/res/raw && \
     if [ -f certres/ca.crt ]; then \
         cp certres/ca.crt src_android/app/src/main/res/raw/ca_cert.crt; \
+    fi && \
+    if [ -f certres/client.p12 ]; then \
+        cp certres/client.p12 src_android/app/src/main/res/raw/client_cert.p12; \
     fi
 
-# Build the APKs using Gradle 8.5 directly
+# Build the APKs using Gradle 8.5 directly (clean forces full rebuild)
 WORKDIR /build/src_android
-RUN gradle assembleDebug assembleRelease --no-daemon
+RUN rm -rf .gradle build */build && \
+    gradle clean assembleDebug assembleRelease --no-daemon
 
 # Copy the APKs to /output/
 RUN mkdir -p /output && \

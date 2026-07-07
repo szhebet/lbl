@@ -616,3 +616,39 @@ adb install -r android-apk/app-release.apk
 | `Dockerfile.android` | Билд APK (меняется при изменении исходников) |
 
 **Важно:** После изменения `Dockerfile.android.sdk` (например, обновление Gradle) нужно пересобрать SDK-образ: `./build-apk-sdk.sh`.
+
+## Goal
+- Maintain a self-hosted Home Library Manager with Go backend, Android TWA wrapper, and a single responsive UI that works on desktop and mobile without horizontal scrolling.
+
+## Constraints & Preferences
+- Mobile layout: use `body.android` class injected server-side, `mobile.css`, mobile-top-bar, compact edit/delete buttons, and Android JS for user button.
+- Horizontal scrolling on lists (books table, reading list, admin tables, tree views) is unacceptable – all content must fit on phone screen width.
+- Default to classic colors; no dark theme.
+- Docker build split into SDK image + app build.
+- When shelving a book: extract the ZIP to `tempfld/shelf/{edition_id}/`, unzip nested archives recursively, serve the extracted file on download. Clean up on unshelf.
+- When importing ZIPs: extract to inner format (FB2, PDF, DOC, DOCX), NOT store a double-ZIP. Recursively unzip nested archives (e.g., FB2.ZIP inside ZIP) until a non-archive format is reached. DOCX is a final format (even though it is technically a ZIP).
+
+## Progress
+### Done
+- Restored Android-specific server injection: `body class="android"`, `mobile.css`, mobile-top-bar HTML, Android JS for user button (reverted the "remove all mobile" changes).
+- Fixed `mobile.css` for phone-screen fit: hidden non-essential columns, `table-layout: fixed`, compact sizes, icon-only buttons.
+- Shelf extraction: shelving a book extracts its archive to `tempfld/shelf/{edition_id}/` and serves the raw file on download.
+- Fixed import ZIP bug: double-ZIPs no longer created; inner format stored directly.
+- Fixed `DetectZipContent` in `zip_extract.go`: `.fb2` entries that are actually ZIP archives are now recursively detected (fixes `Vozvrashchenie_Siney_Borody.fb2_318.zip` → "Возвращение Синей Бороды").
+- Full import of `/example/` complete: **69 books imported, 2 `.rar` unsupported**. All formats (FB2, EPUB, PDF, DOC, DOCX, ZIP) working. Nested archives (FB2.ZIP in ZIP, DOC in ZIP) working. Duplicate detection correct.
+
+### In Progress
+- (none)
+
+### Blocked
+- `.rar` files in example (10_the_active_side_of_infinity.rar, 11_the_wheel_of_time.rar) are not supported – no RAR extraction; user has not requested this.
+
+## Key Decisions
+- Server differentiates desktop vs Android (via `X-Platform: android` header) and injects mobile-specific CSS/JS.
+- Shelf extraction writes the final extracted format to `tempfld/shelf/{edition_id}/`; the original ZIP remains untouched in `bookarch/`.
+- Double-ZIP bug fix ensures the stored archive in `bookarch/` contains the actual book file instead of a nested ZIP.
+
+## Next Steps
+- Rebuild APK.
+- Test shelf extraction/download on a variety of formats (DOC, EPUB, PDF, nested FB2.ZIP).
+- Handle any remaining import edge cases.
