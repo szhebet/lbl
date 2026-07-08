@@ -55,7 +55,10 @@ var embeddedMigration23 string
 //go:embed migration_2.4.sql
 var embeddedMigration24 string
 
-const currentDBVersion = "2.4"
+//go:embed migration_2.5.sql
+var embeddedMigration25 string
+
+const currentDBVersion = "2.5"
 
 type migration struct {
 	Version     string
@@ -98,6 +101,11 @@ var migrations = []migration{
 		Version:     "2.4",
 		Description: "Triggers for read_list ↔ user_books status sync",
 		SQL:         stripSchema(embeddedMigration24),
+	},
+	{
+		Version:     "2.5",
+		Description: "Add refresh_tokens table",
+		SQL:         stripSchema(embeddedMigration25),
 	},
 }
 
@@ -594,6 +602,14 @@ func main() {
 			}
 			createUser(db)(c)
 		})
+		auth.POST("/refresh", func(c *gin.Context) {
+			ip := c.ClientIP()
+			if !loginLimiter.allow(ip) {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+				return
+			}
+			refreshToken(db)(c)
+		})
 	}
 
 	// Read-only guest routes
@@ -680,16 +696,41 @@ func main() {
 	// Serve static files
 	r.Static("/static", "./static")
 
-	// Serve templates
+	// Serve templates with mobile platform detection
+	mobileTopBarIndex := `<div class="mobile-top-bar">
+    <a href="/admin" class="mobile-admin-btn" title="Администрирование">А</a>
+    <span class="mobile-top-spacer"></span>
+    <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
+</div>`
+	mobileTopBarAdmin := `<div class="mobile-top-bar">
+    <a href="/" class="mobile-back-btn" title="Назад к библиотеке">←</a>
+    <span class="mobile-top-title">Админ</span>
+    <span class="mobile-top-spacer"></span>
+    <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
+</div>`
+	serveIndex := serveTemplate("./templates/index.html", "index.html", mobileTopBarIndex)
+	serveAdmin := serveTemplate("./templates/admin.html", "admin.html", mobileTopBarAdmin)
+	// isMobilePlatform checks if the request comes from a mobile app
+	isMobilePlatform := func(c *gin.Context) bool {
+		if c.GetHeader("X-Platform") == "android" {
+			return true
+		}
+		ua := c.GetHeader("User-Agent")
+		return strings.Contains(ua, "Android") || strings.Contains(ua, "Mobile")
+	}
 	r.GET("/", func(c *gin.Context) {
-		c.File("./templates/index.html")
+		serveIndex(c, isMobilePlatform(c))
 	})
-
 	r.GET("/admin", func(c *gin.Context) {
-		c.File("./templates/admin.html")
+		serveAdmin(c, isMobilePlatform(c))
 	})
 	r.GET("/shelf/", getShelfPage(db))
 	r.GET("/api/v1/shelf/clear", clearShelf(db))
+
+	// Digital Asset Links for TWA verification
+	r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
+		c.File("./certres/assetlinks.json")
+	})
 
 	// Debug endpoints (admin only)
 	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
@@ -699,7 +740,23 @@ func main() {
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Bind, cfg.Server.Port)
-	log.Printf("Starting server on %s\n", addr)
+
+	// Start HTTPS (TLS) with self-signed cert from certres/ if available
+	tlsCertFile := "./certres/server.crt"
+	tlsKeyFile := "./certres/server.key"
+	if _, err := os.Stat(tlsCertFile); err == nil {
+		tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
+		log.Printf("Starting HTTPS on %s\n", tlsAddr)
+		go func() {
+			if err := http.ListenAndServeTLS(tlsAddr, tlsCertFile, tlsKeyFile, r.Handler()); err != nil {
+				log.Printf("HTTPS server error: %v\n", err)
+			}
+		}()
+	} else {
+		log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
+	}
+
+	log.Printf("Starting HTTP on %s\n", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
@@ -2923,6 +2980,9 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 		baseName = utils.TransliterateFilename(title)
 	} else {
 		baseName = strings.TrimSuffix(title, ext)
+		if ext == ".zip" {
+			baseName = strings.TrimSuffix(baseName, innerExt)
+		}
 	}
 	zipName := baseName + ".zip"
 	destPath := filepath.Join(destDir, subDir, zipName)
@@ -2949,7 +3009,7 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 		zipFile.Close()
 		return nil, fmt.Errorf("create zip entry: %w", err)
 	}
-	if _, err := fw.Write(data); err != nil {
+	if _, err := fw.Write(bookContent); err != nil {
 		zipWriter.Close()
 		zipFile.Close()
 		return nil, fmt.Errorf("write zip: %w", err)
@@ -3560,12 +3620,13 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 		editionID := c.Param("id")
 
 		var filePath, title string
+		var onShelf bool
 		err := db.QueryRow(`
-			SELECT ef.file_path, e.title 
+			SELECT ef.file_path, e.title, COALESCE(e.on_shelf, false)
 			FROM edition_files ef 
 			JOIN editions e ON e.id = ef.edition_id 
 			WHERE ef.edition_id = $1 AND ef.is_primary = true
-		`, editionID).Scan(&filePath, &title)
+		`, editionID).Scan(&filePath, &title, &onShelf)
 
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -3574,6 +3635,67 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 			}
 			internalError(c, err)
 			return
+		}
+
+		// If book is on shelf, serve extracted file
+		if onShelf {
+			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
+			entries, err := os.ReadDir(shelfDir)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					extractedPath := filepath.Join(shelfDir, entry.Name())
+					ext := strings.ToLower(filepath.Ext(entry.Name()))
+
+					var contentType string
+					switch ext {
+					case ".fb2":
+						contentType = "application/xml"
+					case ".pdf":
+						contentType = "application/pdf"
+					case ".doc":
+						contentType = "application/msword"
+					case ".docx":
+						contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+					case ".epub":
+						contentType = "application/epub+zip"
+					default:
+						contentType = "application/octet-stream"
+					}
+
+					downloadName := sanitizeFilename(title) + ext
+					c.Header("Content-Description", "File Transfer")
+					c.Header("Content-Transfer-Encoding", "binary")
+					c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
+					c.Header("Content-Type", contentType)
+					c.File(extractedPath)
+					return
+				}
+			}
+			// Extracted file not found (server restart etc.), extract on demand
+			if err := extractBookForShelf(db, editionID, cfg); err == nil {
+				// Retry serving after extraction
+				entries, err = os.ReadDir(shelfDir)
+				if err == nil {
+					for _, entry := range entries {
+						if entry.IsDir() {
+							continue
+						}
+						extractedPath := filepath.Join(shelfDir, entry.Name())
+						ext := strings.ToLower(filepath.Ext(entry.Name()))
+						downloadName := sanitizeFilename(title) + ext
+						c.Header("Content-Description", "File Transfer")
+						c.Header("Content-Transfer-Encoding", "binary")
+						c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
+						c.Header("Content-Type", "application/octet-stream")
+						c.File(extractedPath)
+						return
+					}
+				}
+			}
+			// Fall through to serve ZIP
 		}
 
 		fullPath := filepath.Join(".", filePath)
@@ -3641,12 +3763,23 @@ type UpdateShelfRequest struct {
 
 func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		cfg := getConfig(c)
 		editionID := c.Param("id")
 
 		var req UpdateShelfRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		if req.OnShelf {
+			if err := extractBookForShelf(db, editionID, cfg); err != nil {
+				internalError(c, err)
+				return
+			}
+		} else {
+			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
+			os.RemoveAll(shelfDir)
 		}
 
 		_, err := db.Exec("UPDATE editions SET on_shelf = $1, shelf_order = CASE WHEN $1 THEN COALESCE(shelf_order, 0) + 1 ELSE shelf_order END WHERE id = $2", req.OnShelf, editionID)
@@ -3656,6 +3789,131 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Book shelf status updated"})
+	}
+}
+
+func extractBookForShelf(db *sql.DB, editionID string, cfg *config.Config) error {
+	var filePath string
+	err := db.QueryRow(`
+		SELECT ef.file_path FROM edition_files ef
+		WHERE ef.edition_id = $1 AND ef.is_primary = true
+	`, editionID).Scan(&filePath)
+	if err != nil {
+		return fmt.Errorf("file path lookup: %w", err)
+	}
+
+	fullPath := filepath.Join(".", filePath)
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return fmt.Errorf("file not found on disk")
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("read archive: %w", err)
+	}
+
+	result, err := utils.DetectZipContent(data)
+	if err != nil {
+		return fmt.Errorf("extract from archive: %w", err)
+	}
+
+	var ext string
+	switch result.ContentType {
+	case utils.ZipContentFB2:
+		ext = ".fb2"
+	case utils.ZipContentPDF:
+		ext = ".pdf"
+	case utils.ZipContentDOC:
+		ext = ".doc"
+	case utils.ZipContentDOCX:
+		ext = ".docx"
+	case utils.ZipContentEPUB:
+		ext = ".epub"
+	default:
+		ext = ".bin"
+	}
+
+	shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
+	os.RemoveAll(shelfDir)
+	os.MkdirAll(shelfDir, 0755)
+
+	outPath := filepath.Join(shelfDir, "book"+ext)
+	if err := os.WriteFile(outPath, result.Content, 0644); err != nil {
+		return fmt.Errorf("write extracted file: %w", err)
+	}
+
+	return nil
+}
+
+func serveTemplate(path, name, mobileTopBar string) func(c *gin.Context, isAndroid bool) {
+	tpl, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read template %s: %v", path, err)
+	}
+	htmlContent := string(tpl)
+
+	mobileCSS := `<link rel="stylesheet" href="/static/css/mobile.css">`
+	androidBody := `<body class="android">`
+	androidJS := `<script>
+(function(){
+var a=document.body.classList.contains('android');
+if(!a)return;
+var q=function(s){return document.querySelector(s)};
+var qa=function(s){return document.querySelectorAll(s)};
+
+/* Mobile user button: show first letter of username */
+function updateMobileUser(){
+var btn=document.getElementById('mobileUserBtn');
+if(!btn)return;
+try{
+var stored=localStorage.getItem('auth_user');
+if(stored){
+var user=JSON.parse(stored);
+if(user&&user.username){
+btn.textContent=user.username.charAt(0).toUpperCase();
+btn.classList.add('logged-in');
+return;
+}
+}
+}catch(e){}
+btn.textContent='\u2630';
+btn.classList.remove('logged-in');
+}
+window.updateMobileUser=updateMobileUser;
+updateMobileUser();
+setInterval(updateMobileUser,1000);
+document.getElementById('mobileUserBtn')?.addEventListener('click',function(){
+if(localStorage.getItem('auth_user')){
+localStorage.removeItem('auth_token');
+localStorage.removeItem('auth_user');
+window.location.reload();
+}else{
+var lb=document.getElementById('loginBtn');
+if(lb)lb.click();
+}
+});
+
+/* Re-apply user button when Books tab becomes active */
+['books','tab-books'].forEach(function(tabId){
+var el=document.getElementById(tabId);
+if(!el)return;
+var obs=new MutationObserver(function(){
+if(el.classList.contains('active'))updateMobileUser();
+});
+obs.observe(el,{attributes:true,attributeFilter:['class']});
+});
+})();
+</script>`
+
+	return func(c *gin.Context, isAndroid bool) {
+		if isAndroid {
+			html := strings.Replace(htmlContent, "</head>", mobileCSS+"\n</head>", 1)
+			html = strings.Replace(html, "<body>", androidBody+"\n    "+mobileTopBar, 1)
+			html = strings.Replace(html, "</body>", androidJS+"\n</body>", 1)
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+		} else {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(htmlContent))
+		}
 	}
 }
 
@@ -3799,11 +4057,16 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 
 func clearShelf(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		cfg := getConfig(c)
+
 		_, err := db.Exec("UPDATE editions SET on_shelf = false, shelf_order = 0 WHERE on_shelf = true")
 		if err != nil {
 			internalError(c, err)
 			return
 		}
+
+		shelfRoot := filepath.Join(cfg.Directories.Temp, "shelf")
+		os.RemoveAll(shelfRoot)
 
 		c.JSON(http.StatusOK, gin.H{"message": "Shelf cleared successfully"})
 	}

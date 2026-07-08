@@ -1,3 +1,5 @@
+var REFRESH_IN_PROGRESS = null;
+
 function getDeviceFingerprint() {
     var parts = [
         navigator.userAgent,
@@ -26,6 +28,101 @@ try {
 
 function isAuthenticated() {
     return !!authToken;
+}
+
+function isAndroidApp() {
+    return typeof AndroidTokenBridge !== 'undefined';
+}
+
+function storeRefreshToken(token) {
+    if (isAndroidApp()) {
+        try {
+            AndroidTokenBridge.storeRefreshToken(token);
+        } catch (e) {
+            console.warn('Failed to store refresh token:', e);
+        }
+    }
+}
+
+function getRefreshToken() {
+    if (isAndroidApp()) {
+        try {
+            return AndroidTokenBridge.getRefreshToken();
+        } catch (e) {
+            console.warn('Failed to get refresh token:', e);
+        }
+    }
+    return null;
+}
+
+function clearRefreshToken() {
+    if (isAndroidApp()) {
+        try {
+            AndroidTokenBridge.clearRefreshToken();
+        } catch (e) {
+            console.warn('Failed to clear refresh token:', e);
+        }
+    }
+}
+
+async function tryRefreshToken() {
+    var rt = getRefreshToken();
+    if (!rt) return false;
+
+    if (REFRESH_IN_PROGRESS) return REFRESH_IN_PROGRESS;
+
+    REFRESH_IN_PROGRESS = (async function() {
+        try {
+            var resp = await fetch('/api/v1/auth/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: rt })
+            });
+            if (resp.ok) {
+                var data = await resp.json();
+                if (data.token) {
+                    authToken = data.token;
+                    localStorage.setItem('auth_token', authToken);
+                    return true;
+                }
+            }
+            authToken = '';
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_user');
+            authUser = null;
+            return false;
+        } catch (e) {
+            console.warn('Refresh failed:', e);
+            return false;
+        } finally {
+            REFRESH_IN_PROGRESS = null;
+        }
+    })();
+
+    return REFRESH_IN_PROGRESS;
+}
+
+function handleLoginResponse(data) {
+    if (data.token) {
+        authToken = data.token;
+        authUser = data.user;
+        localStorage.setItem('auth_token', authToken);
+        localStorage.setItem('auth_user', JSON.stringify(authUser));
+        if (data.refresh_token) {
+            storeRefreshToken(data.refresh_token);
+        }
+        closeLoginModal();
+        var btn = document.getElementById('loginBtn');
+        if (btn) {
+            btn.textContent = authUser.username;
+            btn.classList.add('logged-in');
+        }
+        if (typeof loadUserBookStatuses === 'function') {
+            loadUserBookStatuses().then(function() {
+                if (typeof refreshCurrentView === 'function') refreshCurrentView();
+            });
+        }
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -101,21 +198,7 @@ function openLoginModal() {
             var data = await response.json();
 
             if (response.ok && data.token) {
-                authToken = data.token;
-                authUser = data.user;
-                localStorage.setItem('auth_token', authToken);
-                localStorage.setItem('auth_user', JSON.stringify(authUser));
-                closeLoginModal();
-                var btn = document.getElementById('loginBtn');
-                if (btn) {
-                    btn.textContent = authUser.username;
-                    btn.classList.add('logged-in');
-                }
-                if (typeof loadUserBookStatuses === 'function') {
-                    loadUserBookStatuses().then(function() {
-                        if (typeof refreshCurrentView === 'function') refreshCurrentView();
-                    });
-                }
+                handleLoginResponse(data);
             } else if (data.user_not_found) {
                 if (confirm('Пользователь "' + username + '" не найден. Создать нового пользователя?')) {
                     try {
@@ -131,21 +214,7 @@ function openLoginModal() {
                         });
                         var regData = await regResponse.json();
                         if (regResponse.ok && regData.token) {
-                            authToken = regData.token;
-                            authUser = regData.user;
-                            localStorage.setItem('auth_token', authToken);
-                            localStorage.setItem('auth_user', JSON.stringify(authUser));
-                            closeLoginModal();
-                            var btn2 = document.getElementById('loginBtn');
-                            if (btn2) {
-                                btn2.textContent = authUser.username;
-                                btn2.classList.add('logged-in');
-                            }
-                            if (typeof loadUserBookStatuses === 'function') {
-                                loadUserBookStatuses().then(function() {
-                                    if (typeof refreshCurrentView === 'function') refreshCurrentView();
-                                });
-                            }
+                            handleLoginResponse(regData);
                         } else {
                             errorEl.textContent = regData.error || 'Ошибка создания пользователя';
                             errorEl.style.display = 'block';

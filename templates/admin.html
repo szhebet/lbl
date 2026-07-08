@@ -72,19 +72,19 @@
         <h1 style="margin-bottom:20px">Администрирование</h1>
 
         <div class="admin-tabs">
-            <button class="admin-tab active" data-tab="users">Пользователи</button>
-            <button class="admin-tab" data-tab="authors">Авторы</button>
-            <button class="admin-tab" data-tab="books">Книги</button>
-            <button class="admin-tab" data-tab="genres">Жанры</button>
-            <button class="admin-tab" data-tab="tags">Теги</button>
+            <button class="admin-tab active" data-tab="users" data-short="П">Пользователи</button>
+            <button class="admin-tab" data-tab="authors" data-short="А">Авторы</button>
+            <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
+            <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
+            <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
             <span style="flex:1"></span>
-            <button class="admin-tab" data-tab="import">Импорт</button>
+            <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
         </div>
 
         <div id="tab-users" class="admin-content active">
             <div class="admin-toolbar">
                 <button id="addUserBtn" class="btn">+ Создать пользователя</button>
-                <input type="text" class="filter-input" id="filter-users" placeholder="Фильтр: имя, email, роль..." oninput="applyFilters()">
+                <input type="text" class="filter-input" id="filter-users" placeholder="Фильтр: имя, email, роль...">
             </div>
             <table class="admin-table" id="table-users">
                 <thead><tr>
@@ -102,7 +102,7 @@
         <div id="tab-authors" class="admin-content">
             <div class="admin-toolbar">
                 <button id="addAuthorBtn" class="btn">+ Создать автора</button>
-                <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним..." oninput="applyFilters()">
+                <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним...">
             </div>
             <table class="admin-table" id="table-authors">
                 <thead><tr>
@@ -133,7 +133,6 @@
                     <option value="Отложил">Отложил</option>
                     <option value="Бросил">Бросил</option>
                 </select>
-                <button class="btn" onclick="loadBooks()">Применить</button>
             </div>
             <div class="pagination" id="booksPagination"></div>
             <div id="booksTableContainer"><div class="loading">Загрузка...</div></div>
@@ -143,7 +142,7 @@
         <div id="tab-genres" class="admin-content">
             <div class="admin-toolbar">
                 <button id="addGenreBtn" class="btn">+ Создать жанр</button>
-                <input type="text" class="filter-input" id="filter-genres" placeholder="Фильтр: название, родитель..." oninput="applyFilters()">
+                <input type="text" class="filter-input" id="filter-genres" placeholder="Фильтр: название, родитель...">
             </div>
             <table class="admin-table" id="table-genres">
                 <thead><tr>
@@ -161,7 +160,7 @@
         <div id="tab-tags" class="admin-content">
             <div class="admin-toolbar">
                 <button id="addTagBtn" class="btn">+ Создать тег</button>
-                <input type="text" class="filter-input" id="filter-tags" placeholder="Фильтр: название..." oninput="applyFilters()">
+                <input type="text" class="filter-input" id="filter-tags" placeholder="Фильтр: название...">
             </div>
             <table class="admin-table" id="table-tags">
                 <thead><tr>
@@ -246,7 +245,7 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=2"></script>
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/import.js"></script>
     <script>
@@ -435,8 +434,9 @@
                         <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
                         <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor</option>
                         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
-                    </select>
-                </div>
+                </select>
+                <button id="clearAdminBookFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
+            </div>
             `);
             document.getElementById('adminForm').onsubmit = async function(e) {
                 e.preventDefault();
@@ -887,6 +887,46 @@
         renderGenres();
         renderTags();
     }
+
+    // ─── Filter inputs: blur + Enter ──────────────────────────
+    function setupFilterInput(id, fn) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); fn(); }
+        });
+        el.addEventListener('blur', fn);
+        if (el.tagName === 'SELECT') {
+            el.addEventListener('change', fn);
+        }
+    }
+
+    // Client-side filters
+    setupFilterInput('filter-users', applyFilters);
+    setupFilterInput('filter-authors', applyFilters);
+    setupFilterInput('filter-genres', applyFilters);
+    setupFilterInput('filter-tags', applyFilters);
+
+    // Admin books filters (server-side via loadBooks)
+    setupFilterInput('bookAuthorFilter', function() { booksPage = 1; loadBooks(); });
+    setupFilterInput('bookTitleFilter', function() { booksPage = 1; loadBooks(); });
+    setupFilterInput('bookGenreFilter', function() { booksPage = 1; loadBooks(); });
+    setupFilterInput('bookDateFrom', function() { booksPage = 1; loadBooks(); });
+    setupFilterInput('bookDateTo', function() { booksPage = 1; loadBooks(); });
+    setupFilterInput('bookStatusFilter', function() { booksPage = 1; loadBooks(); });
+
+    // Clear admin book filters
+    document.getElementById('clearAdminBookFilters')?.addEventListener('click', function() {
+        document.getElementById('bookAuthorFilter').value = '';
+        document.getElementById('bookTitleFilter').value = '';
+        document.getElementById('bookGenreFilter').value = '';
+        var df = document.getElementById('bookDateFrom');
+        var dt = document.getElementById('bookDateTo');
+        if (df) df.value = '';
+        if (dt) dt.value = '';
+        booksPage = 1;
+        loadBooks();
+    });
 
     // ─── Init ──────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', async function() {

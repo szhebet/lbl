@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="themeColor">#1a1a2e</color>
+    <color name="navColor">#1a1a2e</color>
+    <color name="splashBackground">#1a1a2e</color>
+
+    <style name="Theme.LibraryApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/themeColor</item>
+        <item name="android:navigationBarColor">@color/navColor</item>
+    </style>
+
+    <style name="Theme.LibraryApp.Transparent" parent="android:Theme">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

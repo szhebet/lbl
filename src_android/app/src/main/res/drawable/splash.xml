@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="240dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <!-- Splash screen icon: book with text lines -->
+    <group
+        android:translateX="50"
+        android:translateY="40">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M10,20h120v120h-120z" />
+        <path
+            android:fillColor="#3498DB"
+            android:pathData="M14,24h112v104h-112z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M24,40h88v6h-88zM24,54h88v6h-88zM24,68h64v6h-64z" />
+        <path
+            android:fillColor="#2ECC71"
+            android:pathData="M14,128l28,-22l24,16l36,-32l28,22v16h-116z" />
+    </group>
+</vector>

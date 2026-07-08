@@ -10,12 +10,24 @@ let readlistSortBy = 'created_at';
 let readlistSortOrder = 'desc';
 var personMap = {};
 
-function apiFetch(path, options) {
+async function apiFetch(path, options) {
     const token = localStorage.getItem('auth_token');
     if (!options) options = {};
     if (!options.headers) options.headers = {};
     if (token) options.headers['Authorization'] = 'Bearer ' + token;
-    return fetch(path, options);
+    var response = await fetch(path, options);
+    if (response.status === 401 && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/refresh') {
+        var refreshed = typeof tryRefreshToken === 'function' && await tryRefreshToken();
+        if (refreshed) {
+            var newToken = localStorage.getItem('auth_token');
+            options.headers['Authorization'] = 'Bearer ' + newToken;
+            return fetch(path, options);
+        }
+        if (typeof handleAuthFailure === 'function') {
+            handleAuthFailure();
+        }
+    }
+    return response;
 }
 
 function promptLogin() {
@@ -224,11 +236,6 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
 });
 
-document.getElementById('applyFilters')?.addEventListener('click', () => {
-    authorsPage = 1;
-    loadAuthors();
-});
-
 document.getElementById('clearFilters')?.addEventListener('click', () => {
     document.getElementById('authorFilter').value = '';
     document.getElementById('bookFilter').value = '';
@@ -313,11 +320,7 @@ document.getElementById('clearShelfBooksBtn')?.addEventListener('click', async (
             loadAuthors();
         }
     });
-});
-
-document.getElementById('applyBookFilters')?.addEventListener('click', () => {
-    booksPage = 1;
-    loadBooks();
+    input.addEventListener('blur', () => { authorsPage = 1; loadAuthors(); });
 });
 
 document.getElementById('clearBookFilters')?.addEventListener('click', () => {
@@ -342,11 +345,8 @@ document.getElementById('clearBookFilters')?.addEventListener('click', () => {
                 loadBooks();
             }
         });
+        input.addEventListener('blur', () => { booksPage = 1; loadBooks(); });
     }
-});
-
-document.getElementById('applyGenreFilters')?.addEventListener('click', () => {
-    loadGenres();
 });
 
 document.getElementById('clearGenreFilters')?.addEventListener('click', () => {
@@ -365,6 +365,7 @@ document.getElementById('clearGenreFilters')?.addEventListener('click', () => {
                 loadGenres();
             }
         });
+        input.addEventListener('blur', () => { loadGenres(); });
     }
 });
 
@@ -1126,22 +1127,16 @@ async function openGenreModal(genre) {
     }
 
     modalBody.innerHTML = `
-        <form id="editForm">
-            <div class="form-group">
-                <label for="genre_name">Название:</label>
-                <input type="text" id="genre_name" name="name" value="${escapeHtml(genre.name || '')}" required>
-            </div>
-            <div class="form-group">
-                <label for="genre_parent">Родительский жанр:</label>
-                <select id="genre_parent">
-                    ${parentOptions}
-                </select>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn">Сохранить</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
-            </div>
-        </form>
+        <div class="form-group">
+            <label for="genre_name">Название:</label>
+            <input type="text" id="genre_name" name="name" value="${escapeHtml(genre.name || '')}" required>
+        </div>
+        <div class="form-group">
+            <label for="genre_parent">Родительский жанр:</label>
+            <select id="genre_parent">
+                ${parentOptions}
+            </select>
+        </div>
     `;
 
     modal.classList.add('active');
@@ -1571,40 +1566,34 @@ async function openAuthorModal(author) {
         const res = await apiFetch(`${API_BASE}/persons/${author.id}`);
         const p = await res.json();
         modalBody.innerHTML = `
-            <form id="editForm">
-                <div class="form-group">
-                    <label for="first_name">Имя:</label>
-                    <input type="text" id="first_name" name="first_name" value="${escapeHtml(p.first_name || '')}">
-                </div>
-                <div class="form-group">
-                    <label for="last_name">Фамилия:</label>
-                    <input type="text" id="last_name" name="last_name" value="${escapeHtml(p.last_name || '')}" required>
-                </div>
-                <div class="form-group">
-                    <label for="middle_name">Отчество:</label>
-                    <input type="text" id="middle_name" name="middle_name" value="${escapeHtml(p.middle_name || '')}">
-                </div>
-                <div class="form-group">
-                    <label for="pseudonym">Псевдоним:</label>
-                    <input type="text" id="pseudonym" name="pseudonym" value="${escapeHtml(p.pseudonym || '')}">
-                </div>
-                <div class="form-group">
-                    <label for="birth_date">Дата рождения:</label>
-                    <input type="date" id="birth_date" name="birth_date" value="${p.birth_date || ''}">
-                </div>
-                <div class="form-group">
-                    <label for="death_date">Дата смерти:</label>
-                    <input type="date" id="death_date" name="death_date" value="${p.death_date || ''}">
-                </div>
-                <div class="form-group">
-                    <label for="biography">Биография:</label>
-                    <textarea id="biography" name="biography" rows="3">${escapeHtml(p.biography || '')}</textarea>
-                </div>
-                <div class="form-actions">
-                    <button type="submit" class="btn">Сохранить</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
-                </div>
-            </form>
+            <div class="form-group">
+                <label for="first_name">Имя:</label>
+                <input type="text" id="first_name" name="first_name" value="${escapeHtml(p.first_name || '')}">
+            </div>
+            <div class="form-group">
+                <label for="last_name">Фамилия:</label>
+                <input type="text" id="last_name" name="last_name" value="${escapeHtml(p.last_name || '')}" required>
+            </div>
+            <div class="form-group">
+                <label for="middle_name">Отчество:</label>
+                <input type="text" id="middle_name" name="middle_name" value="${escapeHtml(p.middle_name || '')}">
+            </div>
+            <div class="form-group">
+                <label for="pseudonym">Псевдоним:</label>
+                <input type="text" id="pseudonym" name="pseudonym" value="${escapeHtml(p.pseudonym || '')}">
+            </div>
+            <div class="form-group">
+                <label for="birth_date">Дата рождения:</label>
+                <input type="date" id="birth_date" name="birth_date" value="${p.birth_date || ''}">
+            </div>
+            <div class="form-group">
+                <label for="death_date">Дата смерти:</label>
+                <input type="date" id="death_date" name="death_date" value="${p.death_date || ''}">
+            </div>
+            <div class="form-group">
+                <label for="biography">Биография:</label>
+                <textarea id="biography" name="biography" rows="3">${escapeHtml(p.biography || '')}</textarea>
+            </div>
         `;
     } catch(e) {
         modalBody.innerHTML = '<p class="error">Ошибка загрузки данных</p>';
@@ -1670,6 +1659,7 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
     const editionSeries = getNullableValue(edition, 'series');
     const editionSeriesNumber = getNullableValue(edition, 'series_number');
     const editionPublisher = getNullableValue(edition, 'publisher');
+    const editionISBN = getNullableValue(edition, 'isbn');
     const editionUploadDate = edition.upload_date ? edition.upload_date.substring(0, 10) : '';
 
     const genresArray = Array.isArray(genres) ? genres : [];
@@ -1742,7 +1732,6 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
         : `<button type="button" class="btn" onclick="openTocEditor('${edition.id}')">Добавить оглавление</button>`;
 
     modalBody.innerHTML = `
-        <form id="editForm">
         <input type="hidden" name="work_id" value="${work.id || ''}">
         <input type="hidden" name="edition_id" value="${edition.id || ''}">
 
@@ -1798,79 +1787,10 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
         </fieldset>
 
         <fieldset>
-            <legend>Жанры</legend>
-            <div class="form-group">
-                <select id="genres_select" multiple size="5" style="height: 100px;">
-                    ${genresOptions}
-                </select>
-                <div style="margin-top: 5px;">
-                    <span>Выбрано: <span id="selected_genres_count">${book.genres ? book.genres.length : 0}</span></span>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Создать новый жанр:</label>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="new_genre_name" placeholder="Название жанра" style="flex: 1;">
-                    <button type="button" class="btn" onclick="addNewGenre()">Создать</button>
-                </div>
-            </div>
-        </fieldset>
-
-        <fieldset>
             <legend>Издание (Edition)</legend>
             <div class="form-group">
                 <label for="edition_title">Название издания:</label>
                 <input type="text" id="edition_title" name="edition_title" value="${escapeHtml(editionTitle)}">
-            </div>
-            <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                    <label for="isbn">ISBN:</label>
-                    <input type="text" id="isbn" name="isbn" value="${escapeHtml(getNullableValue(edition, 'isbn'))}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="ean">EAN:</label>
-                    <input type="text" id="ean" name="ean" value="${escapeHtml(getNullableValue(edition, 'ean'))}">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                    <label for="udc">УДК:</label>
-                    <input type="text" id="udc" name="udc" value="${escapeHtml(getNullableValue(edition, 'udc'))}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="bbk">ББК:</label>
-                    <input type="text" id="bbk" name="bbk" value="${escapeHtml(getNullableValue(edition, 'bbk'))}">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                    <label for="publisher">Издательство:</label>
-                    <input type="text" id="publisher" name="publisher" value="${escapeHtml(editionPublisher)}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="year">Год издания:</label>
-                    <input type="number" id="year" name="year" value="${editionYear}">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                    <label for="city">Город:</label>
-                    <input type="text" id="city" name="city" value="${escapeHtml(editionCity)}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="pages">Страниц:</label>
-                    <input type="number" id="pages" name="pages" value="${editionPages}">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                    <label for="series">Серия:</label>
-                    <input type="text" id="series" name="series" value="${escapeHtml(editionSeries)}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="series_number">Номер в серии:</label>
-                    <input type="text" id="series_number" name="series_number" value="${escapeHtml(editionSeriesNumber)}">
-                </div>
             </div>
             <div class="form-group">
                 <label for="edition_language">Язык издания:</label>
@@ -1879,24 +1799,39 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
                 </select>
             </div>
             <div class="form-group">
+                <label for="edition_year">Год издания:</label>
+                <input type="number" id="edition_year" name="edition_year" value="${editionYear}">
+            </div>
+            <div class="form-group">
+                <label for="publisher">Издательство:</label>
+                <input type="text" id="publisher" name="publisher" value="${escapeHtml(editionPublisher)}">
+            </div>
+            <div class="form-group">
+                <label for="isbn">ISBN:</label>
+                <input type="text" id="isbn" name="isbn" value="${escapeHtml(editionISBN)}">
+            </div>
+            <div class="form-group">
+                <label for="edition_pages">Количество страниц:</label>
+                <input type="number" id="edition_pages" name="edition_pages" value="${editionPages}">
+            </div>
+            <div class="form-group">
+                <label for="cover_url">URL обложки (или загрузите через кнопку выше):</label>
+                <input type="text" id="cover_url" name="cover_url" value="${escapeHtml(edition.cover_url || '')}">
+            </div>
+            <div class="form-group">
                 <label for="edition_annotation">Аннотация издания:</label>
                 <textarea id="edition_annotation" name="edition_annotation" rows="3">${escapeHtml(editionAnnotation)}</textarea>
             </div>
             <div class="form-row">
                 <div class="form-group" style="flex: 1;">
-                    <label for="source">Источник:</label>
-                    <input type="text" id="source" name="source" value="${escapeHtml(editionSource)}">
-                </div>
-                <div class="form-group" style="flex: 1;">
-                    <label for="quality">Качество:</label>
-                    <select id="quality" name="quality">
-                        <option value="excellent" ${editionQuality === 'excellent' ? 'selected' : ''}>Отличное</option>
+                    <label for="edition_quality">Качество:</label>
+                    <select id="edition_quality" name="edition_quality">
+                        <option value="">—</option>
                         <option value="good" ${editionQuality === 'good' ? 'selected' : ''}>Хорошее</option>
+                        <option value="acceptable" ${editionQuality === 'acceptable' ? 'selected' : ''}>Приемлемое</option>
                         <option value="poor" ${editionQuality === 'poor' ? 'selected' : ''}>Плохое</option>
                     </select>
                 </div>
-            </div>
-            <div class="form-row">
                 <div class="form-group" style="flex: 1;">
                     <label for="upload_date">Дата загрузки:</label>
                     <input type="date" id="upload_date" name="upload_date" value="${editionUploadDate}">
@@ -1913,6 +1848,25 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
         <fieldset>
             <legend>Файлы издания</legend>
             ${filesHtml || '<div class="no-files">Нет файлов</div>'}
+        </fieldset>
+
+        <fieldset>
+            <legend>Жанры</legend>
+            <div class="form-group">
+                <select id="genres_select" multiple size="5" style="height: 100px;">
+                    ${genresOptions}
+                </select>
+                <div style="margin-top: 5px;">
+                    <span>Выбрано: <span id="selected_genres_count">${book.genres ? book.genres.length : 0}</span></span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Создать новый жанр:</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="new_genre_name" placeholder="Название жанра" style="flex: 1;">
+                    <button type="button" class="btn" onclick="addNewGenre()">Создать</button>
+                </div>
+            </div>
         </fieldset>
 
         <fieldset>
@@ -1938,12 +1892,6 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
             <legend>Оглавление</legend>
             ${tocButtonHtml}
         </fieldset>
-
-        <div class="form-actions">
-            <button type="submit" class="btn">Сохранить</button>
-            <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
-        </div>
-        </form>
     `;
 
     document.getElementById('genres_select')?.addEventListener('change', function() {
@@ -1977,31 +1925,60 @@ function setupAuthorAutocomplete(input, popup) {
         }
         var row = this.closest('.author-row');
         var hiddenId = row ? row.querySelector('.author-id') : null;
-        if (matched.length === 0) {
-            if (hiddenId) hiddenId.value = '';
-        } else if (matched.length === 1) {
-            matched[0].selected = true;
-            if (hiddenId) hiddenId.value = matched[0].value;
-            if (this.value !== matched[0].textContent) {
-                this.value = matched[0].textContent;
+        if (hiddenId) hiddenId.value = '';
+        popup.style.display = (val && matched.length > 0) ? '' : 'none';
+    });
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            var val = this.value.toLowerCase();
+            if (!val) return;
+            var opts = popup.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
+                }
+            }
+            if (matched.length === 1) {
+                e.preventDefault();
+                fillAuthorSelection(this, popup, matched[0]);
             }
         }
-        if (!val) {
-            if (hiddenId) hiddenId.value = '';
+    });
+    input.addEventListener('blur', function() {
+        var val = this.value.toLowerCase();
+        if (!val) return;
+        var opts = popup.options;
+        var matched = [];
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].value === '') continue;
+            if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                matched.push(opts[i]);
+            }
         }
-        popup.style.display = (val && matched.length !== 1) ? '' : 'none';
+        if (matched.length === 1) {
+            fillAuthorSelection(this, popup, matched[0]);
+        }
     });
     popup.addEventListener('change', function() {
         var row = input.closest('.author-row');
         var hiddenId = row ? row.querySelector('.author-id') : null;
         if (this.value) {
-            input.value = this.options[this.selectedIndex].textContent;
-            if (hiddenId) hiddenId.value = this.value;
+            fillAuthorSelection(input, popup, this.options[this.selectedIndex]);
         } else {
             if (hiddenId) hiddenId.value = '';
         }
-        this.style.display = 'none';
     });
+}
+
+function fillAuthorSelection(input, popup, opt) {
+    opt.selected = true;
+    var row = input.closest('.author-row');
+    var hiddenId = row ? row.querySelector('.author-id') : null;
+    if (hiddenId) hiddenId.value = opt.value;
+    input.value = opt.textContent;
+    popup.style.display = 'none';
 }
 
 function addAuthorRow() {
@@ -2310,11 +2287,7 @@ function setupReadlistEvents() {
     var container = document.getElementById('readlistTableContainer');
     if (!container) return;
 
-    // Filter apply/clear
-    document.getElementById('applyReadlistFilters')?.addEventListener('click', function() {
-        readlistPage = 1;
-        loadReadlist();
-    });
+    // Filter clear
     document.getElementById('clearReadlistFilters')?.addEventListener('click', function() {
         document.getElementById('readlistBookFilter').value = '';
         document.getElementById('readlistAuthorFilter').value = '';
@@ -2323,7 +2296,7 @@ function setupReadlistEvents() {
         loadReadlist();
     });
 
-    // Enter key in filters
+    // Enter key and blur in filters
     ['readlistBookFilter', 'readlistAuthorFilter'].forEach(function(id) {
         var input = document.getElementById(id);
         if (input) {
@@ -2333,6 +2306,10 @@ function setupReadlistEvents() {
                     readlistPage = 1;
                     loadReadlist();
                 }
+            });
+            input.addEventListener('blur', function() {
+                readlistPage = 1;
+                loadReadlist();
             });
         }
     });
@@ -2362,19 +2339,25 @@ function setupReadlistEvents() {
                 opts[i].style.display = matches ? '' : 'none';
                 if (matches) matched.push(opts[i]);
             }
-            if (matched.length === 0) {
-                document.getElementById('rlAuthorId').value = '';
-            } else if (matched.length === 1) {
-                matched[0].selected = true;
-                document.getElementById('rlAuthorId').value = matched[0].value;
-                if (this.value !== matched[0].textContent) {
-                    this.value = matched[0].textContent;
+            document.getElementById('rlAuthorId').value = '';
+            rlAuthorSelect.style.display = (val && matched.length > 0) ? '' : 'none';
+        });
+        rlAuthorInput.addEventListener('blur', function() {
+            var val = this.value.toLowerCase();
+            var opts = rlAuthorSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
                 }
             }
-            if (!val) {
-                document.getElementById('rlAuthorId').value = '';
+            if (matched.length === 1) {
+                matched[0].selected = true;
+                document.getElementById('rlAuthorId').value = matched[0].value;
+                this.value = matched[0].textContent;
+                rlAuthorSelect.style.display = 'none';
             }
-            rlAuthorSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
         });
     }
     // Author select change → fill text
@@ -2392,6 +2375,7 @@ function setupReadlistEvents() {
     // Book text input → filter select
     var rlBookInput = document.getElementById('rlBookname');
     var rlBookSelect = document.getElementById('rlBookSelect');
+    var rlBookSelectedValue = ''; // tracks actual selected book id
     if (rlBookInput) {
         rlBookInput.addEventListener('input', function() {
             var val = this.value.toLowerCase();
@@ -2403,44 +2387,65 @@ function setupReadlistEvents() {
                 opts[i].style.display = matches ? '' : 'none';
                 if (matches) matched.push(opts[i]);
             }
-            if (matched.length === 0) {
-                document.getElementById('rlBookId').value = '';
-            } else if (matched.length === 1) {
-                matched[0].selected = true;
-                document.getElementById('rlBookId').value = matched[0].value;
-                var matchedTitle = matched[0].dataset.title || matched[0].textContent;
-                if (this.value !== matchedTitle) {
-                    this.value = matchedTitle;
+            rlBookSelectedValue = '';
+            document.getElementById('rlBookId').value = '';
+            rlBookSelect.style.display = (val && matched.length > 0) ? '' : 'none';
+        });
+        rlBookInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                var val = this.value.toLowerCase();
+                if (!val) return;
+                var opts = rlBookSelect.options;
+                var matched = [];
+                for (var i = 0; i < opts.length; i++) {
+                    if (opts[i].value === '') continue;
+                    if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                        matched.push(opts[i]);
+                    }
                 }
-                var firstAuthor = matched[0].dataset.firstAuthor || '';
-                if (firstAuthor) {
-                    document.getElementById('rlAuthor').value = firstAuthor;
-                    var aid = personMap[firstAuthor.toLowerCase()];
-                    document.getElementById('rlAuthorId').value = aid || '';
+                if (matched.length === 1) {
+                    e.preventDefault();
+                    fillBookSelection(matched[0]);
                 }
             }
-            if (!val) {
-                document.getElementById('rlBookId').value = '';
+        });
+        rlBookInput.addEventListener('blur', function() {
+            var val = this.value.toLowerCase();
+            if (!val) return;
+            var opts = rlBookSelect.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                    matched.push(opts[i]);
+                }
             }
-            rlBookSelect.style.display = (val && matched.length !== 1) ? '' : 'none';
+            if (matched.length === 1) {
+                fillBookSelection(matched[0]);
+            }
         });
     }
     if (rlBookSelect) {
         rlBookSelect.addEventListener('change', function() {
             if (this.value) {
-                var opt = this.options[this.selectedIndex];
-                document.getElementById('rlBookname').value = opt.dataset.title || opt.textContent;
-                document.getElementById('rlBookId').value = this.value;
-                var firstAuthor = opt.dataset.firstAuthor || '';
-                if (firstAuthor) {
-                    document.getElementById('rlAuthor').value = firstAuthor;
-                    var aid = personMap[firstAuthor.toLowerCase()];
-                    document.getElementById('rlAuthorId').value = aid || '';
-                }
+                fillBookSelection(this.options[this.selectedIndex]);
             } else {
                 document.getElementById('rlBookId').value = '';
             }
         });
+    }
+    function fillBookSelection(opt) {
+        opt.selected = true;
+        rlBookSelectedValue = opt.value;
+        document.getElementById('rlBookname').value = opt.dataset.title || opt.textContent;
+        document.getElementById('rlBookId').value = opt.value;
+        var firstAuthor = opt.dataset.firstAuthor || '';
+        if (firstAuthor) {
+            document.getElementById('rlAuthor').value = firstAuthor;
+            var aid = personMap[firstAuthor.toLowerCase()];
+            document.getElementById('rlAuthorId').value = aid || '';
+        }
+        rlBookSelect.style.display = 'none';
     }
 
     // Create/Edit form submit

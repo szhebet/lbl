@@ -6,6 +6,12 @@ Home library management web application built with Go and PostgreSQL.
 Provides a RESTful API + OPDS catalog for managing a personal book collection.
 Runs on Raspberry Pi.
 
+## Testing Convention
+
+After any code change, the application MUST be rebuilt and started (see Build & Run).
+The application MUST be left running after all testing is done so subsequent testing
+sessions can verify changes immediately.
+
 ## Directory Structure
 
 ```
@@ -49,7 +55,7 @@ lbl/
 ├── config.toml.example
 ├── docker-compose.yml
 ├── Dockerfile
-├── Dockerfile.all-in-one
+├── Dockerfile.android
 ├── startup.sh
 ├── go.mod / go.sum
 ├── AGENTS.md
@@ -436,3 +442,219 @@ prompt = "..."  # System prompt for title/author recognition
 prompt2 = "..." # Retry prompt if first attempt returns empty
 timeout = 60    # Seconds
 ```
+
+## TWA Android App (Trusted Web Activity)
+
+TWA (`src_android/`) упаковывает веб-приложение в Android APK с помощью
+Chrome Custom Tabs. Для работы требуется HTTPS и Digital Asset Links.
+
+### Структура
+
+```
+certres/              # SSL-сертификаты + ключ подписи APK
+├── generate-certs.sh      # Генерация CA + серверных сертификатов
+├── generate-keystore.sh   # Генерация Android keystore для подписи APK
+├── generate-assetlinks.sh # Генерация .well-known/assetlinks.json
+├── README.md
+├── .gitignore             # Чувствительные файлы исключены
+
+src_android/          # Android TWA проект (bubblewrap-совместимый)
+├── twa-manifest.json       # Bubblewrap manifest для регенерации
+├── build.gradle            # Project-level Gradle
+├── settings.gradle
+├── gradle.properties
+├── gradle/wrapper/
+│   └── gradle-wrapper.properties
+├── app/
+│   ├── build.gradle        # App module с TWA зависимостью
+│   └── src/main/
+│       ├── AndroidManifest.xml    # TWA activity + Digital Asset Links
+│       ├── res/
+│       │   ├── values/
+│       │   │   ├── strings.xml
+│       │   │   └── themes.xml
+│       │   ├── xml/
+│       │   │   └── network_security_config.xml  # Доверие CA-сертификату
+│       │   ├── drawable/        # Splash screen + иконки (векторные)
+│       │   ├── raw/             # CA сертификат (копируется из certres/)
+│       │   └── mipmap-*/        # Иконки лаунчера
+│       └── java/app/library/twa/
+│           └── Application.java
+├── generate-icons.sh      # Генерация PNG иконок (требует ImageMagick)
+```
+
+### Подготовка сертификатов
+
+Перед первой сборкой APK сгенерируйте сертификаты:
+
+```bash
+# Шаг 1: CA + серверные сертификаты
+cd certres && ./generate-certs.sh && cd ..
+
+# Шаг 2: Keystore для подписи APK
+cd certres && ./generate-keystore.sh && cd ..
+
+# Шаг 3: Digital Asset Links (для TWA верификации)
+cd certres && ./generate-assetlinks.sh && cd ..
+```
+
+### Размещение assetlinks.json
+
+Для работы TWA файл `assetlinks.json` должен быть доступен на сайте:
+
+```go
+// Добавить в main.go (в блок роутов):
+r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
+    c.File("./certres/assetlinks.json")
+})
+```
+
+### Сборка
+
+Сборка веб-приложения и APK независимы — используют разные Dockerfile.
+
+**Dockerfile** — веб-приложение (Go + alpine):
+```bash
+docker build -t library-app:latest -f Dockerfile .
+```
+
+**Dockerfile.android** — TWA APK (JDK + Android SDK):
+```bash
+docker build -t library-app-android:latest -f Dockerfile.android .
+# Извлечь APK:
+docker create --name lib-android-tmp library-app-android:latest
+docker cp lib-android-tmp:/output/app-release.apk ./android-apk/
+docker rm lib-android-tmp
+```
+
+**Полная сборка (веб + APK) одной командой:**
+```bash
+./build-all.sh
+```
+
+**Только APK:**
+```bash
+# Docker
+./build-android.sh docker
+
+# Локально (требует JDK 17+ и Android SDK)
+./build-android.sh local
+```
+
+APK будет в `android-apk/` после сборки.
+
+### Установка на телефон
+
+```bash
+# Через ADB (подключите телефон по USB)
+adb install android-apk/app-release.apk
+
+# Или скиньте APK на телефон и откройте файловым менеджером
+```
+
+### Настройка HTTPS
+
+Для локального HTTPS на Raspberry Pi:
+
+```bash
+# В config.toml нужно указать порты для TLS
+# Приложение должно слушать и HTTP (9091) и HTTPS (443)
+
+# Пример запуска с TLS (добавить в main.go):
+# go func() {
+#     log.Fatal(http.ListenAndServeTLS(":443",
+#         "certres/server.crt", "certres/server.key", nil))
+# }()
+```
+
+### Mobile CSS
+
+Мобильная вёрстка работает двумя способами:
+
+**1. Адаптивный CSS (`static/css/style.css`)** — `@media (max-width: 480px)` для всех устройств.
+
+**2. Android-only (`static/css/mobile.css`)** — подключается только когда сервер видит заголовок `X-Platform: android` или User-Agent с `Android`. Стили скопированы под класс `.android` на `<body>`.
+
+Механизм:
+- В `src/main.go` хендлеры `/` и `/admin` проверяют `X-Platform` и User-Agent
+- При android-запросе в HTML инжектится `<link rel="stylesheet" href="/static/css/mobile.css">` и `<body class="android">`
+- `src_android/.../MainActivity.java` отправляет `X-Platform: android` (API 21+)
+
+Особенности мобильной версии:
+- Кнопки имеют min-height: 44px (touch target)
+- Таблицы скроллятся горизонтально
+- Модальные окна раскрываются на весь экран
+- Вкладки переносятся на новую строку
+- Фильтры адаптируются под ширину экрана
+- Убраны малозначимые колонки (дата, год) на телефонах
+
+### Сборка APK (Docker, две стадии)
+
+Сборка разделена на две стадии для кэширования:
+
+**Стадия 1: SDK-образ** (JDK + Android SDK + Gradle)
+Собирается один раз, кэшируется, пересобирается только при обновлении SDK.
+
+```bash
+./build-apk-sdk.sh
+```
+
+**Стадия 2: APK** (исходники + сборка)
+Использует кэшированный SDK-образ, пересобирается только при изменении исходников.
+
+```bash
+# debug + release (оба сразу)
+./build-android.sh
+
+# или по отдельности:
+./build-apk-debug.sh     # только debug APK
+./build-apk-release.sh   # только release APK
+
+# Установка на телефон:
+adb install -r android-apk/app-debug.apk
+adb install -r android-apk/app-release.apk
+```
+
+**Dockerfile'ы:**
+| Файл | Назначение |
+|------|------------|
+| `Dockerfile.android.sdk` | SDK-образ (редко меняется) |
+| `Dockerfile.android` | Билд APK (меняется при изменении исходников) |
+
+**Важно:** После изменения `Dockerfile.android.sdk` (например, обновление Gradle) нужно пересобрать SDK-образ: `./build-apk-sdk.sh`.
+
+## Goal
+- Maintain a self-hosted Home Library Manager with Go backend, Android TWA wrapper, and a single responsive UI that works on desktop and mobile without horizontal scrolling.
+
+## Constraints & Preferences
+- Mobile layout: use `body.android` class injected server-side, `mobile.css`, mobile-top-bar, compact edit/delete buttons, and Android JS for user button.
+- Horizontal scrolling on lists (books table, reading list, admin tables, tree views) is unacceptable – all content must fit on phone screen width.
+- Default to classic colors; no dark theme.
+- Docker build split into SDK image + app build.
+- When shelving a book: extract the ZIP to `tempfld/shelf/{edition_id}/`, unzip nested archives recursively, serve the extracted file on download. Clean up on unshelf.
+- When importing ZIPs: extract to inner format (FB2, PDF, DOC, DOCX), NOT store a double-ZIP. Recursively unzip nested archives (e.g., FB2.ZIP inside ZIP) until a non-archive format is reached. DOCX is a final format (even though it is technically a ZIP).
+
+## Progress
+### Done
+- Restored Android-specific server injection: `body class="android"`, `mobile.css`, mobile-top-bar HTML, Android JS for user button (reverted the "remove all mobile" changes).
+- Fixed `mobile.css` for phone-screen fit: hidden non-essential columns, `table-layout: fixed`, compact sizes, icon-only buttons.
+- Shelf extraction: shelving a book extracts its archive to `tempfld/shelf/{edition_id}/` and serves the raw file on download.
+- Fixed import ZIP bug: double-ZIPs no longer created; inner format stored directly.
+- Fixed `DetectZipContent` in `zip_extract.go`: `.fb2` entries that are actually ZIP archives are now recursively detected (fixes `Vozvrashchenie_Siney_Borody.fb2_318.zip` → "Возвращение Синей Бороды").
+- Full import of `/example/` complete: **69 books imported, 2 `.rar` unsupported**. All formats (FB2, EPUB, PDF, DOC, DOCX, ZIP) working. Nested archives (FB2.ZIP in ZIP, DOC in ZIP) working. Duplicate detection correct.
+
+### In Progress
+- (none)
+
+### Blocked
+- `.rar` files in example (10_the_active_side_of_infinity.rar, 11_the_wheel_of_time.rar) are not supported – no RAR extraction; user has not requested this.
+
+## Key Decisions
+- Server differentiates desktop vs Android (via `X-Platform: android` header) and injects mobile-specific CSS/JS.
+- Shelf extraction writes the final extracted format to `tempfld/shelf/{edition_id}/`; the original ZIP remains untouched in `bookarch/`.
+- Double-ZIP bug fix ensures the stored archive in `bookarch/` contains the actual book file instead of a nested ZIP.
+
+## Next Steps
+- Rebuild APK.
+- Test shelf extraction/download on a variety of formats (DOC, EPUB, PDF, nested FB2.ZIP).
+- Handle any remaining import edge cases.

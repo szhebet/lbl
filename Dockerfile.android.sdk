@@ -1,0 +1,35 @@
+# ============================================================
+# Dockerfile: Android SDK builder image (cached, rarely changes)
+# Build: docker build -t library-app-android-sdk -f Dockerfile.android.sdk .
+# ============================================================
+FROM eclipse-temurin:17-jdk-jammy
+
+# Install required tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Android command-line tools
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+ENV ANDROID_HOME=${ANDROID_SDK_ROOT}
+ENV PATH=${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools
+
+RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
+    unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools && \
+    mv /tmp/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+    rm -rf /tmp/cmdline-tools /tmp/cmdline-tools.zip
+
+# Accept licenses and install required SDK components
+RUN yes | sdkmanager --licenses > /dev/null 2>&1 || true && \
+    sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1
+
+# Install Gradle 8.5
+ENV GRADLE_VERSION=8.5
+RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip && \
+    unzip -q /tmp/gradle.zip -d /opt && \
+    rm /tmp/gradle.zip && \
+    ln -s /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle
+
+WORKDIR /build

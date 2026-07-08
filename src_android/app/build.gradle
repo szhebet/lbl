@@ -1,0 +1,64 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'app.library.twa'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.library.twa'
+        minSdk 19
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('../../certres/android.keystore')
+            storePassword 'android'
+            keyAlias 'library-app'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            debuggable true
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            signingConfig signingConfigs.release
+        }
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}
+
+task copyCertificates(type: Copy) {
+    from '../../certres'
+    include 'ca.crt'
+    include 'client.p12'
+    into 'src/main/res/raw'
+    rename 'ca.crt', 'ca_cert.crt'
+    rename 'client.p12', 'client_cert.p12'
+}
+
+task generateClientCert(type: Exec) {
+    workingDir '../../certres'
+    commandLine 'bash', 'generate-client-cert.sh'
+}
+
+preBuild.dependsOn generateClientCert
+preBuild.dependsOn copyCertificates

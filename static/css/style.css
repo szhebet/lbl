@@ -278,6 +278,12 @@ header h1 {
     background: #7f8c8d;
 }
 
+.btn-clear {
+    padding: 6px 10px;
+    font-size: 14px;
+    line-height: 1;
+}
+
 .btn-danger {
     background: #e74c3c;
     margin-bottom: 15px;
@@ -1055,3 +1061,407 @@ header h1 {
     flex-shrink: 0;
     margin-top: 4px;
 }
+
+/* ======================================================
+   Mobile / TWA Responsive Optimizations
+   ====================================================== */
+
+/* Extra small devices (< 480px — phones in portrait) */
+@media (max-width: 480px) {
+    .container {
+        padding: 10px;
+    }
+
+    header {
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px;
+    }
+
+    header h1 {
+        font-size: 1.3rem;
+    }
+
+    /* Tabs: wrap on small screens */
+    .tabs {
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 6px;
+    }
+
+    .tab {
+        font-size: 13px;
+        padding: 10px 14px;
+        flex: 1 1 auto;
+        text-align: center;
+        min-width: 0;
+    }
+
+    .load-books-btn {
+        font-size: 12px;
+        padding: 8px 12px;
+    }
+
+    .tab-content {
+        padding: 12px;
+    }
+
+    /* Touch-friendly controls */
+    .btn, .btn-small, .edit-btn, .delete-btn, .download-btn {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .btn {
+        width: 100%;
+        margin-bottom: 4px;
+    }
+
+    .btn-small, .edit-btn, .delete-btn, .download-btn {
+        padding: 8px 14px;
+        font-size: 13px;
+    }
+
+    .filter-group input,
+    .filter-group select {
+        min-height: 44px;
+        font-size: 16px; /* Prevents iOS zoom on focus */
+    }
+
+    /* Summary row: wrap */
+    .summary-row {
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        font-size: 12px;
+    }
+
+    /* Pagination: compact */
+    .pagination {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+
+    .pagination button {
+        min-height: 44px;
+        min-width: 44px;
+        font-size: 13px;
+        padding: 4px 10px;
+    }
+
+    /* Table: horizontal scroll */
+    .books-table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 -12px;
+        padding: 0 12px;
+    }
+
+    .books-table {
+        font-size: 12px;
+        min-width: 600px; /* Force scroll on small screens */
+    }
+
+    .books-table th,
+    .books-table td {
+        padding: 6px 4px;
+        white-space: nowrap;
+    }
+
+    .books-table .col-num { width: 30px; }
+    .books-table .col-date { width: 80px; font-size: 11px; }
+    .books-table .col-title { min-width: 120px; }
+    .books-table .col-author { min-width: 100px; }
+    .books-table .col-year { width: 40px; }
+    .books-table .col-format { width: 60px; }
+    .books-table .col-shelf { width: 40px; }
+    .books-table .col-actions { width: 100px; }
+    .books-table .col-status { width: 80px; }
+
+    .status-select {
+        font-size: 11px;
+        max-width: 90px;
+        min-height: 36px;
+    }
+
+    /* Tree view: compact */
+    .level-1 {
+        padding: 10px 8px;
+        font-size: 13px;
+        min-height: 44px;
+    }
+
+    .level-2 {
+        padding: 8px;
+        font-size: 13px;
+        min-height: 44px;
+    }
+
+    .level-3 {
+        padding: 6px 8px;
+        font-size: 12px;
+        flex-wrap: wrap;
+    }
+
+    .level-2-container,
+    .level-3-container {
+        margin-left: 12px;
+    }
+
+    .tree-view {
+        font-size: 13px;
+    }
+
+    /* Modal: fullscreen on mobile */
+    .modal-content {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        border-radius: 0;
+        height: 100%;
+        max-height: 100%;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+    }
+
+    .modal-body {
+        max-height: none;
+        flex: 1;
+        padding: 16px;
+    }
+
+    .modal-header {
+        padding: 12px 16px;
+    }
+
+    .modal-header h2 {
+        font-size: 1.1rem;
+    }
+
+    .modal-footer {
+        padding: 12px 16px;
+        flex-direction: column;
+    }
+
+    .modal-footer .btn {
+        width: 100%;
+    }
+
+    .form-group input,
+    .form-group select {
+        min-height: 44px;
+        font-size: 16px;
+    }
+
+    /* Login modal */
+    #loginModal .modal-content {
+        max-width: none;
+        width: 100%;
+        margin: 0;
+        border-radius: 0;
+        height: 100%;
+    }
+
+    #editForm {
+        padding: 16px;
+    }
+
+    /* Author row: stack on mobile */
+    .author-row {
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .author-row .author-role {
+        width: 100%;
+    }
+
+    .author-autocomplete-group {
+        min-width: 0;
+        width: 100%;
+    }
+
+    /* Genre tree: compact */
+    .genre-tree-item {
+        font-size: 13px;
+        padding: 8px;
+        min-height: 44px;
+    }
+
+    /* Import section: compact */
+    .import-section {
+        padding: 12px;
+    }
+
+    .file-input,
+    .directory-input {
+        min-height: 44px;
+        font-size: 14px;
+    }
+
+    .import-progress-panel {
+        padding: 12px;
+    }
+
+    /* Admin panel: compact tabs */
+    .admin-tabs {
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 6px;
+    }
+
+    .admin-tab {
+        font-size: 12px;
+        padding: 8px 10px;
+        flex: 1 1 auto;
+        text-align: center;
+    }
+
+    .admin-table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: 0 -12px;
+        padding: 0 12px;
+    }
+
+    .admin-table {
+        font-size: 12px;
+        min-width: 500px;
+    }
+
+    .admin-table th,
+    .admin-table td {
+        padding: 6px 4px;
+    }
+
+    .admin-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .admin-toolbar .filter-input {
+        width: 100%;
+        min-height: 44px;
+        font-size: 16px;
+    }
+
+    /* Shelf link: full width */
+    .shelf-link {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .shelf-checkbox {
+        width: 24px;
+        height: 24px;
+    }
+
+    /* Expand icon: larger touch target */
+    .expand-icon {
+        font-size: 16px;
+        padding: 4px;
+    }
+
+    /* Read list specific */
+    .readlist-table {
+        font-size: 12px;
+        min-width: 500px;
+    }
+
+    .readlist-filters {
+        flex-direction: column;
+    }
+
+    /* Hide some less important columns on very small screens */
+    .books-table .col-date {
+        display: none;
+    }
+
+    .books-table .col-year {
+        display: none;
+    }
+
+    /* Genre badges: wrap */
+    .genre-badge {
+        font-size: 11px;
+        padding: 2px 6px;
+        margin-bottom: 2px;
+    }
+}
+
+/* Small devices (481px - 768px — large phones / tablets in portrait) */
+@media (min-width: 481px) and (max-width: 768px) {
+    .container {
+        padding: 14px;
+    }
+
+    header h1 {
+        font-size: 1.5rem;
+    }
+
+    .tabs {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .tab {
+        font-size: 14px;
+        padding: 10px 16px;
+    }
+
+    .tab-content {
+        padding: 16px;
+    }
+
+    .books-table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .modal-content {
+        width: 95%;
+        max-width: 500px;
+        margin: 2% auto;
+    }
+
+    .filter-group {
+        min-width: 45%;
+    }
+
+    .filter-date-row .filter-group {
+        min-width: 45%;
+    }
+
+    .btn {
+        min-height: 44px;
+    }
+
+    .filter-group input,
+    .filter-group select {
+        min-height: 44px;
+        font-size: 16px;
+    }
+
+    .admin-tabs {
+        flex-wrap: wrap;
+    }
+}
+
+/* Safe area insets for modern phones (notch, rounded corners) */
+@supports (padding: max(0px)) {
+    .modal-content {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+
+    .modal-header {
+        padding-top: max(12px, env(safe-area-inset-top));
+    }
+}
+
