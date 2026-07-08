@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -128,4 +129,57 @@ func splitToken(token string) []string {
 		}
 	}
 	return result
+}
+
+// RefreshTokenRequest represents a refresh token exchange request
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+// RefreshTokenResponse represents the response to a refresh request
+type RefreshTokenResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+// generateRefreshToken creates a random token, stores its SHA-256 hash in DB, returns the raw token
+func generateRefreshToken(db *sql.DB, userID int, deviceName, deviceFingerprint string) (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	rawToken := hex.EncodeToString(buf)
+
+	hash := sha256.Sum256([]byte(rawToken))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	_, err := db.Exec(`
+		INSERT INTO refresh_tokens (user_id, token_hash, device_name, device_fingerprint)
+		VALUES ($1, $2, $3, $4)
+	`, userID, tokenHash, deviceName, deviceFingerprint)
+	if err != nil {
+		return "", err
+	}
+
+	return rawToken, nil
+}
+
+// validateRefreshToken hashes the raw token, looks it up in DB, returns userID
+// Does NOT delete the token — it remains valid for repeated use
+func validateRefreshToken(db *sql.DB, rawToken string) (int, error) {
+	hash := sha256.Sum256([]byte(rawToken))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	var userID int
+	err := db.QueryRow(`
+		SELECT user_id FROM refresh_tokens WHERE token_hash = $1
+	`, tokenHash).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, ErrInvalidToken
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	return userID, nil
 }

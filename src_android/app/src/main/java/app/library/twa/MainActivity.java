@@ -20,6 +20,7 @@ import java.util.Map;
 import android.view.ViewGroup;
 import android.webkit.ClientCertRequest;
 import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
@@ -41,6 +42,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private LinearLayout debugPanel;
     private TextView debugLog;
+    private TokenStore tokenStore;
     private boolean hasError = false;
 
     @Override
@@ -65,6 +67,8 @@ public class MainActivity extends Activity {
         root.addView(debugPanel);
 
         setContentView(root);
+
+        tokenStore = new TokenStore(this);
 
         setupWebView();
         setupDebug();
@@ -264,6 +268,29 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+
+        webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
+    }
+
+    private class TokenBridge {
+        @JavascriptInterface
+        public void storeRefreshToken(String token) {
+            Log.i(TAG, "Storing refresh token via JS bridge");
+            tokenStore.storeRefreshToken(token);
+        }
+
+        @JavascriptInterface
+        public String getRefreshToken() {
+            String token = tokenStore.getRefreshToken();
+            Log.i(TAG, "Getting refresh token via JS bridge: " + (token != null ? "found" : "null"));
+            return token;
+        }
+
+        @JavascriptInterface
+        public void clearRefreshToken() {
+            Log.i(TAG, "Clearing refresh token via JS bridge");
+            tokenStore.clearRefreshToken();
+        }
     }
 
     private void setupDebug() {

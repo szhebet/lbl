@@ -11,6 +11,7 @@ opencode.json
 library_app
 .env
 task.txt
+nohup.out
 
 # TWA APK build artifacts
 android-apk/

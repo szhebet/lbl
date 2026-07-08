@@ -26,11 +26,15 @@ docker build --no-cache -t library-app-android:latest -f Dockerfile.android .
 rm -rf android-apk && mkdir -p android-apk
 docker create --name lib-android-tmp library-app-android:latest
 docker cp lib-android-tmp:/output/app-debug.apk ./android-apk/ 2>/dev/null || \
+  docker cp lib-android-tmp:/output/app-debug-1.0-debug.apk ./android-apk/app-debug.apk 2>/dev/null || \
   docker cp lib-android-tmp:/output/. ./android-apk/
+docker cp lib-android-tmp:/output/app-release.apk ./android-apk/ 2>/dev/null || \
+  docker cp lib-android-tmp:/output/app-release-1.0-release.apk ./android-apk/app-release.apk 2>/dev/null || true
 docker rm lib-android-tmp
 
 echo ""
-echo "=== Debug APK ==="
-ls -lh android-apk/*debug*.apk 2>/dev/null || ls -lh android-apk/*.apk 2>/dev/null || echo "No APK found"
+echo "=== APKs ==="
+ls -lh android-apk/*.apk 2>/dev/null || echo "No APK found"
 echo ""
-echo "Install: adb install -r android-apk/app-debug.apk"
+echo "Install debug:   adb install -r android-apk/app-debug.apk"
+echo "Install release: adb install -r android-apk/app-release.apk"

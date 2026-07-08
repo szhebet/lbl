@@ -6,6 +6,12 @@ Home library management web application built with Go and PostgreSQL.
 Provides a RESTful API + OPDS catalog for managing a personal book collection.
 Runs on Raspberry Pi.
 
+## Testing Convention
+
+After any code change, the application MUST be rebuilt and started (see Build & Run).
+The application MUST be left running after all testing is done so subsequent testing
+sessions can verify changes immediately.
+
 ## Directory Structure
 
 ```

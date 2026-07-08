@@ -55,7 +55,10 @@ var embeddedMigration23 string
 //go:embed migration_2.4.sql
 var embeddedMigration24 string
 
-const currentDBVersion = "2.4"
+//go:embed migration_2.5.sql
+var embeddedMigration25 string
+
+const currentDBVersion = "2.5"
 
 type migration struct {
 	Version     string
@@ -98,6 +101,11 @@ var migrations = []migration{
 		Version:     "2.4",
 		Description: "Triggers for read_list ↔ user_books status sync",
 		SQL:         stripSchema(embeddedMigration24),
+	},
+	{
+		Version:     "2.5",
+		Description: "Add refresh_tokens table",
+		SQL:         stripSchema(embeddedMigration25),
 	},
 }
 
@@ -593,6 +601,14 @@ func main() {
 				return
 			}
 			createUser(db)(c)
+		})
+		auth.POST("/refresh", func(c *gin.Context) {
+			ip := c.ClientIP()
+			if !loginLimiter.allow(ip) {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+				return
+			}
+			refreshToken(db)(c)
 		})
 	}
 

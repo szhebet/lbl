@@ -27,8 +27,9 @@ type LoginRequest struct {
 }
 
 type AuthResponse struct {
-	Token string `json:"token"`
-	User  User   `json:"user"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+	User         User   `json:"user"`
 }
 
 func setSessionCookie(c *gin.Context, token string, ttlHours int) {
@@ -103,8 +104,9 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 				`, user.ID, req.DeviceName, req.DeviceFingerprint)
 			}
 			token := generateToken(user.ID, user.Username, user.Role)
+			refreshToken, _ := generateRefreshToken(db, user.ID, req.DeviceName, req.DeviceFingerprint)
 			setSessionCookie(c, token, tokenTTL)
-			c.JSON(http.StatusOK, AuthResponse{Token: token, User: user})
+			c.JSON(http.StatusOK, AuthResponse{Token: token, RefreshToken: refreshToken, User: user})
 			return
 		}
 
@@ -138,11 +140,46 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 		}
 
 		token := generateToken(user.ID, user.Username, user.Role)
+		refreshToken, _ := generateRefreshToken(db, user.ID, req.DeviceName, req.DeviceFingerprint)
 		setSessionCookie(c, token, tokenTTL)
 
 		c.JSON(http.StatusOK, AuthResponse{
+			Token:        token,
+			RefreshToken: refreshToken,
+			User:         user,
+		})
+	}
+}
+
+func refreshToken(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req RefreshTokenRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		userID, err := validateRefreshToken(db, req.RefreshToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired refresh token"})
+			return
+		}
+
+		var user User
+		err = db.QueryRow(`
+			SELECT id, username, COALESCE(email, ''), role, created_at
+			FROM users WHERE id = $1
+		`, userID).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+
+		token := generateToken(user.ID, user.Username, user.Role)
+		setSessionCookie(c, token, tokenTTL)
+
+		c.JSON(http.StatusOK, RefreshTokenResponse{
 			Token: token,
-			User:  user,
 		})
 	}
 }
@@ -197,11 +234,13 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 		}
 
 		token := generateToken(user.ID, user.Username, user.Role)
+		refreshToken, _ := generateRefreshToken(db, user.ID, req.DeviceName, req.DeviceFingerprint)
 		setSessionCookie(c, token, tokenTTL)
 
 		c.JSON(http.StatusCreated, AuthResponse{
-			Token: token,
-			User:  user,
+			Token:        token,
+			RefreshToken: refreshToken,
+			User:         user,
 		})
 	}
 }
