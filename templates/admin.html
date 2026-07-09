@@ -68,7 +68,7 @@
 </head>
 <body>
     <div class="container">
-        <a href="/" class="back-link">&larr; Назад к библиотеке</a>
+        <a href="/" class="back-link" id="adminBackLink">&larr; Назад к библиотеке</a>
         <h1 style="margin-bottom:20px">Администрирование</h1>
 
         <div class="admin-tabs">
@@ -246,7 +246,7 @@
     </div>
 
     <script src="/static/js/app.js?v=2"></script>
-    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/auth.js?v=2"></script>
     <script src="/static/js/import.js"></script>
     <script>
     const API = '/api/v1/admin';
@@ -954,6 +954,16 @@
         loadAuthors();
         loadGenres();
         loadTags();
+        document.getElementById('adminBackLink').addEventListener('click', function(e) {
+            e.preventDefault();
+            if (window.history.length > 1) {
+                window.history.back();
+            } else if (document.referrer) {
+                window.location.href = document.referrer;
+            } else {
+                window.location.href = '/';
+            }
+        });
     });
     </script>
 </body>

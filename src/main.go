@@ -655,6 +655,7 @@ func main() {
 		write.POST("/import/cancel", cancelImport())
 		write.POST("/books/:id/cover", uploadCover(db))
 		write.PUT("/books/:id/shelf", updateBookShelf(db))
+		write.PUT("/shelf/clear", clearShelf(db))
 
 		// User-book status
 		write.GET("/user/books", listUserBooks(db))
@@ -3774,8 +3775,7 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 
 		if req.OnShelf {
 			if err := extractBookForShelf(db, editionID, cfg); err != nil {
-				internalError(c, err)
-				return
+				log.Printf("Shelf extract warning for edition %s: %v", editionID, err)
 			}
 		} else {
 			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
@@ -3957,6 +3957,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			if err := rows.Scan(&book.ID, &book.Authors, &book.Title, &filePath, &fileSize); err != nil {
 				continue
 			}
+			book.Authors = truncateAuthors(book.Authors)
 			if filePath.Valid {
 				book.FilePath = filePath.String
 			}
@@ -3981,12 +3982,12 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         .shelf-table .size { color: #666; font-size: 12px; }
         .shelf-table .download { color: #3498db; text-decoration: none; }
         .shelf-table .download:hover { text-decoration: underline; }
-        .back-link { display: inline-block; margin: 20px 0; color: #3498db; }
+        .back-link { display: inline-block; margin: 20px 0; color: #3498db; cursor: pointer; }
     </style>
 </head>
 <body>
     <div class="container">
-        <a href="/" class="back-link">← Назад к библиотеке</a>
+        <a href="/" class="back-link" id="backLink">← Назад к библиотеке</a>
         <h1>📚 Общая полка</h1>
         <p>Книг на полке: ` + fmt.Sprintf("%d", len(books)) + `</p>
         ` + func() string {
@@ -4046,6 +4047,16 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
                 alert('Ошибка: ' + err.message);
             }
         }
+        document.getElementById('backLink').addEventListener('click', function(e) {
+            e.preventDefault();
+            if (window.history.length > 1) {
+                window.history.back();
+            } else if (document.referrer) {
+                window.location.href = document.referrer;
+            } else {
+                window.location.href = '/';
+            }
+        });
         </script>
     </div>
 </body></html>`
@@ -4070,6 +4081,17 @@ func clearShelf(db *sql.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{"message": "Shelf cleared successfully"})
 	}
+}
+
+func truncateAuthors(authors string) string {
+	if authors == "" {
+		return "Неизвестный автор"
+	}
+	parts := strings.Split(authors, "; ")
+	if len(parts) <= 3 {
+		return authors
+	}
+	return strings.Join(parts[:3], "; ") + " (и др)"
 }
 
 func getShelfCount(db *sql.DB) gin.HandlerFunc {

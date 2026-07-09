@@ -580,7 +580,19 @@ function collectExtendedBookData() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadAuthors();
+    if (document.body.classList.contains('android')) {
+        var readlistTab = document.querySelector('.tab[data-tab="readlist"]');
+        if (readlistTab) {
+            document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+            document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+            readlistTab.classList.add('active');
+            document.getElementById('readlist').classList.add('active');
+            loadReadlist();
+            loadReadlistNames();
+        }
+    } else {
+        loadAuthors();
+    }
     updateShelfCount();
     fetchConfig();
     setupBooksTableEvents();
@@ -2178,9 +2190,15 @@ function renderReadlistTable(data) {
     html += '<th class="col-title sortable" data-sort-by="bookname">Название книги' + getReadlistSortIcon('bookname') + '</th>';
     html += '<th class="col-author sortable" data-sort-by="author">Автор' + getReadlistSortIcon('author') + '</th>';
     html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
-    html += '<th class="col-format">Формат</th>';
-    html += '<th class="col-shelf">Полка</th>';
-    html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
+    if (document.body.classList.contains('android')) {
+        html += '<th class="col-format">Формат</th>';
+        html += '<th class="col-shelf">П</th>';
+        html += '<th class="col-actions">Д</th></tr></thead><tbody>';
+    } else {
+        html += '<th class="col-format">Формат</th>';
+        html += '<th class="col-shelf">Полка</th>';
+        html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
+    }
 
     items.forEach(function(item) {
         var dateStr = item.created_at ? item.created_at.substring(0, 10) : '';
