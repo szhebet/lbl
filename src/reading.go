@@ -320,6 +320,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		listname := c.Query("listname")
 		bookname := c.Query("bookname")
 		author := c.Query("author")
+		comment := c.Query("comment")
 		sortBy := c.DefaultQuery("sort_by", "created_at")
 		sortOrder := c.DefaultQuery("sort_order", "desc")
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
@@ -331,6 +332,8 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			"bookname":   "rl.bookname",
 			"author":     "rl.author",
 			"status":     "rl.status",
+			"comment":    "rl.comment",
+			"listname":   "rl.listname",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {
@@ -357,6 +360,11 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		if author != "" {
 			whereClause += fmt.Sprintf(" AND rl.author ILIKE $%d", argNum)
 			args = append(args, "%"+author+"%")
+			argNum++
+		}
+		if comment != "" {
+			whereClause += fmt.Sprintf(" AND rl.comment ILIKE $%d", argNum)
+			args = append(args, "%"+comment+"%")
 			argNum++
 		}
 

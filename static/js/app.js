@@ -2153,6 +2153,7 @@ async function loadReadlist() {
     var listname = document.getElementById('readlistNameFilter').value;
     var bookname = document.getElementById('readlistBookFilter').value.trim();
     var author = document.getElementById('readlistAuthorFilter').value.trim();
+    var comment = document.getElementById('readlistCommentFilter').value.trim();
     var limit = 50;
     var offset = (readlistPage - 1) * limit;
 
@@ -2161,6 +2162,7 @@ async function loadReadlist() {
     if (listname) url += '&listname=' + encodeURIComponent(listname);
     if (bookname) url += '&bookname=' + encodeURIComponent(bookname);
     if (author) url += '&author=' + encodeURIComponent(author);
+    if (comment) url += '&comment=' + encodeURIComponent(comment);
 
     try {
         var res = await apiFetch(url, { headers: getAuthHeaders() });
@@ -2173,6 +2175,7 @@ async function loadReadlist() {
         container.innerHTML = '<div class="error">Ошибка загрузки: ' + escapeHtml(err.message) + '</div>';
     }
 }
+}
 
 function renderReadlistTable(data) {
     var container = document.getElementById('readlistTableContainer');
@@ -2183,28 +2186,33 @@ function renderReadlistTable(data) {
         return;
     }
 
+    var isAndroid = document.body.classList.contains('android');
+    if (isAndroid) {
+        renderReadlistCards(container, items);
+    } else {
+        renderReadlistTableDesktop(container, items);
+    }
+}
+
+function renderReadlistTableDesktop(container, items) {
     var html = '<table class="books-table"><thead><tr>';
     html += '<th class="col-library">_</th>';
     html += '<th class="col-date sortable" data-sort-by="created_at">Дата создания' + getReadlistSortIcon('created_at') + '</th>';
     html += '<th class="col-num sortable" data-sort-by="priority">Приоритет' + getReadlistSortIcon('priority') + '</th>';
     html += '<th class="col-title sortable" data-sort-by="bookname">Название книги' + getReadlistSortIcon('bookname') + '</th>';
     html += '<th class="col-author sortable" data-sort-by="author">Автор' + getReadlistSortIcon('author') + '</th>';
+    html += '<th class="col-comment">Комментарий</th>';
     html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
-    if (document.body.classList.contains('android')) {
-        html += '<th class="col-format">Формат</th>';
-        html += '<th class="col-shelf">П</th>';
-        html += '<th class="col-actions">Д</th></tr></thead><tbody>';
-    } else {
-        html += '<th class="col-format">Формат</th>';
-        html += '<th class="col-shelf">Полка</th>';
-        html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
-    }
+    html += '<th class="col-format">Формат</th>';
+    html += '<th class="col-shelf">Полка</th>';
+    html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
 
     items.forEach(function(item) {
         var dateStr = item.created_at ? item.created_at.substring(0, 10) : '';
         var priority = item.priority;
         var bookname = escapeHtml(item.bookname || '');
         var authorname = escapeHtml(item.author || '');
+        var comment = escapeHtml(item.comment || '');
         var st = item.status || 'Не заполнено';
         var hasBook = item.edition_id != null;
         var editionId = item.edition_id;
@@ -2219,6 +2227,7 @@ function renderReadlistTable(data) {
         html += '<td class="col-num">' + priority + '</td>';
         html += '<td class="col-title">' + bookname + '</td>';
         html += '<td class="col-author">' + authorname + '</td>';
+        html += '<td class="col-comment">' + (comment || '—') + '</td>';
         html += '<td class="col-status">' +
             '<select class="status-select ' + getStatusClass(st) + '" data-rlid="' + item.id + '" onchange="setReadlistItemStatus(' + item.id + ', this.value)">';
         ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
@@ -2265,6 +2274,53 @@ function renderReadlistTable(data) {
     });
 }
 
+function renderReadlistCards(container, items) {
+    var html = '<div class="readlist-cards">';
+    items.forEach(function(item) {
+        var dateStr = item.created_at ? item.created_at.substring(0, 10) : '';
+        var priority = item.priority;
+        var bookname = escapeHtml(item.bookname || '');
+        var authorname = escapeHtml(item.author || '');
+        var comment = escapeHtml(item.comment || '');
+        var hasBook = item.edition_id != null;
+        var editionId = item.edition_id;
+        var formatName = item.format_name || '';
+        var onShelf = item.on_shelf;
+        var shelfIcon = onShelf ? '★' : '☆';
+        var shelfTitle = onShelf ? 'Убрать с полки' : 'Добавить на полку';
+
+        html += '<div class="readlist-card" data-id="' + item.id + '">';
+        // Top row: Priority, Date, Library flag
+        html += '<div class="rl-card-top">';
+        html += '<span class="rl-card-priority">#' + priority + '</span>';
+        html += '<span class="rl-card-date">' + escapeHtml(dateStr) + '</span>';
+        html += '<span class="rl-card-library">' + (hasBook ? '✓' : '—') + '</span>';
+        html += '</div>';
+        // Title
+        html += '<div class="rl-card-title">' + bookname + '</div>';
+        // Author
+        html += '<div class="rl-card-author">' + authorname + '</div>';
+        // Comment (only if filled)
+        if (comment) {
+            html += '<div class="rl-card-comment">' + comment + '</div>';
+        }
+        // Actions - always show edit/delete, format/shelf only if has book
+        html += '<div class="rl-card-actions">';
+        if (hasBook) {
+            if (formatName) {
+                html += '<a href="#" class="readlist-download-link" data-edition-id="' + editionId + '" title="Скачать">📥 ' + escapeHtml(formatName) + '</a>';
+            }
+            html += '<a href="#" class="readlist-shelf-toggle" data-edition-id="' + editionId + '" data-on-shelf="' + onShelf + '" title="' + shelfTitle + '">' + shelfIcon + ' Полка</a>';
+        }
+        html += '<button class="edit-readlist-btn" data-id="' + item.id + '" title="Редактировать">✎</button>';
+        html += '<button class="delete-readlist-btn" data-id="' + item.id + '" title="Удалить">🗑</button>';
+        html += '</div>';
+        html += '</div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+}
+
 function getReadlistSortIcon(sortBy) {
     if (readlistSortBy !== sortBy) return ' ↕';
     return readlistSortOrder === 'asc' ? ' ▲' : ' ▼';
@@ -2309,13 +2365,14 @@ function setupReadlistEvents() {
     document.getElementById('clearReadlistFilters')?.addEventListener('click', function() {
         document.getElementById('readlistBookFilter').value = '';
         document.getElementById('readlistAuthorFilter').value = '';
+        document.getElementById('readlistCommentFilter').value = '';
         document.getElementById('readlistNameFilter').value = '';
         readlistPage = 1;
         loadReadlist();
     });
 
     // Enter key and blur in filters
-    ['readlistBookFilter', 'readlistAuthorFilter'].forEach(function(id) {
+    ['readlistBookFilter', 'readlistAuthorFilter', 'readlistCommentFilter'].forEach(function(id) {
         var input = document.getElementById(id);
         if (input) {
             input.addEventListener('keypress', function(e) {
