@@ -2846,3 +2846,15 @@ async function setReadlistItemStatus(id, status) {
         }
     } catch(e) {}
 }
+
+// Event delegation for CSP compliance (no inline onclick/onchange)
+document.addEventListener('change', function(e) {
+    if (e.target.id === 'bookStatusFilter') loadBooks();
+});
+
+document.addEventListener('click', function(e) {
+    var target = e.target.closest('.close-readlist-btn');
+    if (target) { e.preventDefault(); closeReadlistModal(); return; }
+    target = e.target.closest('.close-modal-btn');
+    if (target) { e.preventDefault(); closeModal(); return; }
+});

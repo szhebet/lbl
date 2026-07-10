@@ -4,7 +4,7 @@
 
 Home library management web application built with Go and PostgreSQL.
 Provides a RESTful API + OPDS catalog for managing a personal book collection.
-Runs on Raspberry Pi.
+Runs on Raspberry Pi. Android TWA wrapper available. HTTPS via nginx.
 
 ## Testing Convention
 
@@ -17,23 +17,30 @@ sessions can verify changes immediately.
 ```
 lbl/
 ├── bookarch/         # Book archive files (ZIP format, one per edition)
+├── certres/          # SSL certificates + generation scripts
+│   ├── generate-certs.sh
+│   ├── generate-keystore.sh
+│   ├── generate-assetlinks.sh
+│   ├── generate-client-cert.sh
+│   └── generate-nginx-certs.sh  # (optional) copies to fullchain.pem
 ├── db/
 │   └── scripts/      # Database scripts
 ├── logs/             # Application logs
 ├── src/              # Go source code
 │   ├── main.go       # Entry point: routes, handlers, ImportManager, DB
-│   ├── auth.go       # Login handler, auto-admin creation on first login
-│   ├── reading.go    # Reading progress + admin auth middleware
-│   ├── jwt.go        # JWT generation and validation helpers
-│   ├── opds.go       # OPDS XML catalog endpoints
+│   ├── auth.go       # Login, register, refresh token
+│   ├── admin.go      # Admin handlers (users, persons, tags)
+│   ├── reading.go    # Reading progress + role middleware
+│   ├── jwt.go        # JWT + refresh tokens
+│   ├── opds.go       # OPDS XML catalog
 │   ├── export.go     # Export/import handlers
 │   ├── main_test.go  # Tests
 │   ├── schema.sql    # Embedded DB schema (go:embed)
-│   ├── migration_1.1.sql  # Migration: status + gender
+│   ├── migration_{1.1,2.0,2.1,2.2,2.3,2.4,2.5}.sql
 │   ├── config/
 │   │   └── config.go # TOML config struct, Load(), DefaultConfig()
 │   └── utils/
-│       ├── llm_client.go   # OpenAI-compatible LLM client (title/author recognition)
+│       ├── llm_client.go   # OpenAI-compatible LLM client
 │       ├── pdf_extract.go  # PDF text extraction
 │       ├── docx_extract.go # DOCX text extraction
 │       ├── doc_extract.go  # Binary DOC text extraction (OLE2)
@@ -42,24 +49,33 @@ lbl/
 │       ├── fb2_test.go     # FB2 tests
 │       ├── epub_test.go    # EPUB tests
 │       └── zip_extract.go  # ZIP content type detection
-├── static/           # Frontend assets
-│   ├── css/style.css
-│   ├── js/app.js     # SPA: Authors, Books, Genres tabs
-│   ├── js/import.js  # Async import with progress polling
+├── static/
+│   ├── css/
+│   │   ├── style.css       # Main styles (desktop + @media mobile)
+│   │   └── mobile.css      # Android-only styles (body.android)
+│   ├── js/
+│   │   ├── app.js          # SPA: Authors, Books, Genres tabs
+│   │   └── import.js       # Async import with progress polling
 │   └── favicon.ico
 ├── templates/
-│   ├── index.html    # SPA main page (4 tabs)
+│   ├── index.html    # SPA main page
 │   └── admin.html    # Admin panel SPA
-├── tempfld/          # Upload processing directory
+├── tempfld/          # Upload processing + shelf extraction directory
 ├── testdata/         # Sample books for testing
-├── config.toml.example
+├── nginx.conf        # nginx HTTPS + proxy configuration
 ├── docker-compose.yml
+├── docker-compose-nginx.yml  # Override: adds nginx service
 ├── Dockerfile
+├── Dockerfile.all-in-one
 ├── Dockerfile.android
+├── Dockerfile.android.sdk
 ├── startup.sh
+├── config.toml.example
+├── env.example
 ├── go.mod / go.sum
 ├── AGENTS.md
-└── README.md
+├── README.md
+└── .gitignore
 ```
 
 ## Technology Stack
@@ -76,6 +92,7 @@ lbl/
 | JWT | github.com/golang-jwt/jwt/v5 |
 | Frontend | Vanilla JS (SPA), no frameworks |
 | LLM | Ollama / OpenAI-compatible API (phi4:latest) |
+| Reverse proxy | nginx (alpine) |
 | Target | Raspberry Pi (ARM/Linux) |
 
 ## Configuration
@@ -114,12 +131,14 @@ See `config.toml.example` for all options.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/v1/auth/login` | Login (username, password) → JWT token + user info |
-| POST | `/api/v1/auth/register` | Register new user (username, password) |
+| POST | `/api/v1/auth/login` | Login → JWT + refresh_token + user info |
+| POST | `/api/v1/auth/register` | Register new viewer user (min password: 6 chars) |
+| POST | `/api/v1/auth/refresh` | Exchange refresh_token for new JWT |
 
-- **First login auto-creates admin**: If no users exist in DB, the first login attempt auto-creates an admin user with the provided credentials.
+- **First login auto-creates admin**: If no users exist in DB, the first login attempt auto-creates an admin user with the provided credentials. Uses `pg_advisory_xact_lock(42)` to prevent race conditions.
+- **Refresh tokens** stored as SHA-256 hash in `refresh_tokens` table.
 - All authenticated endpoints require `Authorization: Bearer <token>` header.
-- Guest routes: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`.
+- Guest routes: `GET /`, `GET /static/*`, `GET /favicon.ico`, `GET /.well-known/assetlinks.json`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS.
 
 ### Books & Metadata
 
@@ -134,8 +153,8 @@ See `config.toml.example` for all options.
 | GET | `/api/v1/books/:id/extended` | Extended info (ISBN, annotation, publisher, etc.) |
 | PUT | `/api/v1/books/:id/extended` | Update extended info |
 | PUT | `/api/v1/books/:id/shelf` | Toggle shelf (favorites) |
-| GET | `/api/v1/books/:id/download` | Download book file (ZIP) |
-| POST | `/api/v1/books/:id/cover` | Upload cover image |
+| GET | `/api/v1/books/:id/download` | Download book file (?mode=extracted for raw file) |
+| POST | `/api/v1/books/:id/cover` | Upload cover image (JPEG/PNG/WebP, 10MB max) |
 | PUT | `/api/v1/books/:id/reading` | Update reading status (0=not started, 1=in progress, 2=finished) |
 | GET | `/api/v1/user/books` | Current user's books with reading status |
 
@@ -145,7 +164,7 @@ See `config.toml.example` for all options.
 |--------|----------|-------------|
 | GET | `/api/v1/authors` | List authors with book tree |
 | GET | `/api/v1/genres` | List genres |
-| GET | `/api/v1/genres/tree` | Genre hierarchy with nested authors & books (?genre=, ?author=, ?book=) |
+| GET | `/api/v1/genres/tree` | Genre hierarchy with nested authors & books |
 | POST | `/api/v1/genres` | Create genre |
 | PUT | `/api/v1/genres/:id` | Update genre |
 | DELETE | `/api/v1/genres/:id` | Delete genre (only if no books) |
@@ -165,6 +184,16 @@ See `config.toml.example` for all options.
 | POST | `/api/v1/import/cancel` | Cancel running import |
 | POST | `/api/v1/import/file` | Import single file (sync) |
 
+### Read List
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/user/readlist` | Current user's read list sorted by priority desc |
+| POST | `/api/v1/user/readlist` | Create read list item |
+| GET | `/api/v1/user/readlist/names` | Get list names |
+| PUT | `/api/v1/user/readlist/:id` | Update read list item |
+| DELETE | `/api/v1/user/readlist/:id` | Delete read list item |
+
 ### Admin
 
 | Method | Endpoint | Description |
@@ -183,13 +212,15 @@ See `config.toml.example` for all options.
 |--------|----------|-------------|
 | GET | `/api/v1/shelf/count` | Books on shelf count |
 | PUT | `/api/v1/shelf/clear` | Clear shelf |
+| GET | `/shelf/` | Shelf page (HTML) |
 
 ### Other
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/config` | App config (enable_delete flag) |
-| GET | `/debug/goroutines` | Goroutine dump |
+| GET | `/.well-known/assetlinks.json` | Digital Asset Links for TWA |
+| GET | `/debug/goroutines` | Goroutine dump (admin+editor) |
 
 ### OPDS
 
@@ -216,9 +247,10 @@ See `config.toml.example` for all options.
 ## JWT Authentication
 
 - Tokens are generated on login: `HS256` with configurable secret (`jwt_secret`) and TTL (`token_ttl` hours).
-- If `jwt_secret` is empty, a random secret is generated on startup.
+- If `jwt_secret` is empty, a random secret is generated on startup — tokens invalidated on restart.
 - Middleware `authMiddleware()` validates JWT, sets user info in context, redirects to login on failure.
-- Token is stored in `localStorage` on the frontend.
+- Token is stored in `localStorage` on the frontend; also in `session_token` cookie (HttpOnly, SameSite=Strict).
+- Refresh tokens (SHA-256 hashed in DB) allow getting new JWT without re-login.
 
 ## Frontend Pages (SPA)
 
@@ -235,7 +267,7 @@ Three tabs:
 - Filters: author name, book title, genre (ё→е normalization)
 - Shelf checkboxes per edition, "Добавить на полку", "Очистить полку"
 - Edit author/book modal, delete book
-- Download edition button
+- Download edition button (?mode=extracted for raw file)
 - Reading status: colored badges + dropdown to update
 
 **Вкладка Книги (Books)**
@@ -282,7 +314,7 @@ Three tabs:
    - SHA-256 hash duplicate check (blocks before LLM call)
    - Format detection (FB2/EPUB have native metadata, PDF/DOC/DOCX need LLM)
    - LLM recognition (if needed)
-   - Save as ZIP archive in `bookarch/XXXXX/`
+   - Save as single-format file in `bookarch/XXXXX/` (NOT double-ZIP)
    - Insert into DB (works → editions → edition_files, with ISBN + genres)
 3. Progress polled via `/import/status`
 4. Cancel via `/import/cancel`
@@ -298,6 +330,8 @@ Three tabs:
 | DOCX | LLM from extracted text (word/document.xml) | ZIP + XML |
 | DOC | LLM from extracted text (OLE2 + UTF-16LE) | github.com/richardlehane/mscfb |
 | ZIP | Auto-detect content type inside | FB2, EPUB, PDF, DOC, DOCX |
+
+Nested archives: FB2.ZIP inside ZIP is recursively unzipped until a non-archive format is reached. DOCX is treated as final format (not double-unzipped).
 
 ## Search & Filtering
 
@@ -328,6 +362,38 @@ go build -o library_app ./src/
 ```bash
 DATABASE_URL="host=... port=... user=... password=... dbname=... sslmode=disable" PORT=9091 ./library_app
 ```
+
+### Docker Compose (with nginx HTTPS)
+
+```bash
+# 1. Generate certs
+cd certres && ./generate-certs.sh && cd ..
+
+# 2. Start
+docker compose -f docker-compose.yml -f docker-compose-nginx.yml up -d --build
+```
+
+## nginx Configuration
+
+`nginx.conf` provides:
+- HTTP (80) → HTTPS (443) redirect
+- HTTPS with SSL using `server.crt` / `server.key` from `certres/`
+- `proxy_pass` to `app:8080` (Docker Compose) or `127.0.0.1:9091` (standalone)
+- Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy
+- Forwards `X-Platform` header for Android mobile detection
+
+## Security Considerations (for AI assistants)
+
+When making changes, be aware of:
+1. **Session cookie Secure flag**: hardcoded to `false` in `auth.go:41`. If adding HTTPS support, set dynamically based on request scheme.
+2. **Dockerfile runs as root**: consider adding `USER nobody` for production.
+3. **TLS config**: `http.ListenAndServeTLS` in `main.go:752` uses Go defaults. Add `tls.Config` with `MinVersion: tls.VersionTLS12` for better security.
+4. **CSP has `'unsafe-inline'`**: acceptable for SPA with vanilla JS, but consider nonce/hash-based CSP for stricter XSS protection.
+5. **File upload validation**: extension-only for import, Content-Type header for covers. Add magic-bytes check for production.
+6. **JWT secret**: if empty in config, auto-generated on startup → all tokens invalid on restart. Always remind user to set `jwt_secret`.
+7. **OPDS host header**: base URL from `Host` header is used directly in XML output. Escape/validate for production.
+8. **Rate limiting**: in-memory only (resets on restart). For sticky production, consider Redis-backed limiter or nginx-level rate limiting.
+9. **Input length limits**: only password min-length (6) is enforced. Add max-length validation for user-facing string fields.
 
 ## Launch for Other Agents (Docker host-net mode)
 
@@ -371,21 +437,12 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:9091/
 # Should return 200
 ```
 
-### Verification
+### Verification via nginx (if running)
 
 ```bash
-# Check container
-docker ps --filter name=library-app
-
-# Check logs
-docker logs library-app --tail 5
-
-# Test API
-curl -s http://localhost:9091/api/v1/config
-curl -s http://localhost:9091/api/v1/books?limit=1
-
-# Test frontend
-curl -s http://localhost:9091/ | head -3
+curl -sk -o /dev/null -w "%{http_code}" https://localhost/
+curl -sk https://localhost/api/v1/config
+curl -sk -H "X-Platform: android" https://localhost/ | grep -o 'class="android"'
 ```
 
 ### Troubleshooting
@@ -424,10 +481,11 @@ Tests require PostgreSQL (`DATABASE_URL` env var or config.toml).
 ## Database
 
 - Schema auto-created on first run (embedded `schema.sql`)
-- Migrations applied automatically (embedded `migration_1.1.sql`)
+- Migrations applied automatically (embedded `migration_*.sql`)
 - Database auto-created if not exists
-- Key tables: `users`, `persons`, `works`, `editions`, `edition_files`, `genres`, `edition_genres`, `tags`, `edition_tags`, `shelf`, `reading_status`, `settings`
+- Key tables: `users`, `persons`, `works`, `editions`, `edition_files`, `genres`, `edition_genres`, `tags`, `edition_tags`, `shelf`, `reading_status`, `settings`, `user_devices`, `user_books`, `read_list`, `refresh_tokens`
 - Indices for search: GIN trgm on `lower_fio`, `lower_original_title`, `lower_title`
+- DB version tracked in `db_version` table; current version: `2.5`
 
 ## LLM Config
 
@@ -455,6 +513,8 @@ certres/              # SSL-сертификаты + ключ подписи APK
 ├── generate-certs.sh      # Генерация CA + серверных сертификатов
 ├── generate-keystore.sh   # Генерация Android keystore для подписи APK
 ├── generate-assetlinks.sh # Генерация .well-known/assetlinks.json
+├── generate-client-cert.sh # Клиентский сертификат (mTLS)
+├── generate-nginx-certs.sh # (опционально) копирует в fullchain.pem
 ├── README.md
 ├── .gitignore             # Чувствительные файлы исключены
 
@@ -479,7 +539,8 @@ src_android/          # Android TWA проект (bubblewrap-совместим�
 │       │   ├── raw/             # CA сертификат (копируется из certres/)
 │       │   └── mipmap-*/        # Иконки лаунчера
 │       └── java/app/library/twa/
-│           └── Application.java
+│           ├── Application.java
+│           └── MainActivity.java  # X-Platform: android + mTLS
 ├── generate-icons.sh      # Генерация PNG иконок (требует ImageMagick)
 ```
 
@@ -500,10 +561,10 @@ cd certres && ./generate-assetlinks.sh && cd ..
 
 ### Размещение assetlinks.json
 
-Для работы TWA файл `assetlinks.json` должен быть доступен на сайте:
+Для работы TWA файл `assetlinks.json` должен быть доступен на сайте.
+Уже добавлено в `main.go`:
 
 ```go
-// Добавить в main.go (в блок роутов):
 r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
     c.File("./certres/assetlinks.json")
 })
@@ -552,21 +613,6 @@ adb install android-apk/app-release.apk
 # Или скиньте APK на телефон и откройте файловым менеджером
 ```
 
-### Настройка HTTPS
-
-Для локального HTTPS на Raspberry Pi:
-
-```bash
-# В config.toml нужно указать порты для TLS
-# Приложение должно слушать и HTTP (9091) и HTTPS (443)
-
-# Пример запуска с TLS (добавить в main.go):
-# go func() {
-#     log.Fatal(http.ListenAndServeTLS(":443",
-#         "certres/server.crt", "certres/server.key", nil))
-# }()
-```
-
 ### Mobile CSS
 
 Мобильная вёрстка работает двумя способами:
@@ -582,11 +628,12 @@ adb install android-apk/app-release.apk
 
 Особенности мобильной версии:
 - Кнопки имеют min-height: 44px (touch target)
-- Таблицы скроллятся горизонтально
+- Таблицы используют `table-layout: fixed` для предотвращения горизонтального скролла
 - Модальные окна раскрываются на весь экран
 - Вкладки переносятся на новую строку
 - Фильтры адаптируются под ширину экрана
-- Убраны малозначимые колонки (дата, год) на телефонах
+- Убраны малозначимые колонки (дата, год, №) на телефонах
+- Иконки вместо текста для кнопок редактирования/удаления
 
 ### Сборка APK (Docker, две стадии)
 
@@ -636,12 +683,21 @@ adb install -r android-apk/app-release.apk
 
 ## Progress
 ### Done
-- Restored Android-specific server injection: `body class="android"`, `mobile.css`, mobile-top-bar HTML, Android JS for user button (reverted the "remove all mobile" changes).
+- Restored Android-specific server injection: `body class="android"`, `mobile.css`, mobile-top-bar HTML, Android JS for user button.
 - Fixed `mobile.css` for phone-screen fit: hidden non-essential columns, `table-layout: fixed`, compact sizes, icon-only buttons.
 - Shelf extraction: shelving a book extracts its archive to `tempfld/shelf/{edition_id}/` and serves the raw file on download.
 - Fixed import ZIP bug: double-ZIPs no longer created; inner format stored directly.
-- Fixed `DetectZipContent` in `zip_extract.go`: `.fb2` entries that are actually ZIP archives are now recursively detected (fixes `Vozvrashchenie_Siney_Borody.fb2_318.zip` → "Возвращение Синей Бороды").
-- Full import of `/example/` complete: **69 books imported, 2 `.rar` unsupported**. All formats (FB2, EPUB, PDF, DOC, DOCX, ZIP) working. Nested archives (FB2.ZIP in ZIP, DOC in ZIP) working. Duplicate detection correct.
+- Fixed `DetectZipContent` in `zip_extract.go`: `.fb2` entries that are actually ZIP archives are now recursively detected.
+- Full import of `/example/` complete: 69 books imported, 2 `.rar` unsupported.
+- Fixed JS syntax error in `app.js` (extra `}` in the editAuthor function).
+- Fixed readlist desktop table layout: added explicit column widths (`col-comment`, `col-listname`, `col-library`, `col-status`).
+- Fixed `mobile.css` duplicates (removed duplicate `.admin-container` rule).
+- Fixed download for Android WebView: replaced `window.open` with `DownloadListener` using direct HTTPS connection.
+- Fixed download mode: added `?mode=extracted` parameter to serve raw extracted file (not ZIP) for reading apps.
+- Changed default readlist sort to priority desc.
+- Changed default book priority to max+1.
+- Created nginx HTTPS proxy: `nginx.conf`, `docker-compose-nginx.yml`, `certres/generate-nginx-certs.sh`.
+- Added `.gitignore` for certificate files and build artifacts.
 
 ### In Progress
 - (none)
@@ -653,8 +709,14 @@ adb install -r android-apk/app-release.apk
 - Server differentiates desktop vs Android (via `X-Platform: android` header) and injects mobile-specific CSS/JS.
 - Shelf extraction writes the final extracted format to `tempfld/shelf/{edition_id}/`; the original ZIP remains untouched in `bookarch/`.
 - Double-ZIP bug fix ensures the stored archive in `bookarch/` contains the actual book file instead of a nested ZIP.
+- nginx is the recommended HTTPS reverse proxy for production; the Docker override (`docker-compose-nginx.yml`) adds it without modifying the base compose file.
+- Session cookie Secure flag is hardcoded to `false` — acceptable for local/RPi deployment, but should be made dynamic for production.
 
 ## Next Steps
-- Rebuild APK.
-- Test shelf extraction/download on a variety of formats (DOC, EPUB, PDF, nested FB2.ZIP).
-- Handle any remaining import edge cases.
+- Add graceful shutdown (SIGTERM/SIGINT handler) to avoid connection drops on restart.
+- Add `db.SetMaxOpenConns` / `db.SetMaxIdleConns` configuration for connection pool tuning.
+- Add health-check endpoint (`/health`).
+- Make session cookie Secure flag dynamic based on request scheme.
+- Harden Dockerfile: add non-root user, pin `alpine` digest.
+- Harden TLS: add `tls.Config` with `MinVersion: tls.VersionTLS12`.
+- Add magic-bytes validation for file uploads.

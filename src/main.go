@@ -514,7 +514,7 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "same-origin")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'")
 		c.Header("Strict-Transport-Security", "max-age=31533600; includeSubDomains")
 		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		c.Next()
@@ -742,20 +742,31 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Bind, cfg.Server.Port)
 
-	// Start HTTPS (TLS) with self-signed cert from certres/ if available
+	// HTTPS (TLS) is terminated by nginx — no TLS server in Go.
+	// If you need direct HTTPS without nginx, uncomment the block below.
+	/*
 	tlsCertFile := "./certres/server.crt"
 	tlsKeyFile := "./certres/server.key"
 	if _, err := os.Stat(tlsCertFile); err == nil {
 		tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
 		log.Printf("Starting HTTPS on %s\n", tlsAddr)
 		go func() {
-			if err := http.ListenAndServeTLS(tlsAddr, tlsCertFile, tlsKeyFile, r.Handler()); err != nil {
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+			server := &http.Server{
+				Addr:      tlsAddr,
+				Handler:   r.Handler(),
+				TLSConfig: tlsConfig,
+			}
+			if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
 				log.Printf("HTTPS server error: %v\n", err)
 			}
 		}()
 	} else {
 		log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
 	}
+	*/
 
 	log.Printf("Starting HTTP on %s\n", addr)
 	if err := r.Run(addr); err != nil {
