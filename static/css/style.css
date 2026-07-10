@@ -951,6 +951,35 @@ header h1 {
     white-space: nowrap;
 }
 
+/* Readlist-specific columns */
+.books-table .col-library {
+    width: 30px;
+    text-align: center;
+}
+
+.books-table .col-comment {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.books-table .col-listname {
+    width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.books-table .col-status {
+    width: 130px;
+}
+
+.readlist-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 .books-table .delete-book-btn {
     padding: 4px 8px;
     background: #e74c3c;

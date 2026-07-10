@@ -3619,6 +3619,7 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 		cfg := getConfig(c)
 
 		editionID := c.Param("id")
+		mode := c.DefaultQuery("mode", "archive")
 
 		var filePath, title string
 		var onShelf bool
@@ -3638,8 +3639,8 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		// If book is on shelf, serve extracted file
-		if onShelf {
+		// Serve extracted file only when explicitly requested with mode=extracted AND book is on shelf
+		if mode == "extracted" && onShelf {
 			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
 			entries, err := os.ReadDir(shelfDir)
 			if err == nil {
@@ -4020,7 +4021,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 
 			downloadLink := "-"
 			if book.FilePath != "" {
-				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download" class="download">⬇ Скачать</a>`
+				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download?mode=extracted" class="download">⬇ Скачать</a>`
 			}
 
 			page += `<tr>

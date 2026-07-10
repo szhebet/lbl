@@ -283,9 +283,13 @@ body.android .shelf-checkbox {
     height: 22px;
 }
 
-body.android #booksTableContainer,
-body.android #readlistTableContainer {
+body.android #booksTableContainer {
     overflow: hidden;
+    width: 100%;
+}
+
+body.android #readlistTableContainer {
+    overflow: visible;
     width: 100%;
 }
 
@@ -308,11 +312,33 @@ body.android .books-table .col-date { width: 48px; }
 body.android .books-table .col-title { width: auto; min-width: 0; }
 body.android .books-table .col-author { width: auto; min-width: 0; }
 body.android .books-table .col-year { width: 18px; text-align: center; }
-body.android .books-table .col-format { width: 26px; }
+body.android .books-table .col-format { width: 36px; }
 body.android .books-table .col-shelf { width: 18px; text-align: center; }
 body.android .books-table .col-actions { width: 30px; text-align: center; }
 body.android .books-table .col-status { width: 36px; }
 body.android .books-table .col-library { width: 14px; text-align: center; }
+
+body.android .book-download-link {
+    display: block;
+    padding: 4px 2px;
+    min-height: 36px;
+    line-height: 36px;
+    text-align: center;
+    text-decoration: none;
+    color: #3498db;
+    font-weight: 600;
+    font-size: 11px;
+}
+
+body.android .download-btn {
+    min-height: 44px;
+    font-size: 16px;
+    padding: 8px 12px;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 
 body.android #readlistTableContainer th.col-format {
     width: 26px;
@@ -643,298 +669,7 @@ body.android .delete-readlist-btn::before {
     line-height: 1;
 }
 
-/* ============================================================
-   Readlist Cards (Mobile)
-   ============================================================ */
-body.android .readlist-cards {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: 100%;
-}
-
-body.android .readlist-card {
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    padding: 12px;
-    border: 1px solid #eee;
-}
-
-body.android .rl-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 4px;
-    gap: 8px;
-}
-
-body.android .rl-card-title {
-    font-weight: 600;
-    font-size: 14px;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-body.android .rl-card-priority {
-    font-size: 11px;
-    color: #666;
-    background: #f0f0f0;
-    padding: 2px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-body.android .rl-card-author {
-    font-size: 12px;
-    color: #555;
-    margin-bottom: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-body.android .rl-card-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11px;
-    color: #888;
-    margin-bottom: 8px;
-}
-
-body.android .rl-card-status {
-    margin-bottom: 8px;
-}
-
-body.android .rl-card-status .status-select {
-    font-size: 11px;
-    min-height: 28px;
-    padding: 2px 6px;
-    width: 100%;
-    box-sizing: border-box;
-}
-
-body.android .rl-card-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding-top: 8px;
-    border-top: 1px solid #f0f0f0;
-}
-
-body.android .rl-card-actions a,
-body.android .rl-card-actions button {
-    flex: 1 1 auto;
-    min-width: 0;
-    text-align: center;
-    padding: 6px 8px;
-    font-size: 12px;
-    border-radius: 4px;
-    text-decoration: none;
-    border: 1px solid #ddd;
-    background: #fafafa;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-body.android .rl-card-actions a:active,
-body.android .rl-card-actions button:active {
-    background: #f0f0f0;
-}
-
-body.android .rl-card-actions .readlist-download-link {
-    color: #3498db;
-    border-color: #3498db;
-    background: #eaf6fc;
-}
-
-body.android .rl-card-actions .readlist-shelf-toggle {
-    color: #f39c12;
-    border-color: #f39c12;
-    background: #fef9e7;
-}
-
-body.android .rl-card-actions .edit-readlist-btn {
-    color: #2c3e50;
-    border-color: #bdc3c7;
-}
-
-body.android .rl-card-actions .delete-readlist-btn {
-    color: #e74c3c;
-    border-color: #e74c3c;
-    background: #fdedec;
-}
-
-/* Hide table on mobile when using cards */
-body.android #readlistTableContainer .books-table {
-    display: none;
-}
-body.android .edit-btn::before,
-body.android .edit-book-btn::before,
-body.android .edit-readlist-btn::before {
-    content: "✎";
-    font-size: 14px;
-    line-height: 1;
-}
-body.android .delete-btn,
-body.android .delete-book-btn,
-body.android .delete-readlist-btn {
-    font-size: 0;
-    line-height: 0;
-    padding: 2px 4px;
-    cursor: pointer;
-    color: #e74c3c;
-    min-width: 26px;
-    min-height: 28px;
-}
-body.android .delete-btn::before,
-body.android .delete-book-btn::before,
-body.android .delete-readlist-btn::before {
-    content: "🗑";
-    font-size: 12px;
-    line-height: 1;
-}
-/* ============================================================
-   Readlist Cards (mobile)
-   ============================================================ */
-body.android .readlist-cards {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-body.android .readlist-card {
-    background: #fff;
-    border-radius: 8px;
-    padding: 12px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    border: 1px solid #e0e0e0;
-}
-
-body.android .rl-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 6px;
-    gap: 8px;
-}
-
-body.android .rl-card-title {
-    font-weight: 600;
-    font-size: 14px;
-    line-height: 1.3;
-    flex: 1;
-    min-width: 0;
-}
-
-body.android .rl-card-priority {
-    font-size: 11px;
-    color: #666;
-    background: #f0f0f0;
-    padding: 2px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-body.android .rl-card-author {
-    font-size: 12px;
-    color: #555;
-    margin-bottom: 8px;
-    line-height: 1.3;
-}
-
-body.android .rl-card-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11px;
-    color: #888;
-    margin-bottom: 8px;
-}
-
-body.android .rl-card-status {
-    margin-bottom: 8px;
-}
-
-body.android .rl-card-status .status-select {
-    font-size: 11px;
-    width: 100%;
-    min-height: 32px;
-    padding: 4px 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: #fff;
-}
-
-body.android .rl-card-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding-top: 8px;
-    border-top: 1px solid #f0f0f0;
-}
-
-body.android .rl-card-actions a,
-body.android .rl-card-actions button {
-    flex: 1 1 auto;
-    min-width: 70px;
-    text-align: center;
-    font-size: 12px;
-    padding: 6px 8px;
-    border-radius: 4px;
-    text-decoration: none;
-    white-space: nowrap;
-    min-height: 36px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-body.android .rl-card-actions .readlist-download-link {
-    background: #3498db;
-    color: #fff;
-    border: none;
-}
-
-body.android .rl-card-actions .readlist-download-link:active {
-    background: #2980b9;
-}
-
-body.android .rl-card-actions .readlist-shelf-toggle {
-    background: #f39c12;
-    color: #fff;
-    border: none;
-}
-
-body.android .rl-card-actions .readlist-shelf-toggle:active {
-    background: #e67e22;
-}
-
-body.android .rl-card-actions .edit-readlist-btn {
-    background: #95a5a6;
-    color: #fff;
-    border: none;
-}
-
-body.android .rl-card-actions .edit-readlist-btn:active {
-    background: #7f8c8d;
-}
-
-body.android .rl-card-actions .delete-readlist-btn {
-    background: #e74c3c;
-    color: #fff;
-    border: none;
-}
-
-body.android .rl-card-actions .delete-readlist-btn:active {
-    background: #c0392b;
-}
-
-/* Readlist Cards - new layout */
+/* Readlist Cards */
 body.android .rl-card-top {
     display: flex;
     justify-content: space-between;
@@ -1024,6 +759,12 @@ body.android .rl-card-actions .edit-readlist-btn {
     background: #95a5a6;
     color: #fff;
     border: none;
+    font-size: 14px;
+    line-height: 1;
+}
+
+body.android .rl-card-actions .edit-readlist-btn::before {
+    content: none;
 }
 
 body.android .rl-card-actions .edit-readlist-btn:active {
@@ -1034,6 +775,12 @@ body.android .rl-card-actions .delete-readlist-btn {
     background: #e74c3c;
     color: #fff;
     border: none;
+    font-size: 14px;
+    line-height: 1;
+}
+
+body.android .rl-card-actions .delete-readlist-btn::before {
+    content: none;
 }
 
 body.android .rl-card-actions .delete-readlist-btn:active {

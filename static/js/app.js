@@ -1,12 +1,16 @@
 const API_BASE = '/api/v1';
 let enableDelete = false;
+
+function triggerDownload(url) {
+    window.location.href = url;
+}
 let authorsPage = 1;
 let booksPage = 1;
 let booksSortBy = 'original_title';
 let booksSortOrder = 'asc';
 let userBookStatuses = {};
 let readlistPage = 1;
-let readlistSortBy = 'created_at';
+let readlistSortBy = 'priority';
 let readlistSortOrder = 'desc';
 var personMap = {};
 
@@ -1095,7 +1099,7 @@ async function loadGenreAuthors(genreId, container) {
 
                     bookDiv.querySelector('.download-btn').addEventListener('click', (e) => {
                         e.stopPropagation();
-                        window.location.href = `${API_BASE}/books/${book.id}/download`;
+                        triggerDownload(API_BASE + '/books/' + book.id + '/download');
                     });
 
                     booksContainer.appendChild(bookDiv);
@@ -1368,7 +1372,7 @@ function setupBooksTableEvents() {
             const downloadLink = e.target.closest('.book-download-link');
             if (downloadLink) {
                 e.preventDefault();
-                window.location.href = `${API_BASE}/books/${downloadLink.dataset.id}/download`;
+                triggerDownload(API_BASE + '/books/' + downloadLink.dataset.id + '/download');
                 return;
             }
 
@@ -1520,7 +1524,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                     e.stopPropagation();
                     const btn = e.target;
                     const editionId = btn.dataset.id;
-                    window.location.href = `${API_BASE}/books/${editionId}/download`;
+                    triggerDownload(API_BASE + '/books/' + editionId + '/download');
                 });
 
                 bookLevel.addEventListener('click', (e) => {
@@ -2175,7 +2179,6 @@ async function loadReadlist() {
         container.innerHTML = '<div class="error">Ошибка загрузки: ' + escapeHtml(err.message) + '</div>';
     }
 }
-}
 
 function renderReadlistTable(data) {
     var container = document.getElementById('readlistTableContainer');
@@ -2195,13 +2198,14 @@ function renderReadlistTable(data) {
 }
 
 function renderReadlistTableDesktop(container, items) {
-    var html = '<table class="books-table"><thead><tr>';
-    html += '<th class="col-library">_</th>';
+    var html = '<div class="readlist-table-wrapper"><table class="books-table"><thead><tr>';
+    html += '<th class="col-library">📖</th>';
     html += '<th class="col-date sortable" data-sort-by="created_at">Дата создания' + getReadlistSortIcon('created_at') + '</th>';
     html += '<th class="col-num sortable" data-sort-by="priority">Приоритет' + getReadlistSortIcon('priority') + '</th>';
     html += '<th class="col-title sortable" data-sort-by="bookname">Название книги' + getReadlistSortIcon('bookname') + '</th>';
     html += '<th class="col-author sortable" data-sort-by="author">Автор' + getReadlistSortIcon('author') + '</th>';
-    html += '<th class="col-comment">Комментарий</th>';
+    html += '<th class="col-comment sortable" data-sort-by="comment">Комментарий' + getReadlistSortIcon('comment') + '</th>';
+    html += '<th class="col-listname sortable" data-sort-by="listname">Список' + getReadlistSortIcon('listname') + '</th>';
     html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
     html += '<th class="col-format">Формат</th>';
     html += '<th class="col-shelf">Полка</th>';
@@ -2213,6 +2217,7 @@ function renderReadlistTableDesktop(container, items) {
         var bookname = escapeHtml(item.bookname || '');
         var authorname = escapeHtml(item.author || '');
         var comment = escapeHtml(item.comment || '');
+        var listname = escapeHtml(item.listname || '');
         var st = item.status || 'Не заполнено';
         var hasBook = item.edition_id != null;
         var editionId = item.edition_id;
@@ -2228,6 +2233,7 @@ function renderReadlistTableDesktop(container, items) {
         html += '<td class="col-title">' + bookname + '</td>';
         html += '<td class="col-author">' + authorname + '</td>';
         html += '<td class="col-comment">' + (comment || '—') + '</td>';
+        html += '<td class="col-listname">' + (listname || '—') + '</td>';
         html += '<td class="col-status">' +
             '<select class="status-select ' + getStatusClass(st) + '" data-rlid="' + item.id + '" onchange="setReadlistItemStatus(' + item.id + ', this.value)">';
         ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
@@ -2254,7 +2260,7 @@ function renderReadlistTableDesktop(container, items) {
         html += '</td></tr>';
     });
 
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     container.innerHTML = html;
 
     container.querySelectorAll('th.sortable').forEach(function(th) {
@@ -2612,7 +2618,7 @@ function setupReadlistEvents() {
         if (downloadLink) {
             e.preventDefault();
             var eid = downloadLink.dataset.editionId;
-            window.location.href = API_BASE + '/books/' + eid + '/download';
+            triggerDownload(API_BASE + '/books/' + eid + '/download');
             return;
         }
 
