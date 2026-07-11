@@ -48,11 +48,11 @@ docker compose up -d --build
 
 Приложение: http://localhost:9092
 
-#### Docker Compose + nginx (HTTPS)
+### Docker Compose + nginx (HTTPS)
 
 ```bash
 # 1. Сгенерировать сертификаты
-cd certres && ./generate-certs.sh && cd ..
+cd certres && chmod +x generate-certs.sh && ./generate-certs.sh && cd ..
 
 # 2. Запустить с nginx
 docker compose -f docker-compose.yml -f docker-compose-nginx.yml up -d --build
