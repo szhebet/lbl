@@ -54,7 +54,8 @@ docker compose up -d --build
 # 1. Сгенерировать сертификаты
 cd certres && chmod +x generate-certs.sh && ./generate-certs.sh && cd ..
 
-# 2. Запустить с nginx
+# 2. Отредактировать docker-compose.yml, при необходимости отключить публикацию лишних портов в app секции
+# 3. Запустить с nginx
 docker compose -f docker-compose.yml -f docker-compose-nginx.yml up -d --build
 ```
 
