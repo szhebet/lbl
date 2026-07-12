@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -28,9 +29,13 @@ type TokenClaims struct {
 }
 
 func initJWTSecret(secret string) {
-	if secret != "" {
+	placeholder := "CHANGE_ME_TO_A_RANDOM_SECRET_KEY"
+	if secret != "" && !strings.EqualFold(secret, placeholder) {
 		jwtSecret = []byte(secret)
 		return
+	}
+	if strings.EqualFold(secret, placeholder) {
+		log.Println("WARNING: jwt_secret in config is the default placeholder. Generating a random secret instead. Tokens will be invalidated on restart. Set a fixed jwt_secret in config.toml.")
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

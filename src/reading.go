@@ -320,7 +320,8 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		listname := c.Query("listname")
 		bookname := c.Query("bookname")
 		author := c.Query("author")
-		sortBy := c.DefaultQuery("sort_by", "created_at")
+		comment := c.Query("comment")
+		sortBy := c.DefaultQuery("sort_by", "priority")
 		sortOrder := c.DefaultQuery("sort_order", "desc")
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
@@ -331,6 +332,8 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			"bookname":   "rl.bookname",
 			"author":     "rl.author",
 			"status":     "rl.status",
+			"comment":    "rl.comment",
+			"listname":   "rl.listname",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {
@@ -357,6 +360,11 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		if author != "" {
 			whereClause += fmt.Sprintf(" AND rl.author ILIKE $%d", argNum)
 			args = append(args, "%"+author+"%")
+			argNum++
+		}
+		if comment != "" {
+			whereClause += fmt.Sprintf(" AND rl.comment ILIKE $%d", argNum)
+			args = append(args, "%"+comment+"%")
 			argNum++
 		}
 
@@ -427,12 +435,19 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		if req.Listname == "" {
-			req.Listname = "default"
-		}
-		if !validReadListStatuses[req.Status] {
-			req.Status = "Не заполнено"
-		}
+	if req.Listname == "" {
+		req.Listname = "default"
+	}
+	if !validReadListStatuses[req.Status] {
+		req.Status = "Не заполнено"
+	}
+
+	// Default priority: max existing priority for this user + 1
+	if req.Priority <= 0 {
+		var maxPriority int
+		db.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM read_list WHERE user_id = $1", uid).Scan(&maxPriority)
+		req.Priority = maxPriority + 1
+	}
 
 		var item ReadListItem
 		var editionID sql.NullInt64

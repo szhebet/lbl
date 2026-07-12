@@ -10,12 +10,14 @@
 - **LLM-распознавание** — автоматическое определение названия и автора по тексту первых страниц (PDF, DOC, DOCX) через Ollama / OpenAI-совместимый API
 - **Проверка дубликатов** — SHA-256 хеш контента; если книга уже есть, импорт пропускается
 - **Полка (избранное)** — быстрый доступ к отмеченным книгам (общая для всех пользователей)
-- **Статус чтения** — отслеживание прогресса: не начато, читаю, прочитано (ведется для каждого пользователя системы)
+- **Список чтения** — персональные списки книг для каждого пользователя (планирование чтения с приоритетами)
+- **Статус чтения** — отслеживание прогресса: не начато, читаю, прочитано (ведется для каждого пользователя)
 - **Поиск** — по автору, названию, жанру, дате; ё→е, регистронезависимый, GIN trgm индексы
 - **Ролевая модель** — viewer (просмотр), editor (каталог + админка без пользователей), admin (полный доступ)
 - **OPDS-каталог** — доступ к библиотеке с электронных читалок через OPDS 1.2
 - **SPA-интерфейс** — три вкладки (Авторы, Книги, Жанры) + Импорт
 - **Админ-панель** — управление пользователями, каталогом, настройками LLM
+- **Android TWA** — мобильное приложение (Trusted Web Activity), HTTPS через nginx
 
 ### Поддерживаемые форматы
 
@@ -28,11 +30,9 @@
 | DOC | LLM (первые 3 страницы) | OLE2 + UTF-16LE (mscfb) |
 | ZIP | Автоопределение формата внутри | FB2, EPUB, PDF, DOC, DOCX |
 
-
 ## Быстрый старт
-Проще всего установить через docker compose, см раздел ниже
 
-### Docker Compose
+### Docker Compose (рекомендуется)
 
 ```bash
 git clone https://github.com/szhebet/lbl.git
@@ -41,14 +41,26 @@ cd lbl
 cp config.toml.example config.toml
 cp env.example .env
 # Отредактировать .env (пароль, пути)
+# Отредактировать config.toml (jwt_secret, база данных)
 
 docker compose up -d --build
 ```
 
 Приложение: http://localhost:9092
 
+### Docker Compose + nginx (HTTPS)
 
-Для тех, кто ищет варианты посложнее...
+```bash
+# 1. Сгенерировать сертификаты
+cd certres && chmod +x generate-certs.sh && ./generate-certs.sh && cd ..
+
+# 2. Отредактировать docker-compose.yml, при необходимости отключить публикацию лишних портов в app секции
+# 3. Запустить с nginx
+docker compose -f docker-compose.yml -f docker-compose-nginx.yml up -d --build
+```
+
+Приложение: https://localhost
+
 ### Локальный запуск
 
 #### Требования
@@ -142,10 +154,10 @@ go build -o library_app ./src/
 ### JWT
 
 - Токены HS256 с настраиваемым secret (`jwt_secret`) и TTL (`token_ttl`).
-- Если `jwt_secret` пуст, генерируется случайный ключ при старте.
+- Если `jwt_secret` пуст, генерируется случайный ключ при старте — **все существующие токены станут недействительны после перезапуска**.
 - Токен передаётся в заголовке `Authorization: Bearer <token>`.
-- Хранится в `localStorage` на фронтенде.
-
+- Также устанавливается `session_token` cookie (HttpOnly, SameSite=Strict) для обратной совместимости.
+- Поддержка refresh-токенов: `POST /api/v1/auth/refresh`.
 
 ## API
 
@@ -153,8 +165,9 @@ go build -o library_app ./src/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/auth/login` | Вход (username, password) → JWT + информация о пользователе |
-| POST | `/api/v1/auth/register` | Регистрация (username, password) |
+| POST | `/api/v1/auth/login` | Вход (username, password) → JWT + refresh_token + информация о пользователе |
+| POST | `/api/v1/auth/register` | Регистрация (username, password) → viewer |
+| POST | `/api/v1/auth/refresh` | Обновление JWT по refresh_token |
 
 ### Книги
 
@@ -169,8 +182,8 @@ go build -o library_app ./src/
 | GET | `/api/v1/books/:id/extended` | Расширенная информация (ISBN, аннотация, издатель) |
 | PUT | `/api/v1/books/:id/extended` | Обновление расширенных данных |
 | PUT | `/api/v1/books/:id/shelf` | Добавить/убрать с полки |
-| GET | `/api/v1/books/:id/download` | Скачать файл (ZIP) |
-| POST | `/api/v1/books/:id/cover` | Загрузить обложку |
+| GET | `/api/v1/books/:id/download` | Скачать файл (?mode=extracted — распакованный оригинал) |
+| POST | `/api/v1/books/:id/cover` | Загрузить обложку (JPEG, PNG, WebP, макс 10 MB) |
 | PUT | `/api/v1/books/:id/reading` | Статус чтения (0=не начато, 1=читаю, 2=прочитано) |
 | GET | `/api/v1/user/books` | Книги текущего пользователя со статусом чтения |
 
@@ -200,6 +213,16 @@ go build -o library_app ./src/
 | POST | `/api/v1/import/cancel` | Отмена текущего импорта |
 | POST | `/api/v1/import/file` | Импорт одного файла (синхронно) |
 
+### Список чтения (Read List)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/user/readlist` | Список чтения текущего пользователя |
+| POST | `/api/v1/user/readlist` | Создать запись в списке чтения |
+| GET | `/api/v1/user/readlist/names` | Названия списков |
+| PUT | `/api/v1/user/readlist/:id` | Обновить запись списка чтения |
+| DELETE | `/api/v1/user/readlist/:id` | Удалить запись из списка чтения |
+
 ### Администрирование (admin only)
 
 | Метод | Путь | Описание |
@@ -224,7 +247,8 @@ go build -o library_app ./src/
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/api/v1/config` | Конфигурация (enable_delete) |
-| GET | `/debug/goroutines` | Дамп горутин |
+| GET | `/debug/goroutines` | Дамп горутин (admin+editor) |
+| GET | `/.well-known/assetlinks.json` | Digital Asset Links для TWA |
 
 ### OPDS
 
@@ -259,18 +283,31 @@ go test -count=1 ./src/
 ```
 lbl/
 ├── bookarch/                  # Хранилище книг (ZIP-архивы)
+├── certres/                   # SSL-сертификаты и скрипты генерации
+│   ├── generate-certs.sh      # CA + серверные сертификаты
+│   ├── generate-keystore.sh   # Keystore для подписи APK
+│   ├── generate-assetlinks.sh # Digital Asset Links
+│   ├── generate-client-cert.sh # Клиентский сертификат (mTLS)
+│   └── generate-nginx-certs.sh # fullchain.pem / privkey.pem (опционально)
 ├── db/scripts/                # Скрипты БД
 ├── logs/                      # Логи приложения
-├── src/                       # Исходный код
-│   ├── main.go                # Точка входа: маршруты, хендлеры, ImportManager, БД
-│   ├── auth.go                # Логин, автосоздание админа при первом входе
+├── src/                       # Исходный код Go
+│   ├── main.go                # Точка входа + все основные хендлеры
+│   ├── auth.go                # Логин, регистрация, refresh
+│   ├── admin.go               # Админ-хендлеры (пользователи, персоны, теги)
 │   ├── reading.go             # Статус чтения + middleware проверки ролей
-│   ├── jwt.go                 # Генерация и валидация JWT
+│   ├── jwt.go                 # Генерация и валидация JWT + refresh-токены
 │   ├── opds.go                # OPDS XML-каталог
 │   ├── export.go              # Экспорт/импорт хендлеры
 │   ├── main_test.go           # Тесты
 │   ├── schema.sql             # Встраиваемая схема БД (go:embed)
-│   ├── migration_1.1.sql      # Миграция: статус чтения + пол (gender)
+│   ├── migration_1.1.sql      # Миграция 1.1
+│   ├── migration_2.0.sql      # Миграция 2.0
+│   ├── migration_2.1.sql      # Миграция 2.1 (user_devices)
+│   ├── migration_2.2.sql      # Миграция 2.2 (user_books)
+│   ├── migration_2.3.sql      # Миграция 2.3 (read_list)
+│   ├── migration_2.4.sql      # Миграция 2.4 (триггеры sync)
+│   ├── migration_2.5.sql      # Миграция 2.5 (refresh_tokens)
 │   ├── config/
 │   │   └── config.go          # Структура конфига, Load(), DefaultConfig()
 │   └── utils/
@@ -284,29 +321,83 @@ lbl/
 │       ├── epub_test.go       # Тесты EPUB
 │       └── zip_extract.go     # Определение контента ZIP
 ├── static/
-│   ├── css/style.css
-│   ├── js/app.js              # SPA: вкладки Авторы, Книги, Жанры
-│   ├── js/import.js           # Асинхронный импорт с polling прогресса
+│   ├── css/
+│   │   ├── style.css          # Основные стили (десктоп + @media mobile)
+│   │   └── mobile.css         # Android-only стили (body.android)
+│   ├── js/
+│   │   ├── app.js             # SPA: вкладки Авторы, Книги, Жанры
+│   │   └── import.js          # Асинхронный импорт с polling прогресса
 │   └── favicon.ico
 ├── templates/
 │   ├── index.html             # SPA главная страница (4 вкладки)
 │   └── admin.html             # Админ-панель SPA
-├── tempfld/                   # Директория загрузки файлов
+├── tempfld/                   # Директория загрузки/распаковки файлов
 ├── testdata/                  # Тестовые книги
 ├── config.toml.example        # Пример конфига
 ├── env.example                # Пример .env для Docker
+├── nginx.conf                 # Конфигурация nginx (HTTPS + прокси)
 ├── docker-compose.yml         # Docker Compose (БД + приложение)
-├── Dockerfile                 # Многоступенчатая сборка
+├── docker-compose-nginx.yml   # Override: добавляет nginx (HTTPS)
+├── Dockerfile                 # Многоступенчатая сборка Go
 ├── Dockerfile.all-in-one      # Всё в одном (БД + приложение)
+├── Dockerfile.android         # APK (TWA)
+├── Dockerfile.android.sdk     # SDK-образ для кэширования
 ├── startup.sh                 # Точка входа контейнера
 ├── go.mod / go.sum
-├── AGENTS.md                  # Инструкции для ассистентов
-└── README.md
+├── AGENTS.md                  # Инструкции для ассистентов AI
+├── README.md
+└── .gitignore
+```
+
+## nginx
+
+Для продакшн-развертывания рекомендуется использовать nginx в качестве HTTPS-терминатора.
+
+### Быстрый старт с nginx
+
+```bash
+# 1. CA + сертификаты
+cd certres && ./generate-certs.sh && cd ..
+
+# 2. Запуск
+docker compose -f docker-compose.yml -f docker-compose-nginx.yml up -d --build
+```
+
+- HTTP (80) → редирект на HTTPS (443)
+- HTTPS (443) → прокси на `app:8080`
+- Проброс заголовка `X-Platform` для Android-детекции
+- Security headers: HSTS, X-Content-Type-Options, X-Frame-Options
+
+### Самостоятельная настройка
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name library.example.com;
+
+    ssl_certificate     /path/to/certres/server.crt;
+    ssl_certificate_key /path/to/certres/server.key;
+
+    # Рекомендуется для продакшна:
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass http://127.0.0.1:9091;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Platform $http_x_platform;
+        proxy_buffering off;
+    }
+}
 ```
 
 ## TWA Android App
 
-TWA (Trusted Web Activity) упаковывает веб-приложение в Android APK через WebView.
+TWA (Trusted Web Activity) упаковывает веб-приложение в Android APK через Chrome Custom Tabs. Для работы требуется HTTPS и Digital Asset Links.
 
 ### Сборка APK
 
@@ -327,11 +418,11 @@ APK будут в `android-apk/`:
 adb install -r android-apk/app-debug.apk
 ```
 
-### Настройка клиентского сертификата (mTLS)
+### Настройка mTLS
 
 Для ограничения доступа к сайту с помощью клиентских сертификатов через nginx:
 
-1. **Сгенерировать сертификаты** (CA + серверный + клиентский):
+1. **Сгенерировать сертификаты**:
 
 ```bash
 cd certres
@@ -343,7 +434,7 @@ cd certres
 
 Скрипт `generate-client-cert.sh` проверяет наличие существующего сертификата и переиспользует его при повторном запуске.
 
-2. **Настроить nginx** — добавить в server block:
+2. **Настроить nginx**:
 
 ```nginx
 server {
@@ -353,13 +444,9 @@ server {
     ssl_certificate     /path/to/certres/server.crt;
     ssl_certificate_key /path/to/certres/server.key;
 
-    # Client certificate authentication
     ssl_client_certificate /path/to/certres/ca.crt;
     ssl_verify_client on;
     ssl_verify_depth 1;
-
-    # Если нужно разрешить доступ только конкретным клиентам:
-    # ssl_verify_client optional_no_ca;  # И проверять ${ssl_client_s_dn} в приложении
 
     location / {
         proxy_pass http://127.0.0.1:9091;
@@ -369,9 +456,9 @@ server {
 }
 ```
 
-3. **Сборка APK** автоматически включает клиентский сертификат (`client.p12` → `res/raw/client_cert.p12`). Приложение WebView отправляет сертификат при запросе со стороны сервера.
+3. **Сборка APK** автоматически включает клиентский сертификат (`client.p12` → `res/raw/client_cert.p12`).
 
-4. **Файлы сертификатов:**
+### Файлы сертификатов
 
 | Файл | Назначение |
 |------|-----------|
@@ -405,9 +492,12 @@ src_android/
 - **Схема БД** создаётся автоматически при первом запуске (embedded `schema.sql` + миграции). База данных также создаётся автоматически, если не существует.
 - **LLM-вызовы** сериализованы через `sync.Mutex` — при массовом импорте PDF/DOC/DOCX файлы обрабатываются последовательно.
 - **Дубликаты** проверяются по SHA-256 от содержимого до обращения к LLM.
+- **Список чтения** отличается от полки: полка — общая для всех, список чтения — персональный для каждого пользователя.
 - **Сортировка по году**: книги без года (включая year=0) всегда в конце списка (`NULLIF(year, 0) + NULLS LAST`).
 - **Первый вход** создаёт администратора, если в БД нет пользователей.
-- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`.
+- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, `GET /.well-known/assetlinks.json`, OPDS.
+- **Мобильная версия**: сервер определяет Android по заголовку `X-Platform` или User-Agent и добавляет `body class="android"` + `mobile.css`.
+- **Полка при скачивании**: ZIP-архив распаковывается в `tempfld/shelf/{edition_id}/`, сервируется оригинальный файл; при убирании с полки — очищается.
 
 ## Лицензия
 

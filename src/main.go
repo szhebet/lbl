@@ -655,6 +655,7 @@ func main() {
 		write.POST("/import/cancel", cancelImport())
 		write.POST("/books/:id/cover", uploadCover(db))
 		write.PUT("/books/:id/shelf", updateBookShelf(db))
+		write.PUT("/shelf/clear", clearShelf(db))
 
 		// User-book status
 		write.GET("/user/books", listUserBooks(db))
@@ -741,20 +742,31 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Bind, cfg.Server.Port)
 
-	// Start HTTPS (TLS) with self-signed cert from certres/ if available
+	// HTTPS (TLS) is terminated by nginx — no TLS server in Go.
+	// If you need direct HTTPS without nginx, uncomment the block below.
+	/*
 	tlsCertFile := "./certres/server.crt"
 	tlsKeyFile := "./certres/server.key"
 	if _, err := os.Stat(tlsCertFile); err == nil {
 		tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
 		log.Printf("Starting HTTPS on %s\n", tlsAddr)
 		go func() {
-			if err := http.ListenAndServeTLS(tlsAddr, tlsCertFile, tlsKeyFile, r.Handler()); err != nil {
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+			server := &http.Server{
+				Addr:      tlsAddr,
+				Handler:   r.Handler(),
+				TLSConfig: tlsConfig,
+			}
+			if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
 				log.Printf("HTTPS server error: %v\n", err)
 			}
 		}()
 	} else {
 		log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
 	}
+	*/
 
 	log.Printf("Starting HTTP on %s\n", addr)
 	if err := r.Run(addr); err != nil {
@@ -3618,6 +3630,7 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 		cfg := getConfig(c)
 
 		editionID := c.Param("id")
+		mode := c.DefaultQuery("mode", "archive")
 
 		var filePath, title string
 		var onShelf bool
@@ -3637,8 +3650,8 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		// If book is on shelf, serve extracted file
-		if onShelf {
+		// Serve extracted file only when explicitly requested with mode=extracted AND book is on shelf
+		if mode == "extracted" && onShelf {
 			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
 			entries, err := os.ReadDir(shelfDir)
 			if err == nil {
@@ -3774,8 +3787,7 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 
 		if req.OnShelf {
 			if err := extractBookForShelf(db, editionID, cfg); err != nil {
-				internalError(c, err)
-				return
+				log.Printf("Shelf extract warning for edition %s: %v", editionID, err)
 			}
 		} else {
 			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
@@ -3957,6 +3969,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			if err := rows.Scan(&book.ID, &book.Authors, &book.Title, &filePath, &fileSize); err != nil {
 				continue
 			}
+			book.Authors = truncateAuthors(book.Authors)
 			if filePath.Valid {
 				book.FilePath = filePath.String
 			}
@@ -3981,12 +3994,12 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         .shelf-table .size { color: #666; font-size: 12px; }
         .shelf-table .download { color: #3498db; text-decoration: none; }
         .shelf-table .download:hover { text-decoration: underline; }
-        .back-link { display: inline-block; margin: 20px 0; color: #3498db; }
+        .back-link { display: inline-block; margin: 20px 0; color: #3498db; cursor: pointer; }
     </style>
 </head>
 <body>
     <div class="container">
-        <a href="/" class="back-link">← Назад к библиотеке</a>
+        <a href="/" class="back-link" id="backLink">← Назад к библиотеке</a>
         <h1>📚 Общая полка</h1>
         <p>Книг на полке: ` + fmt.Sprintf("%d", len(books)) + `</p>
         ` + func() string {
@@ -4019,7 +4032,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 
 			downloadLink := "-"
 			if book.FilePath != "" {
-				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download" class="download">⬇ Скачать</a>`
+				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download?mode=extracted" class="download">⬇ Скачать</a>`
 			}
 
 			page += `<tr>
@@ -4046,6 +4059,16 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
                 alert('Ошибка: ' + err.message);
             }
         }
+        document.getElementById('backLink').addEventListener('click', function(e) {
+            e.preventDefault();
+            if (window.history.length > 1) {
+                window.history.back();
+            } else if (document.referrer) {
+                window.location.href = document.referrer;
+            } else {
+                window.location.href = '/';
+            }
+        });
         </script>
     </div>
 </body></html>`
@@ -4070,6 +4093,17 @@ func clearShelf(db *sql.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{"message": "Shelf cleared successfully"})
 	}
+}
+
+func truncateAuthors(authors string) string {
+	if authors == "" {
+		return "Неизвестный автор"
+	}
+	parts := strings.Split(authors, "; ")
+	if len(parts) <= 3 {
+		return authors
+	}
+	return strings.Join(parts[:3], "; ") + " (и др)"
 }
 
 func getShelfCount(db *sql.DB) gin.HandlerFunc {

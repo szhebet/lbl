@@ -12,6 +12,11 @@ library_app
 .env
 task.txt
 nohup.out
+temp*
+
+# Backup files
+*.backup
+*.bak
 
 # TWA APK build artifacts
 android-apk/
@@ -29,3 +34,5 @@ certres/*.der
 certres/*.srl
 certres/android.keystore
 certres/assetlinks.json
+*.pem
+

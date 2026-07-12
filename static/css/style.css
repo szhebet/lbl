@@ -186,6 +186,34 @@ header h1 {
     }
 }
 
+.shelf-link {
+    display: flex;
+    width: 100%;
+    justify-content: flex-start;
+    flex: 0 0 100%;
+    gap: 10px;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.shelf-link .btn,
+.shelf-link .btn-small,
+.shelf-link .btn-secondary {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+}
+
+.shelf-link a {
+    white-space: nowrap;
+}
+
 .filter-group input:focus {
     outline: none;
     border-color: #3498db;
@@ -921,6 +949,35 @@ header h1 {
     width: 160px;
     text-align: center;
     white-space: nowrap;
+}
+
+/* Readlist-specific columns */
+.books-table .col-library {
+    width: 30px;
+    text-align: center;
+}
+
+.books-table .col-comment {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.books-table .col-listname {
+    width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.books-table .col-status {
+    width: 130px;
+}
+
+.readlist-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .books-table .delete-book-btn {

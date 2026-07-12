@@ -1,11 +1,15 @@
 package app.library.twa;
 
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -20,6 +24,7 @@ import java.util.Map;
 import android.view.ViewGroup;
 import android.webkit.ClientCertRequest;
 import android.webkit.ConsoleMessage;
+import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
@@ -270,6 +275,117 @@ public class MainActivity extends Activity {
         });
 
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
+
+        // Handle file downloads via direct HTTPS connection (trusts self-signed cert)
+        webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                appendDebug("Download: " + url);
+
+                // Extract filename from Content-Disposition
+                final String filename;
+                if (contentDisposition != null) {
+                    String[] parts = contentDisposition.split("filename\\*=UTF-8''");
+                    if (parts.length > 1) {
+                        filename = Uri.decode(parts[1].split(";")[0].trim());
+                    } else {
+                        String[] parts2 = contentDisposition.split("filename=\"");
+                        if (parts2.length > 1) {
+                            filename = parts2[1].split("\"")[0];
+                        } else {
+                            filename = "book.zip";
+                        }
+                    }
+                } else {
+                    filename = "book.zip";
+                }
+
+                final String downloadUrl = url;
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        downloadFile(downloadUrl, filename);
+                    }
+                }).start();
+            }
+        });
+    }
+
+    private void downloadFile(String urlStr, String filename) {
+        java.io.BufferedInputStream bis = null;
+        java.io.FileOutputStream fos = null;
+        try {
+            // Create SSL context that trusts all certificates (self-signed dev cert)
+            javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
+                new javax.net.ssl.X509TrustManager() {
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                }
+            };
+            javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+            sc.init(null, trustAll, new java.security.SecureRandom());
+
+            java.net.URL url = new java.net.URL(urlStr);
+            javax.net.ssl.HttpsURLConnection conn = (javax.net.ssl.HttpsURLConnection) url.openConnection();
+            conn.setSSLSocketFactory(sc.getSocketFactory());
+            conn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+            });
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(30000);
+            conn.connect();
+
+            int responseCode = conn.getResponseCode();
+            appendDebug("Download response: " + responseCode);
+            if (responseCode != 200) {
+                showError("Download failed: HTTP " + responseCode);
+                return;
+            }
+
+            // Save to Downloads directory
+            java.io.File downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS);
+            java.io.File outFile = new java.io.File(downloadsDir, filename);
+
+            // Ensure unique filename
+            int counter = 1;
+            while (outFile.exists()) {
+                String name = filename.substring(0, filename.lastIndexOf('.'));
+                String ext = filename.substring(filename.lastIndexOf('.'));
+                outFile = new java.io.File(downloadsDir, name + " (" + counter + ")" + ext);
+                counter++;
+            }
+
+            bis = new java.io.BufferedInputStream(conn.getInputStream());
+            fos = new java.io.FileOutputStream(outFile);
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            long total = 0;
+            while ((bytesRead = bis.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+                total += bytesRead;
+            }
+            fos.flush();
+
+            appendDebug("Download saved: " + outFile.getAbsolutePath() + " (" + total + " bytes)");
+
+            // Notify via Toast on UI thread
+            final String msg = "Скачано: " + outFile.getName();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                }
+            });
+        } catch (Exception e) {
+            appendDebug("Download error: " + e.getMessage());
+            showError("Download error: " + e.getMessage());
+        } finally {
+            try { if (bis != null) bis.close(); } catch (Exception e) {}
+            try { if (fos != null) fos.close(); } catch (Exception e) {}
+        }
     }
 
     private class TokenBridge {

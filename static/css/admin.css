@@ -1,0 +1,58 @@
+.admin-tabs { display: flex; gap: 10px; margin-bottom: 20px; background: #fff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.admin-tab { padding: 10px 20px; border: none; background: transparent; cursor: pointer; font-size: 15px; border-radius: 6px; color: #666; transition: all 0.3s ease; }
+.admin-tab:hover { background: #e0e0e0; }
+.admin-tab.active { background: #3498db; color: #fff; }
+.admin-content { display: none; }
+.admin-content.active { display: block; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th { background: #f5f6fa; padding: 10px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; white-space: nowrap; cursor: pointer; user-select: none; }
+.admin-table th:hover { background: #e8eaf0; }
+.admin-table th .sort-arrow { margin-left: 4px; color: #999; font-size: 11px; }
+.admin-table th.sorted-asc .sort-arrow::after { content: ' ▲'; color: #3498db; }
+.admin-table th.sorted-desc .sort-arrow::after { content: ' ▼'; color: #3498db; }
+.admin-table td { padding: 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+.admin-table tr:hover { background: #fafbfc; }
+.admin-table .actions { width: 160px; text-align: center; white-space: nowrap; }
+.admin-toolbar { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
+.admin-toolbar .btn { padding: 8px 16px; }
+.admin-toolbar .filter-input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+.admin-toolbar .filter-input:focus { outline: none; border-color: #3498db; }
+.back-link { display: inline-block; margin-bottom: 15px; color: #3498db; text-decoration: none; }
+.back-link:hover { text-decoration: underline; }
+.badge-role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ecf0f1; color: #555; }
+.badge-role.admin { background: #e74c3c; color: #fff; }
+.badge-role.editor { background: #3498db; color: #fff; }
+.admin-tab[data-tab="import"] { background: #27ae60; color: #fff; font-weight: 600; }
+.admin-tab[data-tab="import"]:hover { background: #219a52; }
+.admin-tab[data-tab="import"].active { background: #3498db; color: #fff; }
+.import-section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.import-section h3 { margin-top: 0; margin-bottom: 15px; color: #333; font-size: 16px; }
+.import-section .form-group { margin-bottom: 15px; }
+.import-section .form-group label { display: block; margin-bottom: 5px; color: #555; font-size: 13px; }
+.file-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
+.directory-input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; font-family: monospace; }
+.upload-preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 10px; margin-bottom: 10px; }
+.preview-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
+.upload-result { margin-top: 10px; }
+.import-progress-panel { background: #f0f8ff; border: 1px solid #b8d4e8; border-radius: 8px; padding: 20px; }
+.import-progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.import-progress-header h4 { margin: 0; }
+.import-progress-bar { height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+.import-progress-fill { height: 100%; background: linear-gradient(90deg, #3498db, #2ecc71); transition: width 0.3s ease; }
+.import-current-file { font-size: 13px; color: #666; margin-bottom: 10px; padding: 5px; }
+.import-results { max-height: 400px; overflow-y: auto; margin-bottom: 10px; }
+.import-items-list { font-size: 13px; }
+.import-item { padding: 4px 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 6px; }
+.import-item-done { color: #27ae60; }
+.import-item-error { color: #e74c3c; }
+.import-item-skipped { color: #f39c12; }
+.import-item-cancelled { color: #e67e22; }
+.import-item-pending { color: #888; }
+.import-item-processing { color: #3498db; }
+.import-label { font-size: 11px; color: #888; }
+.import-summary { line-height: 1.8; }
+.import-summary h4 { margin-top: 0; }
+.success { color: #27ae60; }
+.error { color: #e74c3c; }
+.warning { color: #f39c12; }
+.loading { color: #3498db; }

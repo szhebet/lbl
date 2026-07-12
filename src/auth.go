@@ -37,8 +37,9 @@ func setSessionCookie(c *gin.Context, token string, ttlHours int) {
 	if maxAge <= 0 {
 		maxAge = 86400
 	}
+	secure := c.Request.TLS != nil
 	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("session_token", token, maxAge, "/", "", false, true)
+	c.SetCookie("session_token", token, maxAge, "/", "", secure, true)
 }
 
 func loginUser(db *sql.DB) gin.HandlerFunc {
