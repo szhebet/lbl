@@ -12,6 +12,6 @@ services:
       - app
     restart: unless-stopped
   app:
-    ports: 
-      - "127.0.0.1:9092:8080"
+#    ports: 
+#      - "127.0.0.1:9092:8080"
 
