@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"bytes"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -2138,4 +2139,123 @@ func TestUpdateBookExtendedNilAuthorsKeepsExisting(t *testing.T) {
 	err = db.QueryRow("SELECT original_title FROM works WHERE id = $1", workID).Scan(&title)
 	assert.NoError(t, err)
 	assert.Equal(t, "Nil Authors Updated Title", title)
+}
+
+func TestCSPHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(securityHeadersMiddleware())
+	r.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req, _ := http.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	assert.Contains(t, csp, "script-src 'self' 'unsafe-inline'",
+		"CSP must allow inline scripts for onclick handlers")
+	assert.Contains(t, csp, "style-src 'self' 'unsafe-inline'",
+		"CSP must allow inline styles for style attributes")
+}
+
+func TestUpdateBookExtendedAddAuthor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	db := setupTestDB()
+	defer db.Close()
+
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	r.POST("/api/v1/books", createBook(db))
+	r.PUT("/books/:id/extended", updateBookExtended(db))
+	r.GET("/books/:id/extended", getBookExtended(db))
+
+	// Create a book
+	newBook := CreateBookRequest{
+		Title:    "Add Author Test",
+		Author:   "Initial Author",
+		Language: "eng",
+	}
+	bookJSON, _ := json.Marshal(newBook)
+	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
+	req.Body = io.NopCloser(bytes.NewReader(bookJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created BookDetails
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+	editionID := created.EditionID
+
+	// Find the initial author's ID
+	var initialAuthorID int
+	err = db.QueryRow("SELECT id FROM persons WHERE last_name = 'Initial Author'").Scan(&initialAuthorID)
+	require.NoError(t, err)
+
+	// Create a new person to add as second author
+	_, err = db.Exec(`INSERT INTO persons (first_name, last_name) VALUES ('Added', 'Author') ON CONFLICT DO NOTHING`)
+	require.NoError(t, err)
+	var addedAuthorID int
+	err = db.QueryRow("SELECT id FROM persons WHERE first_name = 'Added' AND last_name = 'Author'").Scan(&addedAuthorID)
+	require.NoError(t, err)
+
+	// Add a second author via extended endpoint
+	addAuthorReq := map[string]interface{}{
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{
+			{"id": initialAuthorID, "role": "author"},
+			{"id": addedAuthorID, "role": "author"},
+		},
+		"genres": []int{},
+		"tags":   []int{},
+	}
+	addJSON, _ := json.Marshal(addAuthorReq)
+	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
+	req.Body = io.NopCloser(bytes.NewReader(addJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify both authors exist in response
+	req, _ = http.NewRequest("GET", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var extended map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &extended)
+	assert.NoError(t, err)
+
+	authors, ok := extended["authors"].([]interface{})
+	require.True(t, ok, "authors must be a non-nil array")
+	assert.Len(t, authors, 2, "should have exactly 2 authors")
+
+	// Verify author names are present
+	authorNames := make([]string, 0)
+	for _, a := range authors {
+		author := a.(map[string]interface{})
+		parts := make([]string, 0)
+		if fn, ok := author["first_name"]; ok {
+			if s, isStr := fn.(string); isStr && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		if ln, ok := author["last_name"]; ok {
+			if s, isStr := ln.(string); isStr && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		authorNames = append(authorNames, strings.Join(parts, " "))
+	}
+	assert.Contains(t, authorNames, "Initial Author", "initial author must be preserved")
+	assert.Contains(t, authorNames, "Added Author", "newly added author must appear")
 }
