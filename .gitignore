@@ -18,13 +18,16 @@ temp*
 *.backup
 *.bak
 
-# TWA APK build artifacts
+# Android APK build artifacts
 android-apk/
 src_android/app/build/
 src_android/.gradle/
 src_android/gradle/wrapper/gradle-wrapper.jar
 src_android/gradlew
 src_android/gradlew.bat
+
+# APK build configuration (contains passwords)
+.apk.conf
 
 # Sensitive certificate files
 certres/*.key
@@ -33,6 +36,5 @@ certres/*.p12
 certres/*.der
 certres/*.srl
 certres/android.keystore
-certres/assetlinks.json
 *.pem
 

@@ -4,7 +4,7 @@
 
 Home library management web application built with Go and PostgreSQL.
 Provides a RESTful API + OPDS catalog for managing a personal book collection.
-Runs on Raspberry Pi. Android TWA wrapper available. HTTPS via nginx.
+Runs on Raspberry Pi. Android WebView wrapper available (see `src_android/`). HTTPS via nginx.
 
 ## Testing Convention
 
@@ -20,7 +20,6 @@ lbl/
 ├── certres/          # SSL certificates + generation scripts
 │   ├── generate-certs.sh
 │   ├── generate-keystore.sh
-│   ├── generate-assetlinks.sh
 │   ├── generate-client-cert.sh
 │   └── generate-nginx-certs.sh  # (optional) copies to fullchain.pem
 ├── db/
@@ -73,6 +72,8 @@ lbl/
 ├── config.toml.example
 ├── env.example
 ├── go.mod / go.sum
+├── .apk.conf              # APK build configuration (URL, certs, keystore)
+├── .apk.conf.example      # Template for .apk.conf
 ├── AGENTS.md
 ├── README.md
 └── .gitignore
@@ -138,7 +139,7 @@ See `config.toml.example` for all options.
 - **First login auto-creates admin**: If no users exist in DB, the first login attempt auto-creates an admin user with the provided credentials. Uses `pg_advisory_xact_lock(42)` to prevent race conditions.
 - **Refresh tokens** stored as SHA-256 hash in `refresh_tokens` table.
 - All authenticated endpoints require `Authorization: Bearer <token>` header.
-- Guest routes: `GET /`, `GET /static/*`, `GET /favicon.ico`, `GET /.well-known/assetlinks.json`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS.
+- Guest routes: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS.
 
 ### Books & Metadata
 
@@ -219,7 +220,6 @@ See `config.toml.example` for all options.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/config` | App config (enable_delete flag) |
-| GET | `/.well-known/assetlinks.json` | Digital Asset Links for TWA |
 | GET | `/debug/goroutines` | Goroutine dump (admin+editor) |
 
 ### OPDS
@@ -501,177 +501,8 @@ prompt2 = "..." # Retry prompt if first attempt returns empty
 timeout = 60    # Seconds
 ```
 
-## TWA Android App (Trusted Web Activity)
-
-TWA (`src_android/`) упаковывает веб-приложение в Android APK с помощью
-Chrome Custom Tabs. Для работы требуется HTTPS и Digital Asset Links.
-
-### Структура
-
-```
-certres/              # SSL-сертификаты + ключ подписи APK
-├── generate-certs.sh      # Генерация CA + серверных сертификатов
-├── generate-keystore.sh   # Генерация Android keystore для подписи APK
-├── generate-assetlinks.sh # Генерация .well-known/assetlinks.json
-├── generate-client-cert.sh # Клиентский сертификат (mTLS)
-├── generate-nginx-certs.sh # (опционально) копирует в fullchain.pem
-├── README.md
-├── .gitignore             # Чувствительные файлы исключены
-
-src_android/          # Android TWA проект (bubblewrap-совместимый)
-├── twa-manifest.json       # Bubblewrap manifest для регенерации
-├── build.gradle            # Project-level Gradle
-├── settings.gradle
-├── gradle.properties
-├── gradle/wrapper/
-│   └── gradle-wrapper.properties
-├── app/
-│   ├── build.gradle        # App module с TWA зависимостью
-│   └── src/main/
-│       ├── AndroidManifest.xml    # TWA activity + Digital Asset Links
-│       ├── res/
-│       │   ├── values/
-│       │   │   ├── strings.xml
-│       │   │   └── themes.xml
-│       │   ├── xml/
-│       │   │   └── network_security_config.xml  # Доверие CA-сертификату
-│       │   ├── drawable/        # Splash screen + иконки (векторные)
-│       │   ├── raw/             # CA сертификат (копируется из certres/)
-│       │   └── mipmap-*/        # Иконки лаунчера
-│       └── java/app/library/twa/
-│           ├── Application.java
-│           └── MainActivity.java  # X-Platform: android + mTLS
-├── generate-icons.sh      # Генерация PNG иконок (требует ImageMagick)
-```
-
-### Подготовка сертификатов
-
-Перед первой сборкой APK сгенерируйте сертификаты:
-
-```bash
-# Шаг 1: CA + серверные сертификаты
-cd certres && ./generate-certs.sh && cd ..
-
-# Шаг 2: Keystore для подписи APK
-cd certres && ./generate-keystore.sh && cd ..
-
-# Шаг 3: Digital Asset Links (для TWA верификации)
-cd certres && ./generate-assetlinks.sh && cd ..
-```
-
-### Размещение assetlinks.json
-
-Для работы TWA файл `assetlinks.json` должен быть доступен на сайте.
-Уже добавлено в `main.go`:
-
-```go
-r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
-    c.File("./certres/assetlinks.json")
-})
-```
-
-### Сборка
-
-Сборка веб-приложения и APK независимы — используют разные Dockerfile.
-
-**Dockerfile** — веб-приложение (Go + alpine):
-```bash
-docker build -t library-app:latest -f Dockerfile .
-```
-
-**Dockerfile.android** — TWA APK (JDK + Android SDK):
-```bash
-docker build -t library-app-android:latest -f Dockerfile.android .
-# Извлечь APK:
-docker create --name lib-android-tmp library-app-android:latest
-docker cp lib-android-tmp:/output/app-release.apk ./android-apk/
-docker rm lib-android-tmp
-```
-
-**Полная сборка (веб + APK) одной командой:**
-```bash
-./build-all.sh
-```
-
-**Только APK:**
-```bash
-# Docker
-./build-android.sh docker
-
-# Локально (требует JDK 17+ и Android SDK)
-./build-android.sh local
-```
-
-APK будет в `android-apk/` после сборки.
-
-### Установка на телефон
-
-```bash
-# Через ADB (подключите телефон по USB)
-adb install android-apk/app-release.apk
-
-# Или скиньте APK на телефон и откройте файловым менеджером
-```
-
-### Mobile CSS
-
-Мобильная вёрстка работает двумя способами:
-
-**1. Адаптивный CSS (`static/css/style.css`)** — `@media (max-width: 480px)` для всех устройств.
-
-**2. Android-only (`static/css/mobile.css`)** — подключается только когда сервер видит заголовок `X-Platform: android` или User-Agent с `Android`. Стили скопированы под класс `.android` на `<body>`.
-
-Механизм:
-- В `src/main.go` хендлеры `/` и `/admin` проверяют `X-Platform` и User-Agent
-- При android-запросе в HTML инжектится `<link rel="stylesheet" href="/static/css/mobile.css">` и `<body class="android">`
-- `src_android/.../MainActivity.java` отправляет `X-Platform: android` (API 21+)
-
-Особенности мобильной версии:
-- Кнопки имеют min-height: 44px (touch target)
-- Таблицы используют `table-layout: fixed` для предотвращения горизонтального скролла
-- Модальные окна раскрываются на весь экран
-- Вкладки переносятся на новую строку
-- Фильтры адаптируются под ширину экрана
-- Убраны малозначимые колонки (дата, год, №) на телефонах
-- Иконки вместо текста для кнопок редактирования/удаления
-
-### Сборка APK (Docker, две стадии)
-
-Сборка разделена на две стадии для кэширования:
-
-**Стадия 1: SDK-образ** (JDK + Android SDK + Gradle)
-Собирается один раз, кэшируется, пересобирается только при обновлении SDK.
-
-```bash
-./build-apk-sdk.sh
-```
-
-**Стадия 2: APK** (исходники + сборка)
-Использует кэшированный SDK-образ, пересобирается только при изменении исходников.
-
-```bash
-# debug + release (оба сразу)
-./build-android.sh
-
-# или по отдельности:
-./build-apk-debug.sh     # только debug APK
-./build-apk-release.sh   # только release APK
-
-# Установка на телефон:
-adb install -r android-apk/app-debug.apk
-adb install -r android-apk/app-release.apk
-```
-
-**Dockerfile'ы:**
-| Файл | Назначение |
-|------|------------|
-| `Dockerfile.android.sdk` | SDK-образ (редко меняется) |
-| `Dockerfile.android` | Билд APK (меняется при изменении исходников) |
-
-**Важно:** После изменения `Dockerfile.android.sdk` (например, обновление Gradle) нужно пересобрать SDK-образ: `./build-apk-sdk.sh`.
-
 ## Goal
-- Maintain a self-hosted Home Library Manager with Go backend, Android TWA wrapper, and a single responsive UI that works on desktop and mobile without horizontal scrolling.
+- Maintain a self-hosted Home Library Manager with Go backend, Android WebView wrapper, and a single responsive UI that works on desktop and mobile without horizontal scrolling.
 
 ## Constraints & Preferences
 - Mobile layout: use `body.android` class injected server-side, `mobile.css`, mobile-top-bar, compact edit/delete buttons, and Android JS for user button.
@@ -698,6 +529,23 @@ adb install -r android-apk/app-release.apk
 - Changed default book priority to max+1.
 - Created nginx HTTPS proxy: `nginx.conf`, `docker-compose-nginx.yml`, `certres/generate-nginx-certs.sh`.
 - Added `.gitignore` for certificate files and build artifacts.
+- CSP fix: added `'unsafe-inline'` to `style-src` and `script-src` — inline styles/event handlers were being blocked
+- Added `TestCSPHeader` and `TestUpdateBookExtendedAddAuthor` tests for CSP regression coverage
+- Removed TWA-specific files and references (assetlinks, twa-manifest, icons); changed "TWA" → "WebView wrapper"
+- Restored APK build files after re-request; switched from `openjdk:17-jdk-slim` to `eclipse-temurin:17-jdk-jammy` (old image removed from Docker Hub)
+- Fixed APK Docker build: removed redundant Gradle tasks (`copyCertificates`/`generateClientCert`) that failed in Docker; certs/keystore now copied by `build-android.sh`
+- Switched `Dockerfile.android` to use system `gradle` command instead of non-existent `./gradlew`
+- Fixed APK Docker build issues:
+  - `GRADLE_OPTS` with TLSv1.2 fix for Google Maven repo TLS handshake failures
+  - Extended Gradle HTTP timeouts to prevent `Read timed out` errors on slow connections
+  - Skipped lint tasks (`-x lint*`) to prevent timeout during `lintVitalAnalyzeRelease`
+  - Fixed missing `ca_cert.crt`/`client_cert.p12` resources by ensuring `build-android.sh` copies certs pre-build
+- Extracted APK config to `.apk.conf` (shell-sourceable):
+  - `APK_TARGET_URL`, cert paths, keystore settings, app identity, SDK versions
+  - `build-android.sh` generates `Config.java`, `build-extras.gradle`, copies certs from config paths
+  - `MainActivity.java` reads URL and cert password from `Config.java`
+  - `build.gradle` reads app identity and keystore from `build-extras.gradle`
+  - All generated files cleaned up after build; `.apk.conf` in `.gitignore`, `.apk.conf.example` provided
 
 ### In Progress
 - (none)

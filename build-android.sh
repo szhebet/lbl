@@ -1,37 +1,95 @@
 #!/bin/bash
-# Build TWA APK (Docker, using cached SDK image)
-# For quick builds use: ./build-apk-debug.sh or ./build-apk-release.sh
+# Build Android APK in Docker (debug + release)
+# Configuration read from .apk.conf at project root
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-# Ensure SDK builder image exists
+# ── Load configuration ──────────────────────────────────────────
+APK_CONF=".apk.conf"
+if [ ! -f "$APK_CONF" ]; then
+    echo "ERROR: $APK_CONF not found — copy from .apk.conf.example or create one"
+    exit 1
+fi
+source "$APK_CONF"
+
+echo "=== Building Android APK ==="
+echo "  Target URL: $APK_TARGET_URL"
+echo ""
+
+# ── Step 1: Build SDK image if not cached ──────────────────────
 if ! docker image inspect library-app-android-sdk:latest >/dev/null 2>&1; then
-    echo "SDK builder image not found. Building it first..."
-    ./build-apk-sdk.sh
+    echo "--- Building SDK image (first run, downloads Android SDK) ---"
+    docker build -t library-app-android-sdk:latest -f Dockerfile.android.sdk .
 fi
 
-echo "=== Building TWA APK in Docker (debug + release) ==="
+# ── Step 2: Generate client certificate if needed ───────────────
+if [ ! -f certres/client.crt ]; then
+    echo "--- Generating client certificate ---"
+    cd certres && bash generate-client-cert.sh && cd ..
+fi
 
-# Generate client certificate if needed
-./certres/generate-client-cert.sh
-
-# Ensure CA cert + client cert are in the android raw resources
+# ── Step 3: Copy certificates for Docker build ─────────────────
+echo "--- Copying certificates ---"
 mkdir -p src_android/app/src/main/res/raw
-cp certres/ca.crt src_android/app/src/main/res/raw/ca_cert.crt 2>/dev/null || true
-cp certres/client.p12 src_android/app/src/main/res/raw/client_cert.p12 2>/dev/null || true
+mkdir -p src_android/certres
+cp "$APK_CA_CERT_PATH" src_android/app/src/main/res/raw/ca_cert.crt 2>/dev/null || true
+cp "$APK_CLIENT_P12_PATH" src_android/app/src/main/res/raw/client_cert.p12 2>/dev/null || true
+cp "$APK_KEYSTORE_PATH" src_android/certres/ 2>/dev/null || true
 
-docker build --no-cache -t library-app-android:latest -f Dockerfile.android .
+# ── Step 4: Generate Config.java from .apk.conf ─────────────────
+echo "--- Generating Config.java ---"
+mkdir -p src_android/app/src/main/java/app/library/twa
+cat > src_android/app/src/main/java/app/library/twa/Config.java << JAVA
+package app.library.twa;
 
-rm -rf android-apk && mkdir -p android-apk
-docker create --name lib-android-tmp library-app-android:latest
+public final class Config {
+    public static final String TARGET_URL = "${APK_TARGET_URL}";
+    public static final String CLIENT_CERT_PASSWORD = "${APK_CLIENT_CERT_PASSWORD}";
+    private Config() {}
+}
+JAVA
+
+# ── Step 5: Generate build-extras.gradle from .apk.conf ─────────
+echo "--- Generating build-extras.gradle ---"
+cat > src_android/build-extras.gradle << GRADLE
+ext {
+    apkApplicationId = "${APK_APPLICATION_ID}"
+    apkVersionCode = ${APK_VERSION_CODE}
+    apkVersionName = "${APK_VERSION_NAME}"
+    apkCompileSdk = ${APK_COMPILE_SDK}
+    apkMinSdk = ${APK_MIN_SDK}
+    apkTargetSdk = ${APK_TARGET_SDK}
+    apkKeystorePath = file('${APK_KEYSTORE_PATH}')
+    apkKeystorePassword = "${APK_KEYSTORE_PASSWORD}"
+    apkKeyAlias = "${APK_KEY_ALIAS}"
+    apkKeyPassword = "${APK_KEY_PASSWORD}"
+}
+GRADLE
+
+# ── Step 6: Build APK in Docker ─────────────────────────────────
+echo ""
+echo "--- Building APK in Docker ---"
+docker build -t library-app-android -f Dockerfile.android .
+
+# ── Step 8: Extract APKs ───────────────────────────────────────
+echo ""
+echo "--- Extracting APKs ---"
+mkdir -p android-apk
+docker create --name lib-android-tmp library-app-android
 docker cp lib-android-tmp:/output/. ./android-apk/ 2>/dev/null || true
 docker rm lib-android-tmp
 
+# ── Step 9: Cleanup generated files ────────────────────────────
+echo "--- Cleaning up ---"
+rm -rf src_android/app/src/main/res/raw/ca_cert.crt \
+       src_android/app/src/main/res/raw/client_cert.p12 2>/dev/null
+rm -rf src_android/certres 2>/dev/null
+rm -f src_android/app/src/main/java/app/library/twa/Config.java src_android/build-extras.gradle
+
 echo ""
-echo "=== APKs ==="
-ls -lh android-apk/*.apk 2>/dev/null || echo "No APK found"
-echo ""
-echo "Install debug:  adb install -r android-apk/app-debug.apk"
-echo "Install release: adb install -r android-apk/app-release.apk"
+echo "=== Build Complete ==="
+ls -lh android-apk/*.apk 2>/dev/null && echo "" || echo "  No APKs found"
+echo "Install:"
+echo "  adb install -r android-apk/app-debug.apk"

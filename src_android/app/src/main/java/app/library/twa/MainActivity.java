@@ -42,7 +42,7 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
     private static final String TAG = "LibraryApp";
-    private static final String TARGET_URL = "https://192.168.95.200:9443/";
+    private static final String TARGET_URL = Config.TARGET_URL;
 
     private WebView webView;
     private LinearLayout debugPanel;
@@ -217,7 +217,7 @@ public class MainActivity extends Activity {
                 try {
                     InputStream in = getResources().openRawResource(R.raw.client_cert);
                     KeyStore ks = KeyStore.getInstance("PKCS12");
-                    ks.load(in, "changeit".toCharArray());
+                    ks.load(in, Config.CLIENT_CERT_PASSWORD.toCharArray());
                     in.close();
 
                     Enumeration<String> aliases = ks.aliases();
@@ -228,7 +228,7 @@ public class MainActivity extends Activity {
                     }
 
                     String alias = aliases.nextElement();
-                    PrivateKey privateKey = (PrivateKey) ks.getKey(alias, "changeit".toCharArray());
+                    PrivateKey privateKey = (PrivateKey) ks.getKey(alias, Config.CLIENT_CERT_PASSWORD.toCharArray());
                     if (privateKey == null) {
                         appendDebug("No private key found for alias: " + alias);
                         request.cancel();

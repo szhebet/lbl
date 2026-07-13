@@ -1,0 +1,27 @@
+# APK Build Configuration — copy to .apk.conf and edit
+# Used by build-android.sh to generate source code at build time
+
+# ── Target URL (WebView connects to this address) ───────────────
+APK_TARGET_URL="https://192.168.0.1:443/"
+
+# ── Client Certificate (mTLS) ───────────────────────────────────
+# Paths relative to project root
+APK_CA_CERT_PATH="certres/ca.crt"
+APK_CLIENT_P12_PATH="certres/client.p12"
+APK_CLIENT_CERT_PASSWORD="changeit"
+
+# ── APK Signing Keystore ────────────────────────────────────────
+APK_KEYSTORE_PATH="certres/android.keystore"
+APK_KEYSTORE_PASSWORD="android"
+APK_KEY_ALIAS="library-app"
+APK_KEY_PASSWORD="android"
+
+# ── Application Identity ────────────────────────────────────────
+APK_APPLICATION_ID="app.library.twa"
+APK_VERSION_CODE=1
+APK_VERSION_NAME="1.0"
+
+# ── Android SDK Versions ───────────────────────────────────────
+APK_COMPILE_SDK=34
+APK_MIN_SDK=19
+APK_TARGET_SDK=34

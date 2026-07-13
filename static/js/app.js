@@ -229,7 +229,9 @@ document.querySelectorAll('.tab').forEach(tab => {
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         document.getElementById(tab.dataset.tab).classList.add('active');
-        if (tab.dataset.tab === 'books') {
+        if (tab.dataset.tab === 'authors') {
+            loadAuthors();
+        } else if (tab.dataset.tab === 'books') {
             loadBooks();
         } else if (tab.dataset.tab === 'genres') {
             loadGenres();
@@ -594,9 +596,8 @@ document.addEventListener('DOMContentLoaded', () => {
             loadReadlist();
             loadReadlistNames();
         }
-    } else {
-        loadAuthors();
     }
+    loadAuthors();
     updateShelfCount();
     fetchConfig();
     setupBooksTableEvents();
