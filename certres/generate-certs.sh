@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate self-signed CA + server certificate for TWA HTTPS
+# Generate self-signed CA + server certificate for HTTPS
 set -e
 
 CERTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -60,6 +60,4 @@ echo "  server.p12   - PKCS12 bundle (for Go TLS)"
 echo ""
 echo "Next steps:"
 echo "  1. Run generate-keystore.sh to create the Android signing key"
-echo "  2. Run generate-assetlinks.sh to create Digital Asset Links file"
-echo "  3. Serve assetlinks.json at https://library-app.local/.well-known/assetlinks.json"
-echo "  4. Configure main.go to use server.crt + server.key for TLS"
+echo "  2. Configure main.go to use server.crt + server.key for TLS"

@@ -728,11 +728,6 @@ func main() {
 	r.GET("/shelf/", getShelfPage(db))
 	r.GET("/api/v1/shelf/clear", clearShelf(db))
 
-	// Digital Asset Links for TWA verification
-	r.GET("/.well-known/assetlinks.json", func(c *gin.Context) {
-		c.File("./certres/assetlinks.json")
-	})
-
 	// Debug endpoints (admin only)
 	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
 		buf := make([]byte, 1<<20)

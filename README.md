@@ -17,7 +17,7 @@
 - **OPDS-каталог** — доступ к библиотеке с электронных читалок через OPDS 1.2
 - **SPA-интерфейс** — три вкладки (Авторы, Книги, Жанры) + Импорт
 - **Админ-панель** — управление пользователями, каталогом, настройками LLM
-- **Android TWA** — мобильное приложение (Trusted Web Activity), HTTPS через nginx
+- **Android WebView** — мобильное приложение (WebView), HTTPS через nginx
 
 ### Поддерживаемые форматы
 
@@ -248,7 +248,6 @@ go build -o library_app ./src/
 |-------|------|----------|
 | GET | `/api/v1/config` | Конфигурация (enable_delete) |
 | GET | `/debug/goroutines` | Дамп горутин (admin+editor) |
-| GET | `/.well-known/assetlinks.json` | Digital Asset Links для TWA |
 
 ### OPDS
 
@@ -286,7 +285,6 @@ lbl/
 ├── certres/                   # SSL-сертификаты и скрипты генерации
 │   ├── generate-certs.sh      # CA + серверные сертификаты
 │   ├── generate-keystore.sh   # Keystore для подписи APK
-│   ├── generate-assetlinks.sh # Digital Asset Links
 │   ├── generate-client-cert.sh # Клиентский сертификат (mTLS)
 │   └── generate-nginx-certs.sh # fullchain.pem / privkey.pem (опционально)
 ├── db/scripts/                # Скрипты БД
@@ -340,8 +338,6 @@ lbl/
 ├── docker-compose-nginx.yml   # Override: добавляет nginx (HTTPS)
 ├── Dockerfile                 # Многоступенчатая сборка Go
 ├── Dockerfile.all-in-one      # Всё в одном (БД + приложение)
-├── Dockerfile.android         # APK (TWA)
-├── Dockerfile.android.sdk     # SDK-образ для кэширования
 ├── startup.sh                 # Точка входа контейнера
 ├── go.mod / go.sum
 ├── AGENTS.md                  # Инструкции для ассистентов AI
@@ -495,7 +491,7 @@ src_android/
 - **Список чтения** отличается от полки: полка — общая для всех, список чтения — персональный для каждого пользователя.
 - **Сортировка по году**: книги без года (включая year=0) всегда в конце списка (`NULLIF(year, 0) + NULLS LAST`).
 - **Первый вход** создаёт администратора, если в БД нет пользователей.
-- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, `GET /.well-known/assetlinks.json`, OPDS.
+- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS.
 - **Мобильная версия**: сервер определяет Android по заголовку `X-Platform` или User-Agent и добавляет `body class="android"` + `mobile.css`.
 - **Полка при скачивании**: ZIP-архив распаковывается в `tempfld/shelf/{edition_id}/`, сервируется оригинальный файл; при убирании с полки — очищается.
 

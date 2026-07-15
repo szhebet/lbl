@@ -1,3 +1,7 @@
+# Generated files from build-android.sh (.apk.conf)
+/app/src/main/java/app/library/twa/Config.java
+/build-extras.gradle
+
 # Gradle build outputs
 /build/
 .gradle/

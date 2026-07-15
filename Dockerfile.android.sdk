@@ -1,35 +1,36 @@
-# ============================================================
-# Dockerfile: Android SDK builder image (cached, rarely changes)
-# Build: docker build -t library-app-android-sdk -f Dockerfile.android.sdk .
-# ============================================================
+# Dockerfile for Android SDK image (cached layer)
+# Build once, reuse for APK builds
 FROM eclipse-temurin:17-jdk-jammy
 
-# Install required tools
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+ENV PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+
+ENV GRADLE_VERSION=8.5
+ENV GRADLE_HOME=/opt/gradle
+ENV PATH=$PATH:$GRADLE_HOME/bin
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    unzip \
+    wget unzip ca-certificates \
+    && update-ca-certificates --fresh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Android command-line tools
-ENV ANDROID_SDK_ROOT=/opt/android-sdk
-ENV ANDROID_HOME=${ANDROID_SDK_ROOT}
-ENV PATH=${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools
+# Install Gradle system-wide (avoids downloading on every build)
+RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip \
+    -O /tmp/gradle-bin.zip \
+    && mkdir -p /opt/gradle-${GRADLE_VERSION} \
+    && unzip -q /tmp/gradle-bin.zip -d /opt/ \
+    && rm /tmp/gradle-bin.zip \
+    && ln -s /opt/gradle-${GRADLE_VERSION} ${GRADLE_HOME}
 
-RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
-    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
-    unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools && \
-    mv /tmp/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
-    rm -rf /tmp/cmdline-tools /tmp/cmdline-tools.zip
-
-# Accept licenses and install required SDK components
-RUN yes | sdkmanager --licenses > /dev/null 2>&1 || true && \
-    sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1
-
-# Install Gradle 8.5
-ENV GRADLE_VERSION=8.5
-RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip && \
-    unzip -q /tmp/gradle.zip -d /opt && \
-    rm /tmp/gradle.zip && \
-    ln -s /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle
-
-WORKDIR /build
+# Install Android SDK
+RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools \
+    && wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+    -O /tmp/cmdline-tools.zip \
+    && unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools/ \
+    && rm /tmp/cmdline-tools.zip \
+    && mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest \
+    && yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} \
+        "platforms;android-34" \
+        "build-tools;34.0.0" \
+    && rm -rf ${ANDROID_SDK_ROOT}/.temp

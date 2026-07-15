@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate Android signing keystore for TWA APK
+# Generate Android signing keystore for APK
 set -e
 
 CERTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,12 +37,4 @@ echo "  Key password:   ${KEYPASS}"
 echo "  Alias:          ${ALIAS}"
 echo ""
 
-# Extract SHA256 fingerprint for assetlinks.json
-echo "=== SHA256 Fingerprint (for Digital Asset Links) ==="
-keytool -list -v -keystore "${KEYSTORE}" \
-  -storepass "${STOREPASS}" \
-  -alias "${ALIAS}" 2>/dev/null \
-  | grep "SHA256:" | awk '{print $2}' | tr -d '\n'
-echo ""
-echo ""
-echo "Save this fingerprint to use in generate-assetlinks.sh"
+echo "Keystore ready for APK signing."
