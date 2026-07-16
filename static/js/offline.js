@@ -327,8 +327,7 @@
                             }
                             localItem.user_id = uid;
                             ReadListStore._syncOne(localItem);
-                            // Don't markSynced here — let the pull phase confirm item exists on server.
-                            // If we markSynced and pull doesn't return this item, it gets removed.
+                            ReadListStore.markSynced(serverItem.id, serverItem.updated_at);
                         }
                     };
 
@@ -339,7 +338,8 @@
                             body: JSON.stringify(item)
                         });
                         if (putResp.ok || putResp.status === 201) {
-                            try { var putBody = await putResp.json(); applyServerItem(putBody); } catch(e) {}
+                            try { var putBody = await putResp.json(); applyServerItem(putBody); }
+                            catch(e) { ReadListStore.markSynced(item.id, item.updated_at); }
                             debug('push UPDATE ok: ' + item.id);
                         } else if (putResp.status === 404) {
                             var postResp = await fetch('/api/v1/user/readlist', {
@@ -348,10 +348,12 @@
                                 body: JSON.stringify(item)
                             });
                             if (postResp.ok || postResp.status === 201) {
-                                try { var postBody = await postResp.json(); applyServerItem(postBody); } catch(e) {}
+                                try { var postBody = await postResp.json(); applyServerItem(postBody); }
+                                catch(e) { ReadListStore.markSynced(item.id, item.updated_at); }
                                 debug('push CREATE ok: ' + item.id);
                             } else if (postResp.status === 500) {
-                                debug('push: exists on server (dup), will confirm in pull: ' + item.id);
+                                ReadListStore.markSynced(item.id, item.updated_at);
+                                debug('push: exists on server (dup), marked synced: ' + item.id);
                             } else {
                                 debug('push CREATE failed: ' + item.id + ' status=' + postResp.status);
                             }
@@ -410,17 +412,22 @@
                         }
                     }
 
-                    // Remove local items for current user that no longer exist on server
+                    // Remove local items that were confirmed on server but no longer exist there
                     for (var li2 = 0; li2 < localItems.length; li2++) {
                         var lItem2 = localItems[li2];
                         if (lItem2.user_id !== uid) continue;
                         if (!serverIds[lItem2.id]) {
                             var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
                             if (isDirty) {
-                                debug('pull: local dirty item missing on server, will recreate: ' + lItem2.id);
-                            } else {
+                                debug('pull: local dirty item missing on server: ' + lItem2.id);
+                                // Keep dirty items — they will be pushed on next sync
+                            } else if (lItem2.synced_at) {
+                                // Was previously synced to server, now missing → removed by server
                                 ReadListStore.remove(lItem2.id);
                                 debug('pull removed local: ' + lItem2.id);
+                            } else {
+                                // Never synced, no evidence of server existence — keep local
+                                debug('pull: local item never synced, keeping: ' + lItem2.id);
                             }
                         }
                     }
