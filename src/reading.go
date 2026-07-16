@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -307,16 +308,17 @@ type ReadListItem struct {
 }
 
 type CreateReadListRequest struct {
-	ID       string `json:"id"`
-	Listname string `json:"listname"`
-	Bookname string `json:"bookname"`
-	Author   string `json:"author"`
-	Priority int    `json:"priority"`
-	AuthorID *int   `json:"author_id"`
-	BookID   *int   `json:"book_id"`
-	Comment  string `json:"comment"`
-	Status   string `json:"status"`
-	Deleted  bool   `json:"deleted"`
+	ID        string `json:"id"`
+	Listname  string `json:"listname"`
+	Bookname  string `json:"bookname"`
+	Author    string `json:"author"`
+	Priority  int    `json:"priority"`
+	AuthorID  *int   `json:"author_id"`
+	BookID    *int   `json:"book_id"`
+	Comment   string `json:"comment"`
+	Status    string `json:"status"`
+	Deleted   bool   `json:"deleted"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 var validReadListStatuses = map[string]bool{
@@ -572,6 +574,48 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 			req.Status = "Не заполнено"
 		}
 
+		// Conflict detection: compare client's updated_at with server's
+		if req.UpdatedAt != "" {
+			var serverUpdatedAt sql.NullString
+			db.QueryRow("SELECT updated_at::text FROM read_list WHERE id = $1::uuid AND user_id = $2", id, uid).Scan(&serverUpdatedAt)
+			if serverUpdatedAt.Valid && isServerNewer(serverUpdatedAt.String, req.UpdatedAt) {
+				// Server is newer — return 409 with current server state
+				var conflictItem ReadListItem
+				var editionID sql.NullInt64
+				var updAt, syncedAt sql.NullString
+				err := db.QueryRow(`
+					SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
+						rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
+						rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+						COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
+					FROM read_list rl
+					LEFT JOIN editions e ON e.id = rl.book_id
+					LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+					LEFT JOIN formats f ON f.id = ef.format_id
+					WHERE rl.id = $1::uuid AND rl.user_id = $2
+				`, id, uid).Scan(
+					&conflictItem.ID, &conflictItem.Listname, &conflictItem.Bookname, &conflictItem.Author,
+					&conflictItem.Priority, &conflictItem.AuthorID, &conflictItem.BookID, &conflictItem.UserID,
+					&conflictItem.Comment, &conflictItem.Status, &conflictItem.Deleted, &conflictItem.CreatedAt,
+					&updAt, &syncedAt,
+					&conflictItem.FormatName, &conflictItem.OnShelf, &editionID)
+				if err == nil {
+					if updAt.Valid {
+						conflictItem.UpdatedAt = updAt.String
+					}
+					if syncedAt.Valid {
+						conflictItem.SyncedAt = syncedAt.String
+					}
+					if editionID.Valid {
+						eid := int(editionID.Int64)
+						conflictItem.EditionID = &eid
+					}
+				}
+				c.JSON(http.StatusConflict, gin.H{"error": "Конфликт: серверная версия новее", "server_item": conflictItem})
+				return
+			}
+		}
+
 		result, err := db.Exec(`
 			UPDATE read_list SET
 				listname = $1, bookname = $2, author = $3, priority = $4,
@@ -684,6 +728,51 @@ func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, item)
 	}
+}
+
+// isServerNewer compares two timestamp strings robustly.
+// Both PG text format (2026-07-16 19:07:55.123456+03) and RFC3339 (2026-07-16T19:07:55+03:00) are accepted.
+func isServerNewer(server, client string) bool {
+	layouts := []string{
+		// PG text format: 2026-07-16 19:08:45.123456+03 (offset without colon)
+		"2006-01-02 15:04:05.999999-07",
+		"2006-01-02 15:04:05.999999Z07",
+		// PG text format with colon: 2026-07-16 19:08:45.123456+03:00
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999Z07:00",
+		// RFC3339 variants
+		"2006-01-02T15:04:05.999999-07",
+		"2006-01-02T15:04:05.999999Z07",
+		"2006-01-02T15:04:05.999999-07:00",
+		"2006-01-02T15:04:05.999999Z07:00",
+		time.RFC3339,
+		time.RFC3339Nano,
+		// No timezone variants (unlikely but safe)
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02T15:04:05.999999",
+	}
+	var sTime, cTime time.Time
+	var sOk, cOk bool
+
+	for _, layout := range layouts {
+		if !sOk {
+			t, err := time.Parse(layout, server)
+			if err == nil {
+				sTime, sOk = t, true
+			}
+		}
+		if !cOk {
+			t, err := time.Parse(layout, client)
+			if err == nil {
+				cTime, cOk = t, true
+			}
+		}
+	}
+	if !sOk || !cOk {
+		// Fallback to string comparison if parsing fails
+		return server > client
+	}
+	return sTime.After(cTime)
 }
 
 func getReadListNames(db *sql.DB) gin.HandlerFunc {

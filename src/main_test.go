@@ -2981,3 +2981,140 @@ func TestReadListSyncFullFlow(t *testing.T) {
 		assert.NotEqual(t, clientUUID, item.ID, "deleted item must not appear in listing")
 	}
 }
+
+func TestReadListSyncConflictServerNewer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_conflict_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	clientUUID := "f1e2d3c4-b5a6-7890-abcd-ef1234567890"
+
+	// Step 1: Create item (client A)
+	createReq := map[string]interface{}{
+		"id":       clientUUID,
+		"listname": "conflict-test",
+		"bookname": "Original Book",
+		"author":   "Original Author",
+		"priority": 1,
+		"comment":  "",
+		"status":   "Не заполнено",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created ReadListItem
+	json.Unmarshal(w.Body.Bytes(), &created)
+	createdUpdatedAt := created.UpdatedAt
+
+	// Step 2: Another client modifies the item (simulating server-side update)
+	time.Sleep(5 * time.Millisecond)
+	updateReq := map[string]interface{}{
+		"listname": "conflict-test",
+		"bookname": "Server Updated Book",
+		"author":   "Server Author",
+		"priority": 10,
+		"comment":  "server edit",
+		"status":   "Читаю",
+	}
+	body2, _ := json.Marshal(updateReq)
+	req2, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+clientUUID, bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var serverUpdated ReadListItem
+	json.Unmarshal(w2.Body.Bytes(), &serverUpdated)
+	serverUpdatedAt := serverUpdated.UpdatedAt
+	assert.Greater(t, serverUpdatedAt, createdUpdatedAt, "server updated_at must be > created updated_at")
+
+	// Step 3: Client A tries to push stale data (with outdated updated_at)
+	time.Sleep(2 * time.Millisecond)
+	staleReq := map[string]interface{}{
+		"id":         clientUUID,
+		"listname":   "conflict-test",
+		"bookname":   "Client Stale Edit",
+		"author":     "Stale Author",
+		"priority":   1,
+		"comment":    "stale client edit",
+		"status":     "Не заполнено",
+		"updated_at": createdUpdatedAt,
+	}
+	staleBody, _ := json.Marshal(staleReq)
+	req3, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+clientUUID, bytes.NewReader(staleBody))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer "+token)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+
+	// Must get 409 Conflict with server's current state
+	require.Equal(t, http.StatusConflict, w3.Code, "stale update must return 409")
+
+	var conflictResp struct {
+		Error      string       `json:"error"`
+		ServerItem *ReadListItem `json:"server_item"`
+	}
+	err = json.Unmarshal(w3.Body.Bytes(), &conflictResp)
+	require.NoError(t, err)
+	require.NotNil(t, conflictResp.ServerItem, "409 must include server_item")
+	assert.Equal(t, "Server Updated Book", conflictResp.ServerItem.Bookname, "server_item must have server's bookname")
+	assert.Equal(t, "Server Author", conflictResp.ServerItem.Author, "server_item must have server's author")
+	assert.Equal(t, 10, conflictResp.ServerItem.Priority, "server_item must have server's priority")
+	assert.Equal(t, "Читаю", conflictResp.ServerItem.Status, "server_item must have server's status")
+	assert.Equal(t, serverUpdatedAt, conflictResp.ServerItem.UpdatedAt, "server_item updated_at must match server")
+
+	// Step 4: Verify GET still returns server's version (not corrupted by stale push)
+	getReq, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, getReq)
+	require.Equal(t, http.StatusOK, w4.Code)
+
+	var listResp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	json.Unmarshal(w4.Body.Bytes(), &listResp)
+	assert.GreaterOrEqual(t, listResp.Total, 1)
+
+	var found *ReadListItem
+	for i := range listResp.Items {
+		if listResp.Items[i].ID == clientUUID {
+			found = &listResp.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "item must be found in listing")
+	assert.Equal(t, "Server Updated Book", found.Bookname, "GET must return server's version")
+	assert.Equal(t, "Server Author", found.Author)
+	assert.Equal(t, 10, found.Priority)
+	assert.Equal(t, "Читаю", found.Status)
+	assert.Equal(t, serverUpdatedAt, found.UpdatedAt, "GET must return latest updated_at")
+}

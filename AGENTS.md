@@ -591,6 +591,12 @@ timeout = 60    # Seconds
   - Индикация: #mobileUserBtn (зелёный/жёлтый/красный) + счётчик dirty + кнопка синхронизации
   - `sync_task_spec.md` — полная спецификация алгоритма
   - `auth-changed` event для повторного init при логине/логауте
+- **Серверный конфликт-детектор + тест** (`src/reading.go`):
+  - Добавлено поле `UpdatedAt` в `CreateReadListRequest`
+  - `updateReadListItem` проверяет: если `server.updated_at > client.updated_at` → 409 с `server_item` в теле
+  - `isServerNewer()` — парсит оба timestamps как `time.Time` с поддержкой PG и RFC3339 форматов
+  - `offline.js`: при 409 применяет серверное состояние через `applyServerItem`
+  - `TestReadListSyncConflictServerNewer` — полный цикл: create → server-update → stale push → 409 → GET подтверждает серверную версию
 
 ### In Progress
 - (none)

@@ -341,6 +341,20 @@
                             try { var putBody = await putResp.json(); applyServerItem(putBody); }
                             catch(e) { ReadListStore.markSynced(item.id, item.updated_at); }
                             debug('push UPDATE ok: ' + item.id);
+                        } else if (putResp.status === 409) {
+                            // Server has newer version — apply server state
+                            try {
+                                var conflictBody = await putResp.json();
+                                if (conflictBody.server_item) {
+                                    applyServerItem(conflictBody.server_item);
+                                    debug('push CONFLICT: server newer, adopted server state: ' + item.id);
+                                } else {
+                                    ReadListStore.markSynced(item.id, item.updated_at);
+                                }
+                            } catch(e) {
+                                ReadListStore.markSynced(item.id, item.updated_at);
+                                debug('push CONFLICT: failed to parse server state for ' + item.id);
+                            }
                         } else if (putResp.status === 404) {
                             var postResp = await fetch('/api/v1/user/readlist', {
                                 method: 'POST',
