@@ -39,9 +39,12 @@ func setupTestDB() *sql.DB {
 		panic(err)
 	}
 
-	// Test connection
 	err = db.Ping()
 	if err != nil {
+		panic(err)
+	}
+
+	if err := runMigrations(db); err != nil {
 		panic(err)
 	}
 
@@ -1571,7 +1574,7 @@ func TestCreateReadListItem(t *testing.T) {
 	assert.Equal(t, "test comment", item.Comment)
 	assert.Equal(t, "Читаю", item.Status)
 	assert.Equal(t, userID, item.UserID)
-	assert.NotZero(t, item.ID)
+	assert.NotEmpty(t, item.ID)
 }
 
 func TestGetReadListItems(t *testing.T) {
@@ -1592,10 +1595,12 @@ func TestGetReadListItems(t *testing.T) {
 	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
 
 	// Insert a test item
-	_, err = db.Exec(`
-		INSERT INTO read_list (listname, bookname, author, priority, user_id, comment, status)
-		VALUES ($1, $2, $3, $4, $5, $6, 'Читаю'::user_book_status)
-	`, "default", "Book1", "Author1", 1, userID, "comment1")
+	var itemID string
+	err = db.QueryRow(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'Читаю'::user_book_status, NOW())
+		RETURNING id::text
+	`, "default", "Book1", "Author1", 1, userID, "comment1").Scan(&itemID)
 	require.NoError(t, err)
 
 	token := generateToken(userID, "testuser", "viewer")
@@ -1683,10 +1688,12 @@ func TestReadListItemUserIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// User1 creates items
-	_, err = db.Exec(`
-		INSERT INTO read_list (listname, bookname, author, priority, user_id, status)
-		VALUES ('default', 'User1Book', 'User1Author', 1, $1, 'Читаю'::user_book_status)
-	`, user1ID)
+	var item1ID string
+	err = db.QueryRow(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, status, updated_at)
+		VALUES (gen_random_uuid(), 'default', 'User1Book', 'User1Author', 1, $1, 'Читаю'::user_book_status, NOW())
+		RETURNING id::text
+	`, user1ID).Scan(&item1ID)
 	require.NoError(t, err)
 
 	token2 := generateToken(user2ID, "user2", "viewer")
@@ -1731,11 +1738,11 @@ func TestReadListItemUpdateDelete(t *testing.T) {
 	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
 
 	// Create item
-	var itemID int
+	var itemID string
 	err = db.QueryRow(`
-		INSERT INTO read_list (listname, bookname, author, priority, user_id, status)
-		VALUES ('oldlist', 'OldBook', 'OldAuthor', 1, $1, 'Не заполнено'::user_book_status)
-		RETURNING id
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, status, updated_at)
+		VALUES (gen_random_uuid(), 'oldlist', 'OldBook', 'OldAuthor', 1, $1, 'Не заполнено'::user_book_status, NOW())
+		RETURNING id::text
 	`, userID).Scan(&itemID)
 	require.NoError(t, err)
 
@@ -1760,7 +1767,7 @@ func TestReadListItemUpdateDelete(t *testing.T) {
 		"status":   "Прочитано",
 	}
 	bodyJSON, _ := json.Marshal(updateBody)
-	req, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+strconv.Itoa(itemID), bytes.NewReader(bodyJSON))
+	req, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+itemID, bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
@@ -1778,7 +1785,7 @@ func TestReadListItemUpdateDelete(t *testing.T) {
 	assert.Equal(t, 10, updated.Priority)
 
 	// Delete
-	req2, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+strconv.Itoa(itemID), nil)
+	req2, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+itemID, nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
@@ -1786,7 +1793,7 @@ func TestReadListItemUpdateDelete(t *testing.T) {
 
 	// Verify deleted
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM read_list WHERE id = $1", itemID).Scan(&count)
+	db.QueryRow("SELECT COUNT(*) FROM read_list WHERE id = $1::uuid", itemID).Scan(&count)
 	assert.Equal(t, 0, count)
 }
 
@@ -1807,10 +1814,10 @@ func TestReadListNames(t *testing.T) {
 
 	// Create items with different listnames
 	_, err = db.Exec(`
-		INSERT INTO read_list (listname, bookname, user_id, status) VALUES
-		('favorites', 'B1', $1, 'Не заполнено'::user_book_status),
-		('favorites', 'B2', $1, 'Не заполнено'::user_book_status),
-		('wishlist', 'B3', $1, 'Не заполнено'::user_book_status)
+		INSERT INTO read_list (id, listname, bookname, user_id, status, updated_at) VALUES
+		(gen_random_uuid(), 'favorites', 'B1', $1, 'Не заполнено'::user_book_status, NOW()),
+		(gen_random_uuid(), 'favorites', 'B2', $1, 'Не заполнено'::user_book_status, NOW()),
+		(gen_random_uuid(), 'wishlist', 'B3', $1, 'Не заполнено'::user_book_status, NOW())
 	`, userID)
 	require.NoError(t, err)
 
@@ -1836,6 +1843,443 @@ func TestReadListNames(t *testing.T) {
 	assert.Contains(t, names, "favorites")
 	assert.Contains(t, names, "wishlist")
 	assert.Len(t, names, 2)
+}
+
+// ── Sync procedure tests ─────────────────────────────────────────
+
+func TestReadListSyncTimestamps(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_ts_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Create item
+	createReq := map[string]interface{}{
+		"listname": "sync-test",
+		"bookname": "Sync Book",
+		"author":   "Sync Author",
+		"priority": 1,
+		"comment":  "sync test",
+		"status":   "Читаю",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created ReadListItem
+	err = json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	// Verify timestamps on create
+	assert.NotEmpty(t, created.ID, "UUID must be set")
+	assert.NotEmpty(t, created.CreatedAt, "created_at must be set")
+	assert.NotEmpty(t, created.UpdatedAt, "updated_at must be set")
+	assert.Empty(t, created.SyncedAt, "synced_at must be empty on create")
+	assert.Equal(t, userID, created.UserID)
+
+	// Verify updated_at >= created_at
+	assert.GreaterOrEqual(t, created.UpdatedAt, created.CreatedAt,
+		"updated_at must be >= created_at on create")
+
+	createdAt := created.CreatedAt
+	firstUpdatedAt := created.UpdatedAt
+
+	// Wait a moment to ensure timestamp difference
+	time.Sleep(10 * time.Millisecond)
+
+	// Update item
+	updateReq := map[string]interface{}{
+		"listname": "sync-test-updated",
+		"bookname": "Sync Book Updated",
+		"author":   "Sync Author",
+		"priority": 5,
+		"comment":  "updated",
+		"status":   "Прочитано",
+	}
+	body2, _ := json.Marshal(updateReq)
+	req2, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+created.ID, bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var updated ReadListItem
+	err = json.Unmarshal(w2.Body.Bytes(), &updated)
+	require.NoError(t, err)
+
+	// Verify timestamps on update
+	assert.Equal(t, createdAt, updated.CreatedAt, "created_at must not change on update")
+	assert.NotEqual(t, firstUpdatedAt, updated.UpdatedAt, "updated_at must change on update")
+	assert.Greater(t, updated.UpdatedAt, firstUpdatedAt, "updated_at must be newer after update")
+	assert.Empty(t, updated.SyncedAt, "synced_at still empty after update (server doesn't set it)")
+	assert.Equal(t, "sync-test-updated", updated.Listname)
+	assert.Equal(t, "Прочитано", updated.Status)
+}
+
+func TestReadListSyncCreateWithClientUUID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_uuid_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Create item with client-provided UUID (simulates offline creation)
+	clientUUID := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	createReq := map[string]interface{}{
+		"id":       clientUUID,
+		"listname": "offline-created",
+		"bookname": "Offline Book",
+		"author":   "Offline Author",
+		"priority": 10,
+		"comment":  "created offline",
+		"status":   "Не заполнено",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created ReadListItem
+	err = json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	// Verify client UUID was accepted
+	assert.Equal(t, clientUUID, created.ID, "client-provided UUID must be preserved")
+	assert.NotEmpty(t, created.CreatedAt)
+	assert.NotEmpty(t, created.UpdatedAt)
+
+	// Verify we can fetch it by UUID
+	var listResp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	getReq, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, getReq)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	err = json.Unmarshal(w2.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, listResp.Total, 1)
+
+	found := false
+	for _, item := range listResp.Items {
+		if item.ID == clientUUID {
+			found = true
+			assert.Equal(t, "offline-created", item.Listname)
+			break
+		}
+	}
+	assert.True(t, found, "item with client UUID must be found in listing")
+}
+
+func TestReadListSyncPullAll(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_pull_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Create multiple items with different priorities
+	items := []map[string]interface{}{
+		{"listname": "list-a", "bookname": "Book A", "author": "Author", "priority": 1, "comment": "", "status": "Читаю"},
+		{"listname": "list-b", "bookname": "Book B", "author": "Author", "priority": 3, "comment": "", "status": "Не заполнено"},
+		{"listname": "list-c", "bookname": "Book C", "author": "Author", "priority": 2, "comment": "", "status": "Прочитано"},
+	}
+
+	createdIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		body, _ := json.Marshal(item)
+		req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+		var created ReadListItem
+		json.Unmarshal(w.Body.Bytes(), &created)
+		createdIDs = append(createdIDs, created.ID)
+	}
+
+	// Pull all (simulate sync pull phase)
+	var listResp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	getReq, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999&sort_by=priority&sort_order=desc", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, getReq)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	err = json.Unmarshal(w.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+	assert.Equal(t, 3, listResp.Total, "all 3 items returned")
+	assert.Len(t, listResp.Items, 3)
+
+	// Verify sort order (priority desc: 3, 2, 1)
+	assert.Equal(t, 3, listResp.Items[0].Priority, "first item must have highest priority")
+	assert.Equal(t, 2, listResp.Items[1].Priority)
+	assert.Equal(t, 1, listResp.Items[2].Priority)
+
+	// Verify all IDs are present in the response
+	pulledIDs := make(map[string]bool)
+	for _, item := range listResp.Items {
+		pulledIDs[item.ID] = true
+	}
+	for _, id := range createdIDs {
+		assert.True(t, pulledIDs[id], "created item must be in pull response: "+id)
+	}
+}
+
+func TestReadListSyncUpdateTimestampOnReSync(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_rs_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// Create item
+	createReq := map[string]interface{}{
+		"listname": "resync-test",
+		"bookname": "Resync Book",
+		"author":   "Author",
+		"priority": 1,
+		"comment":  "",
+		"status":   "Читаю",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created ReadListItem
+	json.Unmarshal(w.Body.Bytes(), &created)
+
+	// Simulate sync: store synced_at = updated_at on client, then modify locally
+	// The sync would set synced_at = updated_at after push
+	// When the client modifies the item again, updated_at > synced_at (dirty)
+	syncedAt := created.UpdatedAt
+
+	// Simulate client-side update (priority change) that makes item dirty again
+	time.Sleep(5 * time.Millisecond)
+	updateReq := map[string]interface{}{
+		"listname": "resync-test",
+		"bookname": "Resync Book Updated",
+		"author":   "Author Updated",
+		"priority": 10,
+		"comment":  "re-synced",
+		"status":   "Прочитано",
+	}
+	body2, _ := json.Marshal(updateReq)
+	req2, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+created.ID, bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var updated ReadListItem
+	json.Unmarshal(w2.Body.Bytes(), &updated)
+
+	// Verify the new updated_at is > previous synced_at (dirty detection)
+	assert.Greater(t, updated.UpdatedAt, syncedAt,
+		"updated_at after re-sync must be > previous synced_at")
+	assert.Equal(t, "Resync Book Updated", updated.Bookname)
+	assert.Equal(t, "Author Updated", updated.Author)
+	assert.Equal(t, 10, updated.Priority)
+	assert.Equal(t, "Прочитано", updated.Status)
+}
+
+func TestReadListSyncOtherUserNotAffected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create two users
+	var user1ID, user2ID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_other1_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&user1ID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", user1ID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", user1ID)
+
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_sync_other2_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&user2ID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", user2ID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", user2ID)
+
+	token1 := generateToken(user1ID, "user1", "viewer")
+	token2 := generateToken(user2ID, "user2", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.GET("", getReadListItems(db))
+	}
+
+	// User1 creates an item
+	createReq := map[string]interface{}{
+		"listname": "user1-list",
+		"bookname": "User1 Book",
+		"author":   "User1 Author",
+		"priority": 1,
+		"comment":  "",
+		"status":   "Читаю",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token1)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// User2 creates an item
+	createReq2 := map[string]interface{}{
+		"listname": "user2-list",
+		"bookname": "User2 Book",
+		"author":   "User2 Author",
+		"priority": 5,
+		"comment":  "",
+		"status":   "Не заполнено",
+	}
+	body2, _ := json.Marshal(createReq2)
+	req2, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+token2)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusCreated, w2.Code)
+
+	// User1 pulls — should only see User1's item
+	var user1Resp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	getReq1, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq1.Header.Set("Authorization", "Bearer "+token1)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, getReq1)
+	require.Equal(t, http.StatusOK, w3.Code)
+	json.Unmarshal(w3.Body.Bytes(), &user1Resp)
+	assert.Equal(t, 1, user1Resp.Total, "User1 must see only their item")
+	if len(user1Resp.Items) > 0 {
+		assert.Equal(t, "User1 Book", user1Resp.Items[0].Bookname)
+		assert.Equal(t, user1ID, user1Resp.Items[0].UserID)
+	}
+
+	// User2 pulls — should only see User2's item
+	var user2Resp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	getReq2, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq2.Header.Set("Authorization", "Bearer "+token2)
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, getReq2)
+	require.Equal(t, http.StatusOK, w4.Code)
+	json.Unmarshal(w4.Body.Bytes(), &user2Resp)
+	assert.Equal(t, 1, user2Resp.Total, "User2 must see only their item")
+	if len(user2Resp.Items) > 0 {
+		assert.Equal(t, "User2 Book", user2Resp.Items[0].Bookname)
+		assert.Equal(t, user2ID, user2Resp.Items[0].UserID)
+	}
 }
 
 func TestUpdateBookExtendedRemoveAllAuthors(t *testing.T) {
@@ -2258,4 +2702,250 @@ func TestUpdateBookExtendedAddAuthor(t *testing.T) {
 	}
 	assert.Contains(t, authorNames, "Initial Author", "initial author must be preserved")
 	assert.Contains(t, authorNames, "Added Author", "newly added author must appear")
+}
+
+// ── Readlist Sync Integration Tests ──────────────────────────
+
+func TestReadListSyncDuplicateUUID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_dup_uuid_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.PUT("/:id", updateReadListItem(db))
+	}
+
+	clientUUID := "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+
+	// First create succeeds
+	createReq := map[string]interface{}{
+		"id":       clientUUID,
+		"listname": "test-dup",
+		"bookname": "Dup Book",
+		"author":   "Dup Author",
+		"priority": 1,
+		"status":   "Не заполнено",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// Second create with same UUID must fail
+	req2, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusInternalServerError, w2.Code, "duplicate UUID should fail")
+}
+
+func TestReadListSyncPutNonExistent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_put_404_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.PUT("/:id", updateReadListItem(db))
+	}
+
+	// PUT to non-existent UUID must return 404
+	updateReq := map[string]interface{}{
+		"listname": "nonexistent",
+		"bookname": "Nope",
+		"author":   "No One",
+		"priority": 0,
+		"status":   "Не заполнено",
+	}
+	body, _ := json.Marshal(updateReq)
+	req, _ := http.NewRequest("PUT", "/api/v1/user/readlist/deadbeef-0000-0000-0000-000000000000", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code, "PUT to non-existent UUID must return 404")
+}
+
+func TestReadListSyncFullFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	var userID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "rl_fullflow_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&userID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", userID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+
+	token := generateToken(userID, "testuser", "viewer")
+
+	r := gin.New()
+	rl := r.Group("/api/v1/user/readlist")
+	rl.Use(authMiddleware())
+	{
+		rl.POST("", createReadListItem(db))
+		rl.GET("", getReadListItems(db))
+		rl.PUT("/:id", updateReadListItem(db))
+		rl.DELETE("/:id", deleteReadListItem(db))
+	}
+
+	clientUUID := "c3d4e5f6-a7b8-9012-cdef-123456789012"
+
+	// Step 1: Create (simulates offline creation pushed to server)
+	createReq := map[string]interface{}{
+		"id":       clientUUID,
+		"listname": "sync-test",
+		"bookname": "Sync Book",
+		"author":   "Sync Author",
+		"priority": 5,
+		"comment":  "initial",
+		"status":   "Не заполнено",
+	}
+	body, _ := json.Marshal(createReq)
+	req, _ := http.NewRequest("POST", "/api/v1/user/readlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created ReadListItem
+	err = json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+	assert.Equal(t, clientUUID, created.ID)
+	assert.NotEmpty(t, created.UpdatedAt)
+	assert.NotEmpty(t, created.CreatedAt)
+	initialUpdatedAt := created.UpdatedAt
+
+	// Step 2: Pull (GET all)
+	var listResp struct {
+		Total int            `json:"total"`
+		Items []ReadListItem `json:"items"`
+	}
+	getReq, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, getReq)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	err = json.Unmarshal(w2.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, listResp.Total, 1)
+
+	var pulledItem *ReadListItem
+	for i := range listResp.Items {
+		if listResp.Items[i].ID == clientUUID {
+			pulledItem = &listResp.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, pulledItem, "pulled item must be found")
+	assert.Equal(t, "sync-test", pulledItem.Listname)
+
+	// Step 3: Update (simulates dirty item pushed)
+	updateReq := map[string]interface{}{
+		"id":       clientUUID,
+		"listname": "sync-test",
+		"bookname": "Sync Book Updated",
+		"author":   "Sync Author",
+		"priority": 5,
+		"comment":  "updated via sync",
+		"status":   "Читаю",
+	}
+	body2, _ := json.Marshal(updateReq)
+	req3, _ := http.NewRequest("PUT", "/api/v1/user/readlist/"+clientUUID, bytes.NewReader(body2))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer "+token)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+	require.Equal(t, http.StatusOK, w3.Code)
+
+	var updated ReadListItem
+	err = json.Unmarshal(w3.Body.Bytes(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "Sync Book Updated", updated.Bookname)
+	assert.Equal(t, "Читаю", updated.Status)
+	assert.Equal(t, "updated via sync", updated.Comment)
+	// updated_at must have changed
+	assert.NotEqual(t, initialUpdatedAt, updated.UpdatedAt, "updated_at must change after update")
+
+	// Step 4: Re-pull and verify changes
+	getReq2, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq2.Header.Set("Authorization", "Bearer "+token)
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, getReq2)
+	require.Equal(t, http.StatusOK, w4.Code)
+
+	err = json.Unmarshal(w4.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	var repulledItem *ReadListItem
+	for i := range listResp.Items {
+		if listResp.Items[i].ID == clientUUID {
+			repulledItem = &listResp.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, repulledItem, "repulled item must be found")
+	assert.Equal(t, "Sync Book Updated", repulledItem.Bookname)
+	assert.Equal(t, "Читаю", repulledItem.Status)
+	assert.Equal(t, "updated via sync", repulledItem.Comment)
+
+	// Step 5: Delete (simulates sync deletion)
+	req4, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+clientUUID, nil)
+	req4.Header.Set("Authorization", "Bearer "+token)
+	w5 := httptest.NewRecorder()
+	r.ServeHTTP(w5, req4)
+	require.Equal(t, http.StatusNoContent, w5.Code, "DELETE should return 204")
+
+	// Verify deletion via pull
+	getReq3, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
+	getReq3.Header.Set("Authorization", "Bearer "+token)
+	w6 := httptest.NewRecorder()
+	r.ServeHTTP(w6, getReq3)
+	require.Equal(t, http.StatusOK, w6.Code)
+
+	err = json.Unmarshal(w6.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	for _, item := range listResp.Items {
+		assert.NotEqual(t, clientUUID, item.ID, "deleted item must not appear in listing")
+	}
 }

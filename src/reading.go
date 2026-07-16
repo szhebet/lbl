@@ -1,13 +1,24 @@
 package main
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+func mustGenerateUUID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 type UserBook struct {
 	ID          int     `json:"id"`
@@ -276,7 +287,7 @@ func listUserBooks(db *sql.DB) gin.HandlerFunc {
 // ReadList types
 
 type ReadListItem struct {
-	ID         int    `json:"id"`
+	ID         string `json:"id"`
 	Listname   string `json:"listname"`
 	Bookname   string `json:"bookname"`
 	Author     string `json:"author"`
@@ -287,12 +298,15 @@ type ReadListItem struct {
 	Comment    string `json:"comment"`
 	Status     string `json:"status"`
 	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+	SyncedAt   string `json:"synced_at"`
 	FormatName string `json:"format_name"`
 	OnShelf    bool   `json:"on_shelf"`
 	EditionID  *int   `json:"edition_id"`
 }
 
 type CreateReadListRequest struct {
+	ID       string `json:"id"`
 	Listname string `json:"listname"`
 	Bookname string `json:"bookname"`
 	Author   string `json:"author"`
@@ -367,6 +381,34 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			args = append(args, "%"+comment+"%")
 			argNum++
 		}
+		if rlStatus := c.Query("status"); rlStatus != "" {
+			statuses := strings.Split(rlStatus, ",")
+			placeholders := make([]string, len(statuses))
+			for i, s := range statuses {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				placeholders[i] = fmt.Sprintf("$%d", argNum)
+				args = append(args, s)
+				argNum++
+			}
+			whereClause += fmt.Sprintf(" AND rl.status IN (%s)", strings.Join(placeholders, ","))
+		}
+		if exclude := c.Query("exclude_status"); exclude != "" {
+			statuses := strings.Split(exclude, ",")
+			placeholders := make([]string, len(statuses))
+			for i, s := range statuses {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				placeholders[i] = fmt.Sprintf("$%d", argNum)
+				args = append(args, s)
+				argNum++
+			}
+			whereClause += fmt.Sprintf(" AND rl.status NOT IN (%s)", strings.Join(placeholders, ","))
+		}
 
 		// Count
 		var total int
@@ -375,9 +417,9 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 
 		// Fetch
 		query := fmt.Sprintf(`
-			SELECT rl.id, rl.listname, rl.bookname, rl.author, rl.priority,
+			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
 				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
-				rl.created_at,
+				rl.created_at, rl.updated_at, rl.synced_at,
 				COALESCE(f.name, '') AS format_name,
 				COALESCE(e.on_shelf, false) AS on_shelf,
 				e.id AS edition_id
@@ -402,9 +444,11 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var item ReadListItem
 			var editionID sql.NullInt64
+			var updatedAt, syncedAt sql.NullString
 			if err := rows.Scan(&item.ID, &item.Listname, &item.Bookname, &item.Author,
 				&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
 				&item.Comment, &item.Status, &item.CreatedAt,
+				&updatedAt, &syncedAt,
 				&item.FormatName, &item.OnShelf, &editionID); err != nil {
 				internalError(c, err)
 				return
@@ -412,6 +456,12 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			if editionID.Valid {
 				eid := int(editionID.Int64)
 				item.EditionID = &eid
+			}
+			if updatedAt.Valid {
+				item.UpdatedAt = updatedAt.String
+			}
+			if syncedAt.Valid {
+				item.SyncedAt = syncedAt.String
 			}
 			items = append(items, item)
 		}
@@ -449,21 +499,35 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 		req.Priority = maxPriority + 1
 	}
 
+	// Use client-provided UUID or generate one on server
+	itemID := req.ID
+	if itemID == "" {
+		itemID = mustGenerateUUID()
+	}
+
 		var item ReadListItem
 		var editionID sql.NullInt64
+		var updatedAt, syncedAt sql.NullString
 		err := db.QueryRow(`
-			INSERT INTO read_list (listname, bookname, author, priority, author_id, book_id, user_id, comment, status)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::user_book_status)
-			RETURNING id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, created_at
-		`, req.Listname, req.Bookname, req.Author, req.Priority, req.AuthorID, req.BookID,
+			INSERT INTO read_list (id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status, updated_at)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::user_book_status, NOW())
+			RETURNING id::text, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, created_at, updated_at, synced_at
+		`, itemID, req.Listname, req.Bookname, req.Author, req.Priority, req.AuthorID, req.BookID,
 			uid, req.Comment, req.Status).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
-			&item.Comment, &item.Status, &item.CreatedAt)
+			&item.Comment, &item.Status, &item.CreatedAt,
+			&updatedAt, &syncedAt)
 
 		if err != nil {
 			internalError(c, err)
 			return
+		}
+		if updatedAt.Valid {
+			item.UpdatedAt = updatedAt.String
+		}
+		if syncedAt.Valid {
+			item.SyncedAt = syncedAt.String
 		}
 
 		// Fetch format_name and on_shelf
@@ -509,8 +573,9 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		result, err := db.Exec(`
 			UPDATE read_list SET
 				listname = $1, bookname = $2, author = $3, priority = $4,
-				author_id = $5, book_id = $6, comment = $7, status = $8::user_book_status
-			WHERE id = $9 AND user_id = $10
+				author_id = $5, book_id = $6, comment = $7, status = $8::user_book_status,
+				updated_at = NOW()
+			WHERE id = $9::uuid AND user_id = $10
 		`, req.Listname, req.Bookname, req.Author, req.Priority,
 			req.AuthorID, req.BookID, req.Comment, req.Status, id, uid)
 
@@ -527,28 +592,36 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 
 		var item ReadListItem
 		var editionID sql.NullInt64
+		var updatedAt, syncedAt sql.NullString
 		err = db.QueryRow(`
-			SELECT rl.id, rl.listname, rl.bookname, rl.author, rl.priority,
-				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text, rl.created_at,
+			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
+				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
+				rl.created_at, rl.updated_at, rl.synced_at,
 				COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
 			FROM read_list rl
 			LEFT JOIN editions e ON e.id = rl.book_id
 			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
 			LEFT JOIN formats f ON f.id = ef.format_id
-			WHERE rl.id = $1 AND rl.user_id = $2
+			WHERE rl.id = $1::uuid AND rl.user_id = $2
 		`, id, uid).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
 			&item.Comment, &item.Status, &item.CreatedAt,
+			&updatedAt, &syncedAt,
 			&item.FormatName, &item.OnShelf, &editionID)
-		if editionID.Valid {
-			eid := int(editionID.Int64)
-			item.EditionID = &eid
-		}
-
 		if err != nil {
 			internalError(c, err)
 			return
+		}
+		if updatedAt.Valid {
+			item.UpdatedAt = updatedAt.String
+		}
+		if syncedAt.Valid {
+			item.SyncedAt = syncedAt.String
+		}
+		if editionID.Valid {
+			eid := int(editionID.Int64)
+			item.EditionID = &eid
 		}
 
 		c.JSON(http.StatusOK, item)
@@ -566,7 +639,7 @@ func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
 
 		id := c.Param("id")
 
-		result, err := db.Exec("DELETE FROM read_list WHERE id = $1 AND user_id = $2", id, uid)
+		result, err := db.Exec("DELETE FROM read_list WHERE id = $1::uuid AND user_id = $2", id, uid)
 		if err != nil {
 			internalError(c, err)
 			return

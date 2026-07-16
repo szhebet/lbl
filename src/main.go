@@ -58,7 +58,10 @@ var embeddedMigration24 string
 //go:embed migration_2.5.sql
 var embeddedMigration25 string
 
-const currentDBVersion = "2.5"
+//go:embed migration_3.0.sql
+var embeddedMigration30 string
+
+const currentDBVersion = "3.0"
 
 type migration struct {
 	Version     string
@@ -106,6 +109,11 @@ var migrations = []migration{
 		Version:     "2.5",
 		Description: "Add refresh_tokens table",
 		SQL:         stripSchema(embeddedMigration25),
+	},
+	{
+		Version:     "3.0",
+		Description: "Read list UUID PK + timestamps for offline sync",
+		SQL:         stripSchema(embeddedMigration30),
 	},
 }
 
@@ -696,6 +704,9 @@ func main() {
 
 	// Serve static files
 	r.Static("/static", "./static")
+
+	// Favicon
+	r.StaticFile("/favicon.ico", "./static/favicon.svg")
 
 	// Serve templates with mobile platform detection
 	mobileTopBarIndex := `<div class="mobile-top-bar">

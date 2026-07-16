@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Домашняя библиотека</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -119,12 +121,14 @@
             <!-- Вкладка Список чтения -->
             <div id="readlist" class="tab-content">
                 <div class="filters">
-                    <div class="filter-group">
+                    <div class="filter-group" style="flex:0 0 auto">
                         <input type="hidden" id="readlistUserId" value="">
-                        <select id="readlistNameFilter" class="filter-select">
+                        <select id="readlistNameFilter" class="filter-select" style="display:none">
                             <option value="">Все списки</option>
                             <option value="default">default</option>
                         </select>
+                        <input type="hidden" id="readlistStatusFilter" value="">
+                        <button id="readlistFilterBtn" class="btn btn-secondary" title="Фильтр">Все списки</button>
                     </div>
                     <div class="filter-group">
                         <input type="text" id="readlistBookFilter" placeholder="Поиск по названию...">
@@ -137,6 +141,8 @@
                     </div>
                     <button id="clearReadlistFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
                     <button id="createReadlistBtn" class="btn btn-primary" style="margin-left:auto">Создать</button>
+                    <span id="pendingCount" class="pending-count" style="display:none;margin-left:8px;font-size:0.85em"></span>
+                    <button id="syncReadlistBtn" class="btn btn-secondary" style="display:none;margin-left:4px;font-size:0.85em">⟳ Синхр.</button>
                 </div>
 
                 <div class="pagination" id="readlistPagination"></div>
@@ -144,6 +150,51 @@
                     <div class="loading">Загрузка...</div>
                 </div>
                 <div class="pagination" id="readlistPaginationBottom"></div>
+            </div>
+
+            <!-- Модальное окно расширенной фильтрации списка чтения -->
+            <div id="readlistFilterModal" class="modal" style="display:none">
+                <div class="modal-content" style="max-width:400px">
+                    <div class="modal-header">
+                        <h2>Фильтр списка чтения</h2>
+                        <button class="modal-close close-rlfilter-btn" aria-label="Закрыть">&times;</button>
+                    </div>
+                    <div class="modal-body rl-filter-body">
+                        <div class="rl-filter-section">
+                            <div class="form-group">
+                                <label for="rlFilterListname">Список:</label>
+                                <select id="rlFilterListname" class="filter-select">
+                                    <option value="">Все списки</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Статус:</label>
+                                <div id="rlFilterStatuses">
+                                    <label class="checkbox-label"><input type="checkbox" value="Не заполнено" checked><span class="checkbox-custom"></span> Не заполнено</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Прочитано"><span class="checkbox-custom"></span> Прочитано</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Читаю" checked><span class="checkbox-custom"></span> Читаю</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Отложил" checked><span class="checkbox-custom"></span> Отложил</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Бросил" checked><span class="checkbox-custom"></span> Бросил</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="rl-filter-section">
+                            <div class="form-group">
+                                <label for="rlFilterBook">Название:</label>
+                                <input type="text" id="rlFilterBook" class="form-input" placeholder="Поиск по названию...">
+                            </div>
+                            <div class="form-group">
+                                <label for="rlFilterAuthor">Автор:</label>
+                                <input type="text" id="rlFilterAuthor" class="form-input" placeholder="Поиск по автору...">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer rl-filter-footer">
+                        <button id="rlFilterClear" class="btn btn-secondary" style="border-color:#d1d5db">Очистить</button>
+                        <button id="rlFilterCancel" class="btn btn-secondary close-rlfilter-btn">Отмена</button>
+                        <button id="rlFilterApply" class="btn btn-primary">Применить</button>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -222,5 +273,6 @@
 
     <script src="/static/js/app.js?v=2"></script>
     <script src="/static/js/auth.js?v=2"></script>
+    <script src="/static/js/offline.js?v=1"></script>
 </body>
 </html>

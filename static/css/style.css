@@ -1522,3 +1522,103 @@ header h1 {
     }
 }
 
+/* Readlist filter button */
+#readlistFilterBtn {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+}
+
+/* Readlist filter modal */
+.rl-filter-body {
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+.rl-filter-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid #eaeaea;
+}
+.rl-filter-section:last-of-type {
+    border-bottom: none;
+}
+
+/* Footer */
+.rl-filter-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 12px 20px;
+    border-top: 1px solid #eaeaea;
+    margin-top: auto;
+}
+.rl-filter-footer .btn {
+    min-width: 100px;
+}
+
+/* Custom checkboxes */
+.checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: normal;
+    margin-bottom: 0;
+}
+.checkbox-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.checkbox-custom {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    background: #fff;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+}
+.checkbox-custom::after {
+    content: "";
+    width: 5px;
+    height: 9px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) scale(0);
+    transition: transform 0.15s ease;
+    margin-bottom: 1px;
+}
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom {
+    background: #3498db;
+    border-color: #3498db;
+}
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom::after {
+    transform: rotate(45deg) scale(1);
+}
+.checkbox-label input[type="checkbox"]:focus-visible + .checkbox-custom {
+    outline: 2px solid #3498db;
+    outline-offset: 2px;
+}
+.checkbox-label:hover .checkbox-custom {
+    border-color: #3498db;
+}
+
+/* Footer */
+.rl-filter-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 12px 20px;
+    border-top: 1px solid #eaeaea;
+    margin-top: auto;
+}
+.rl-filter-footer .btn {
+    min-width: 100px;
+}
+

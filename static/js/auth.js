@@ -90,6 +90,7 @@ async function tryRefreshToken() {
             localStorage.removeItem('auth_token');
             localStorage.removeItem('auth_user');
             authUser = null;
+            window.dispatchEvent(new Event('auth-changed'));
             return false;
         } catch (e) {
             console.warn('Refresh failed:', e);
@@ -117,6 +118,8 @@ function handleLoginResponse(data) {
             btn.textContent = authUser.username;
             btn.classList.add('logged-in');
         }
+        // Notify offline module about auth change
+        window.dispatchEvent(new Event('auth-changed'));
         if (typeof loadUserBookStatuses === 'function') {
             loadUserBookStatuses().then(function() {
                 if (typeof refreshCurrentView === 'function') refreshCurrentView();

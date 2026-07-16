@@ -48,6 +48,7 @@ public class MainActivity extends Activity {
     private LinearLayout debugPanel;
     private TextView debugLog;
     private TokenStore tokenStore;
+    private ReadListDB readListDB;
     private boolean hasError = false;
 
     @Override
@@ -74,6 +75,7 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         tokenStore = new TokenStore(this);
+        readListDB = new ReadListDB(this);
 
         setupWebView();
         setupDebug();
@@ -275,6 +277,7 @@ public class MainActivity extends Activity {
         });
 
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
+        webView.addJavascriptInterface(new ReadListBridge(), "AndroidReadListDB");
 
         // Handle file downloads via direct HTTPS connection (trusts self-signed cert)
         webView.setDownloadListener(new DownloadListener() {
@@ -406,6 +409,63 @@ public class MainActivity extends Activity {
         public void clearRefreshToken() {
             Log.i(TAG, "Clearing refresh token via JS bridge");
             tokenStore.clearRefreshToken();
+        }
+    }
+
+    private class ReadListBridge {
+        @JavascriptInterface
+        public void replaceAll(String jsonArray) {
+            readListDB.replaceAll(jsonArray);
+        }
+
+        @JavascriptInterface
+        public String queryAll(String listname, String bookname, String author, String status) {
+            return readListDB.queryAll(listname, bookname, author, status);
+        }
+
+        @JavascriptInterface
+        public void upsertItem(String jsonString) {
+            readListDB.upsertItem(jsonString);
+        }
+
+        @JavascriptInterface
+        public void deleteItem(String id) {
+            readListDB.deleteItem(id);
+        }
+
+        @JavascriptInterface
+        public void clearAll() {
+            readListDB.clearAll();
+        }
+
+        @JavascriptInterface
+        public String getPendingQueue() {
+            return readListDB.getPendingQueue();
+        }
+
+        @JavascriptInterface
+        public int getPendingCount() {
+            return readListDB.getPendingCount();
+        }
+
+        @JavascriptInterface
+        public void enqueue(String operation, String itemId, String body) {
+            readListDB.enqueue(operation, itemId, body);
+        }
+
+        @JavascriptInterface
+        public void enqueueDelete(String itemId) {
+            readListDB.enqueueDelete(itemId);
+        }
+
+        @JavascriptInterface
+        public void clearQueue() {
+            readListDB.clearQueue();
+        }
+
+        @JavascriptInterface
+        public void dequeue(int queueId) {
+            readListDB.dequeue(queueId);
         }
     }
 

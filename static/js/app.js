@@ -595,7 +595,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('readlist').classList.add('active');
             loadReadlist();
             loadReadlistNames();
+            updateOfflineUI();
         }
+    }
+    // Auto-sync if online with pending items (legacy — now handled by offline.js)
+    if (isAndroid() && window.SyncService && window.ReadListStore && isOnline() && ReadListStore.countDirty() > 0) {
+        SyncService.sync(true);
     }
     loadAuthors();
     updateShelfCount();
@@ -2143,6 +2148,14 @@ function closeModal() {
 
 var RL_API = API_BASE + '/user/readlist';
 
+function isOnline() {
+    return typeof navigator !== 'undefined' && navigator.onLine !== false;
+}
+
+function isAndroid() {
+    return document.body.classList.contains('android');
+}
+
 function getAuthHeaders() {
     var token = localStorage.getItem('auth_token');
     var h = { 'Content-Type': 'application/json' };
@@ -2159,8 +2172,20 @@ async function loadReadlist() {
     var bookname = document.getElementById('readlistBookFilter').value.trim();
     var author = document.getElementById('readlistAuthorFilter').value.trim();
     var comment = document.getElementById('readlistCommentFilter').value.trim();
+    var statusFilter = document.getElementById('readlistStatusFilter').value.trim();
     var limit = 50;
     var offset = (readlistPage - 1) * limit;
+
+    // Android: always read from local SQLite
+    if (isAndroid() && window.ReadListStore) {
+        var allItems = ReadListStore.query(listname, bookname, author, statusFilter);
+        var total = allItems.length;
+        var items = allItems.slice(offset, offset + limit);
+        var data = { items: items, total: total };
+        renderReadlistTable(data);
+        renderReadlistPagination(total, readlistPage, limit);
+        return;
+    }
 
     var url = RL_API + '?limit=' + limit + '&offset=' + offset +
         '&sort_by=' + readlistSortBy + '&sort_order=' + readlistSortOrder;
@@ -2168,6 +2193,7 @@ async function loadReadlist() {
     if (bookname) url += '&bookname=' + encodeURIComponent(bookname);
     if (author) url += '&author=' + encodeURIComponent(author);
     if (comment) url += '&comment=' + encodeURIComponent(comment);
+    if (statusFilter) url += '&status=' + encodeURIComponent(statusFilter);
 
     try {
         var res = await apiFetch(url, { headers: getAuthHeaders() });
@@ -2236,7 +2262,7 @@ function renderReadlistTableDesktop(container, items) {
         html += '<td class="col-comment">' + (comment || '—') + '</td>';
         html += '<td class="col-listname">' + (listname || '—') + '</td>';
         html += '<td class="col-status">' +
-            '<select class="status-select ' + getStatusClass(st) + '" data-rlid="' + item.id + '" onchange="setReadlistItemStatus(' + item.id + ', this.value)">';
+            '<select class="status-select ' + getStatusClass(st) + '" data-rlid="' + item.id + '">';
         ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
             html += '<option value="' + s + '"' + (s === st ? ' selected' : '') + '>' + s + '</option>';
         });
@@ -2368,12 +2394,20 @@ function setupReadlistEvents() {
     var container = document.getElementById('readlistTableContainer');
     if (!container) return;
 
+    // Init default status filter: all except Прочитано
+    var statusEl = document.getElementById('readlistStatusFilter');
+    if (statusEl && !statusEl.value) {
+        statusEl.value = 'Не заполнено,Читаю,Отложил,Бросил';
+    }
+
     // Filter clear
     document.getElementById('clearReadlistFilters')?.addEventListener('click', function() {
         document.getElementById('readlistBookFilter').value = '';
         document.getElementById('readlistAuthorFilter').value = '';
         document.getElementById('readlistCommentFilter').value = '';
         document.getElementById('readlistNameFilter').value = '';
+        document.getElementById('readlistStatusFilter').value = 'Не заполнено,Читаю,Отложил,Бросил';
+        updateReadlistFilterBtnText();
         readlistPage = 1;
         loadReadlist();
     });
@@ -2405,6 +2439,28 @@ function setupReadlistEvents() {
     // Create button
     document.getElementById('createReadlistBtn')?.addEventListener('click', function() {
         openCreateReadlistModal();
+    });
+
+    // Filter button
+    document.getElementById('readlistFilterBtn')?.addEventListener('click', function() {
+        openReadlistFilterModal();
+    });
+
+    // Filter modal Apply
+    document.getElementById('rlFilterApply')?.addEventListener('click', function() {
+        applyReadlistFilter();
+    });
+
+    // Filter modal Clear
+    document.getElementById('rlFilterClear')?.addEventListener('click', function() {
+        clearReadlistFilter();
+    });
+
+    // Filter modal Cancel — close via close-rlfilter-btn class
+    document.getElementById('readlistFilterModal')?.addEventListener('click', function(e) {
+        if (e.target.classList.contains('close-rlfilter-btn') || e.target === this) {
+            closeReadlistFilterModal();
+        }
     });
 
     // Author text input → filter select
@@ -2551,6 +2607,37 @@ function setupReadlistEvents() {
 
         if (!data.listname) { alert('Укажите название списка'); return; }
 
+        // Android: always write to local store, sync in background
+        if (isAndroid() && window.ReadListStore) {
+            var id = editId || (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random()*16|0, v = c=='x'?r:(r&0x3|0x8); return v.toString(16); }));
+            var now = new Date().toISOString();
+            var existing = editId ? ReadListStore.getById(editId) : null;
+            var item = {
+                id: editId || id,
+                listname: data.listname,
+                bookname: data.bookname,
+                author: data.author,
+                priority: data.priority,
+                author_id: data.author_id,
+                book_id: data.book_id,
+                comment: data.comment,
+                status: data.status,
+                created_at: existing ? existing.created_at : now,
+                updated_at: now,
+                synced_at: existing ? existing.synced_at : null,
+                format_name: existing ? (existing.format_name||'') : '',
+                on_shelf: existing ? (existing.on_shelf||false) : false,
+                user_id: existing ? (existing.user_id||0) : 0,
+                edition_id: existing ? (existing.edition_id||null) : null
+            };
+            ReadListStore.upsert(item);
+            closeReadlistModal();
+            loadReadlist();
+            loadReadlistNames();
+            if (window.SyncService) SyncService.sync(true);
+            return;
+        }
+
         try {
             var url = RL_API;
             var method = 'POST';
@@ -2599,6 +2686,14 @@ function setupReadlistEvents() {
             e.preventDefault();
             var id = deleteBtn.dataset.id;
             if (!confirm('Удалить запись из списка чтения?')) return;
+            // Android: remove from local store, sync in background
+            if (isAndroid() && window.ReadListStore) {
+                ReadListStore.remove(id);
+                loadReadlist();
+                loadReadlistNames();
+                if (window.SyncService) SyncService.sync(true);
+                return;
+            }
             (async function() {
                 try {
                     var r = await apiFetch(RL_API + '/' + id, { method: 'DELETE', headers: getAuthHeaders() });
@@ -2656,29 +2751,101 @@ function setupReadlistEvents() {
             }
         }
     });
+
+    // Sync button
+    document.getElementById('syncReadlistBtn')?.addEventListener('click', function() {
+        if (window.SyncService) SyncService.sync(true);
+    });
+
+    // Update offline UI periodically
+    if (isAndroid()) {
+        setInterval(updateOfflineUI, 5000);
+        updateOfflineUI();
+    }
+}
+
+function updateOfflineUI() {
+    var syncBtn = document.getElementById('syncReadlistBtn');
+    var pendingEl = document.getElementById('pendingCount');
+    if (!window.ReadListStore) {
+        if (syncBtn) syncBtn.style.display = 'none';
+        if (pendingEl) pendingEl.style.display = 'none';
+        return;
+    }
+    var count = ReadListStore.countDirty();
+    if (syncBtn) syncBtn.style.display = count > 0 && isOnline() ? 'inline-block' : 'none';
+    if (pendingEl) {
+        if (count > 0) {
+            pendingEl.style.display = 'inline';
+            pendingEl.textContent = '\u23F3 ' + count + ' \u043E\u0436\u0438\u0434\u0430\u044E\u0442 \u0441\u0438\u043D\u0445\u0440\u043E\u043D\u0438\u0437\u0430\u0446\u0438\u0438';
+        } else {
+            pendingEl.style.display = 'none';
+        }
+    }
+}
+
+function populateListnameSelect(select, currentVal) {
+    if (!select) return;
+    select.innerHTML = '<option value="">Все списки</option>';
+    var seen = {};
+    var hiddenSelect = document.getElementById('readlistNameFilter');
+    if (hiddenSelect) {
+        for (var i = 0; i < hiddenSelect.options.length; i++) {
+            var opt = hiddenSelect.options[i];
+            if (opt.value === '') continue;
+            if (!seen[opt.value]) {
+                seen[opt.value] = true;
+                var newOpt = document.createElement('option');
+                newOpt.value = opt.value;
+                newOpt.textContent = opt.textContent;
+                select.appendChild(newOpt);
+            }
+        }
+    }
+    if (currentVal) select.value = currentVal;
 }
 
 async function loadReadlistNames() {
+    // Android: get names from local store
+    if (isAndroid() && window.ReadListStore) {
+        ReadListStore._ensureCache();
+        var names = [];
+        var seen = {};
+        (ReadListStore._cache || []).forEach(function(item) {
+            if (item.listname && !seen[item.listname]) {
+                seen[item.listname] = true;
+                names.push(item.listname);
+            }
+        });
+        populateReadlistNames(names);
+        return;
+    }
     try {
         var res = await apiFetch(RL_API + '/names', { headers: getAuthHeaders() });
         if (!res.ok) return;
         var names = await res.json();
-        var select = document.getElementById('readlistNameFilter');
-        if (!select) return;
-        var currentVal = select.value;
-        select.innerHTML = '<option value="">Все списки</option>';
-        var seen = {};
-        names.forEach(function(n) {
-            if (!seen[n]) {
-                seen[n] = true;
-                var opt = document.createElement('option');
-                opt.value = n;
-                opt.textContent = n;
-                select.appendChild(opt);
-            }
-        });
-        if (currentVal) select.value = currentVal;
+        populateReadlistNames(names);
     } catch(e) {}
+}
+
+function populateReadlistNames(names) {
+    var select = document.getElementById('readlistNameFilter');
+    if (!select) return;
+    var currentVal = select.value;
+    select.innerHTML = '<option value="">Все списки</option>';
+    var seen = {};
+    names.forEach(function(n) {
+        if (!seen[n]) {
+            seen[n] = true;
+            var opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            select.appendChild(opt);
+        }
+    });
+    if (currentVal) select.value = currentVal;
+    populateListnameSelect(document.getElementById('rlFilterListname'), currentVal);
+    updateReadlistFilterBtnText();
 }
 
 async function loadAuthorSelect() {
@@ -2755,15 +2922,116 @@ function openCreateReadlistModal() {
     loadBookSelect();
 }
 
+function updateReadlistFilterBtnText() {
+    var btn = document.getElementById('readlistFilterBtn');
+    if (!btn) return;
+    var listname = document.getElementById('readlistNameFilter').value;
+    var statusFilter = document.getElementById('readlistStatusFilter').value;
+    var parts = [];
+    parts.push(listname || 'Все списки');
+    if (statusFilter) {
+        var statuses = statusFilter.split(',');
+        parts.push('статус: ' + statuses.join(', '));
+    } else {
+        parts.push('статус: все');
+    }
+    btn.textContent = parts.join(' | ');
+}
+
+function openReadlistFilterModal() {
+    // Populate listname dropdown from the hidden select
+    var hiddenSelect = document.getElementById('readlistNameFilter');
+    var modalSelect = document.getElementById('rlFilterListname');
+    modalSelect.innerHTML = '<option value="">Все списки</option>';
+    for (var i = 0; i < hiddenSelect.options.length; i++) {
+        var opt = hiddenSelect.options[i];
+        if (opt.value === '') continue;
+        var newOpt = document.createElement('option');
+        newOpt.value = opt.value;
+        newOpt.textContent = opt.textContent;
+        modalSelect.appendChild(newOpt);
+    }
+    modalSelect.value = hiddenSelect.value;
+
+    // Populate status checkboxes from readlistStatusFilter
+    var statusFilterVal = document.getElementById('readlistStatusFilter').value;
+    var activeStatuses = {};
+    if (statusFilterVal) {
+        statusFilterVal.split(',').forEach(function(s) { activeStatuses[s.trim()] = true; });
+    }
+    var checkboxes = document.querySelectorAll('#rlFilterStatuses input[type="checkbox"]');
+    checkboxes.forEach(function(cb) {
+        cb.checked = !!activeStatuses[cb.value];
+    });
+
+    // Populate book/author fields from existing filters
+    document.getElementById('rlFilterBook').value = document.getElementById('readlistBookFilter').value;
+    document.getElementById('rlFilterAuthor').value = document.getElementById('readlistAuthorFilter').value;
+
+    // Show modal
+    document.getElementById('readlistFilterModal').style.display = 'block';
+    document.getElementById('readlistFilterModal').classList.add('active');
+}
+
+function closeReadlistFilterModal() {
+    document.getElementById('readlistFilterModal').style.display = 'none';
+    document.getElementById('readlistFilterModal').classList.remove('active');
+}
+
+function applyReadlistFilter() {
+    // Read listname
+    var listname = document.getElementById('rlFilterListname').value;
+    document.getElementById('readlistNameFilter').value = listname;
+
+    // Read status checkboxes
+    var selectedStatuses = [];
+    document.querySelectorAll('#rlFilterStatuses input[type="checkbox"]').forEach(function(cb) {
+        if (cb.checked) selectedStatuses.push(cb.value);
+    });
+    document.getElementById('readlistStatusFilter').value = selectedStatuses.join(',');
+
+    // Read book/author fields
+    document.getElementById('readlistBookFilter').value = document.getElementById('rlFilterBook').value;
+    document.getElementById('readlistAuthorFilter').value = document.getElementById('rlFilterAuthor').value;
+
+    // Update button text
+    updateReadlistFilterBtnText();
+
+    // Close modal and reload
+    closeReadlistFilterModal();
+    readlistPage = 1;
+    loadReadlist();
+}
+
+function clearReadlistFilter() {
+    // Reset listname to empty
+    document.getElementById('readlistNameFilter').value = '';
+
+    // Reset status to all except "Прочитано"
+    document.getElementById('readlistStatusFilter').value = 'Не заполнено,Читаю,Отложил,Бросил';
+
+    // Clear text filters
+    document.getElementById('readlistBookFilter').value = '';
+    document.getElementById('readlistAuthorFilter').value = '';
+
+    // Update button text
+    updateReadlistFilterBtnText();
+
+    // Close modal and reload
+    closeReadlistFilterModal();
+    readlistPage = 1;
+    loadReadlist();
+}
+
 async function openEditReadlistModal(id) {
+    // Android: get from local store
+    if (isAndroid() && window.ReadListStore) {
+        var item = ReadListStore.getById(id);
+        if (!item) { alert('Запись не найдена в локальном хранилище'); return; }
+        fillReadlistEditForm(item);
+        return;
+    }
     try {
-        var res = await apiFetch(RL_API + '?limit=1&offset=0&sort_by=created_at&sort_order=desc', {
-            headers: getAuthHeaders()
-        });
-        if (!res.ok) return;
-        // We need to fetch the specific item. Use the listing and filter by id (client-side).
-        // Better approach: fetch all (or use a dedicated GET endpoint).
-        // For simplicity, we'll refetch the list with a large limit and find the item.
         var allRes = await apiFetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
         if (!allRes.ok) return;
         var data = await allRes.json();
@@ -2773,46 +3041,49 @@ async function openEditReadlistModal(id) {
             if (items[i].id == id) { item = items[i]; break; }
         }
         if (!item) { alert('Запись не найдена'); return; }
-
-        document.getElementById('readlistModalTitle').textContent = 'Редактирование записи';
-        document.getElementById('rlEditId').value = item.id;
-        document.getElementById('rlListname').value = item.listname || 'default';
-        document.getElementById('rlBookname').value = item.bookname || '';
-        document.getElementById('rlBookId').value = item.book_id || '';
-        document.getElementById('rlBookSelect').style.display = 'none';
-        document.getElementById('rlAuthor').value = item.author || '';
-        document.getElementById('rlAuthorId').value = item.author_id || '';
-        document.getElementById('rlAuthorSelect').style.display = 'none';
-        document.getElementById('rlPriority').value = item.priority || 0;
-        document.getElementById('rlComment').value = item.comment || '';
-        document.getElementById('rlStatus').value = item.status || 'Не заполнено';
-        document.getElementById('readlistModal').style.display = 'block';
-        document.getElementById('readlistModal').classList.add('active');
-        loadAuthorSelect().then(function() {
-            if (item.author_id) {
-                var sel = document.getElementById('rlAuthorSelect');
-                for (var i = 0; i < sel.options.length; i++) {
-                    if (sel.options[i].value == item.author_id) {
-                        sel.value = item.author_id;
-                        break;
-                    }
-                }
-            }
-        });
-        loadBookSelect().then(function() {
-            if (item.book_id) {
-                var sel = document.getElementById('rlBookSelect');
-                for (var i = 0; i < sel.options.length; i++) {
-                    if (sel.options[i].value == item.book_id) {
-                        sel.value = item.book_id;
-                        break;
-                    }
-                }
-            }
-        });
+        fillReadlistEditForm(item);
     } catch (err) {
         alert('Ошибка: ' + err.message);
     }
+}
+
+function fillReadlistEditForm(item) {
+    document.getElementById('readlistModalTitle').textContent = 'Редактирование записи';
+    document.getElementById('rlEditId').value = item.id;
+    document.getElementById('rlListname').value = item.listname || 'default';
+    document.getElementById('rlBookname').value = item.bookname || '';
+    document.getElementById('rlBookId').value = item.book_id || '';
+    document.getElementById('rlBookSelect').style.display = 'none';
+    document.getElementById('rlAuthor').value = item.author || '';
+    document.getElementById('rlAuthorId').value = item.author_id || '';
+    document.getElementById('rlAuthorSelect').style.display = 'none';
+    document.getElementById('rlPriority').value = item.priority || 0;
+    document.getElementById('rlComment').value = item.comment || '';
+    document.getElementById('rlStatus').value = item.status || 'Не заполнено';
+    document.getElementById('readlistModal').style.display = 'block';
+    document.getElementById('readlistModal').classList.add('active');
+    loadAuthorSelect().then(function() {
+        if (item.author_id) {
+            var sel = document.getElementById('rlAuthorSelect');
+            for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value == item.author_id) {
+                    sel.value = item.author_id;
+                    break;
+                }
+            }
+        }
+    });
+    loadBookSelect().then(function() {
+        if (item.book_id) {
+            var sel = document.getElementById('rlBookSelect');
+            for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value == item.book_id) {
+                    sel.value = item.book_id;
+                    break;
+                }
+            }
+        }
+    });
 }
 
 function closeReadlistModal() {
@@ -2824,6 +3095,17 @@ function closeReadlistModal() {
 async function setReadlistItemStatus(id, status) {
     var token = localStorage.getItem('auth_token');
     if (!token) { promptLogin(); return; }
+    // Android: update locally, sync in background
+    if (isAndroid() && window.ReadListStore) {
+        var item = ReadListStore.getById(id);
+        if (item) {
+            item.status = status;
+            ReadListStore.upsert(item);
+            loadReadlist();
+            if (window.SyncService) SyncService.sync(true);
+        }
+        return;
+    }
     try {
         var allRes = await apiFetch(RL_API + '?limit=9999', { headers: getAuthHeaders() });
         if (!allRes.ok) { if (allRes.status === 401) handleAuthFailure(); return; }
@@ -2844,6 +3126,9 @@ async function setReadlistItemStatus(id, status) {
         if (!res.ok) {
             var err = await res.json();
             alert('Ошибка: ' + (err.error || ''));
+        } else {
+            loadReadlist();
+            loadReadlistNames();
         }
     } catch(e) {}
 }
@@ -2851,6 +3136,10 @@ async function setReadlistItemStatus(id, status) {
 // Event delegation for CSP compliance (no inline onclick/onchange)
 document.addEventListener('change', function(e) {
     if (e.target.id === 'bookStatusFilter') loadBooks();
+    var rlSelect = e.target.closest('.status-select[data-rlid]');
+    if (rlSelect) {
+        setReadlistItemStatus(rlSelect.dataset.rlid, rlSelect.value);
+    }
 });
 
 document.addEventListener('click', function(e) {

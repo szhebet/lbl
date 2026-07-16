@@ -546,6 +546,39 @@ timeout = 60    # Seconds
   - `MainActivity.java` reads URL and cert password from `Config.java`
   - `build.gradle` reads app identity and keystore from `build-extras.gradle`
   - All generated files cleaned up after build; `.apk.conf` in `.gitignore`, `.apk.conf.example` provided
+- UUID migration for readlist (migration 3.0):
+  - `read_list.id` SERIAL → UUID PK
+  - `updated_at` / `synced_at` TIMESTAMP columns
+  - All Go CRUD handlers updated for UUID + timestamps
+  - All tests migrated to UUID
+- Android offline SQLite bridge (`src_android/…/ReadListDB.java`):
+  - `readlist_items` table mirroring PostgreSQL schema
+  - `offline_queue` table for pending mutations
+  - CRUD methods: `replaceAll`, `queryAll`, `upsertItem`, `deleteItem`, `clearAll`
+  - Queue management: `enqueue`, `enqueueDelete`, `getPendingQueue`, `getPendingCount`, `clearQueue`, `dequeue`
+- `@JavascriptInterface` bridge (`MainActivity.java`):
+  - `AndroidReadListDB` object exposing all ReadListDB methods to JS
+- JS offline layer (`static/js/offline.js`):
+  - `ReadListStore` — in-memory cache backed by Android SQLite
+  - `OfflineQueue` — mutations queued locally, stored in SQLite
+  - `SyncService` — push pending mutations → pull full server state
+- Frontend offline support (`static/js/app.js`, `templates/index.html`):
+  - `loadReadlist()` falls back to `ReadListStore.query()` when offline
+  - `loadReadlistNames()` falls back to `ReadListStore` cache
+  - `openEditReadlistModal()` uses `ReadListStore.getById()` when offline
+  - Create/edit form submits via `ReadListStore.upsert()` + `OfflineQueue.enqueue()` when offline
+  - Delete via `ReadListStore.remove()` + `OfflineQueue.enqueueDelete()`
+  - `setReadlistItemStatus()` updates locally when offline
+  - Online/offline detection with status indicators
+  - Sync button + pending count badge in readlist filters
+  - Auto-sync on reconnect or app start
+- Полная переработка офлайн-синхронизации:
+  - Локальная SQLite = источник истины для отображения
+  - Фоновая асинхронная синхронизация Push (dirty по updated_at > synced_at) + Pull
+  - User-scoping: синхронизация только для текущего пользователя, очистка чужих данных при смене УЗ
+  - Индикация: #mobileUserBtn (зелёный/жёлтый/красный) + счётчик dirty + кнопка синхронизации
+  - `sync_task_spec.md` — полная спецификация алгоритма
+  - `auth-changed` event для повторного init при логине/логауте
 
 ### In Progress
 - (none)
