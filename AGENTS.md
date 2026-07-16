@@ -17,6 +17,7 @@ sessions can verify changes immediately.
 ```
 lbl/
 ├── bookarch/         # Book archive files (ZIP format, one per edition)
+├── backup/           # DB backups (created before migrations, kept on failure)
 ├── certres/          # SSL certificates + generation scripts
 │   ├── generate-certs.sh
 │   ├── generate-keystore.sh
@@ -125,6 +126,16 @@ See `config.toml.example` for all options.
 | `LIBAPP_DIR_*` | directories.* |
 | `LIBAPP_DB_*` | database.* |
 | `LIBAPP_LLM_*` | llm.* |
+
+### Config Sections
+
+| Section | Fields | Description |
+|---------|--------|-------------|
+| `[server]` | `port`, `bind`, `enable_delete`, `log_level` | HTTP server settings |
+| `[server]` | `jwt_secret`, `token_ttl` | JWT secret key (auto-generated if empty), token TTL in hours |
+| `[directories]` | `bookarch`, `temp`, `logs`, `templates`, `static`, `backup` | File system paths |
+| `[database]` | `host`, `port`, `name`, `user`, `password`, `sslmode`, `pgdata` (all-in-one) | PostgreSQL connection |
+| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `timeout` | LLM endpoint settings |
 
 ## API Endpoints
 
@@ -294,6 +305,7 @@ Three tabs:
 - User management: create, edit role, delete users
 - All catalog CRUD operations
 - Settings: LLM prompt config
+- Settings: backup_dir path (read from DB, synced from config)
 - LLM metadata refresh for all books
 
 ## LLM Book Recognition
@@ -592,6 +604,34 @@ timeout = 60    # Seconds
 - Double-ZIP bug fix ensures the stored archive in `bookarch/` contains the actual book file instead of a nested ZIP.
 - nginx is the recommended HTTPS reverse proxy for production; the Docker override (`docker-compose-nginx.yml`) adds it without modifying the base compose file.
 - Session cookie Secure flag is hardcoded to `false` — acceptable for local/RPi deployment, but should be made dynamic for production.
+
+### APK Asset Duplication
+
+The offline fallback page `src_android/app/src/main/assets/www/offline.html` is a **self-contained copy of the SPA with inlined CSS/JS**. It is used only as a last resort when the server is unreachable AND the Service Worker has no cached page (first visit).
+
+**When changing static files (`static/css/`, `static/js/`, `templates/`), check if `offline.html` needs updating:**
+
+| What changed | Need to update offline.html? |
+|---|---|
+| CSS styling (colors, layout, card design) | **Yes** — inline styles in `offline.html` should match |
+| Readlist card structure | **Yes** — HTML structure in `offline.html` is hardcoded |
+| JS bridge API (`AndroidReadListDB.*`) | **Yes** — `offline.html` calls `bridge.queryAll()` directly |
+| Go template changes (e.g., `index.html`) | Only if it affects mobile readlist tab layout |
+| New API endpoints | No — offline page doesn't call API |
+| Backend logic | No |
+
+To update, edit `src_android/app/src/main/assets/www/offline.html` to match the new UI, then rebuild the APK via `./build-android.sh`.
+
+### DB Migration + Backup Policy
+
+**Before every migration, the application creates a `pg_dump` backup** in the configured `backup_dir`.
+
+- `backup_dir` must be set in `config.toml` (`[directories] backup`) or via `LIBAPP_DIR_BACKUP`.
+- If `backup_dir` is empty and pending migrations exist, the application **refuses to start** with a clear error message.
+- Backup filename format: `library_{currentVersion}_before_{targetVersion}.sql`
+- On successful migration, the backup file is **kept** (not deleted) for safety.
+- To force a manual backup: run `pg_dump` directly or use the application's backup mechanism.
+- The backup path is also stored in the `settings` DB table and visible in the admin panel (Settings tab).
 
 ## Next Steps
 - Add graceful shutdown (SIGTERM/SIGINT handler) to avoid connection drops on restart.

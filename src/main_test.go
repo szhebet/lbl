@@ -44,7 +44,22 @@ func setupTestDB() *sql.DB {
 		panic(err)
 	}
 
-	if err := runMigrations(db); err != nil {
+	// Use a temp dir for test backups so migrations pass
+	tmpBackup, err := os.MkdirTemp("", "library-test-backup")
+	if err != nil {
+		panic(err)
+	}
+
+	testCfg := config.DefaultConfig()
+	testCfg.Directories.Backup = tmpBackup
+	testCfg.Database.Host = "localhost"
+	testCfg.Database.Port = 5432
+	testCfg.Database.User = "postgres"
+	testCfg.Database.Password = "postgres"
+	testCfg.Database.Name = "library"
+	testCfg.Database.SSLMode = "disable"
+
+	if err := runMigrations(db, testCfg); err != nil {
 		panic(err)
 	}
 
@@ -1784,17 +1799,27 @@ func TestReadListItemUpdateDelete(t *testing.T) {
 	assert.Equal(t, "Прочитано", updated.Status)
 	assert.Equal(t, 10, updated.Priority)
 
-	// Delete
+	// Delete (soft delete)
 	req2, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+itemID, nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
-	require.Equal(t, http.StatusNoContent, w2.Code)
+	require.Equal(t, http.StatusOK, w2.Code)
 
-	// Verify deleted
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM read_list WHERE id = $1::uuid", itemID).Scan(&count)
-	assert.Equal(t, 0, count)
+	var deletedItem ReadListItem
+	err = json.Unmarshal(w2.Body.Bytes(), &deletedItem)
+	require.NoError(t, err)
+	assert.True(t, deletedItem.Deleted, "item must be soft-deleted")
+
+	// Verify soft deleted row still exists with deleted flag
+	var deletedFlag bool
+	db.QueryRow("SELECT deleted FROM read_list WHERE id = $1::uuid", itemID).Scan(&deletedFlag)
+	assert.True(t, deletedFlag, "read_list row must have deleted = TRUE")
+
+	// Verify it doesn't appear in listing
+	var listCount int
+	db.QueryRow("SELECT COUNT(*) FROM read_list WHERE id = $1::uuid AND deleted = FALSE", itemID).Scan(&listCount)
+	assert.Equal(t, 0, listCount, "deleted item must not appear in active listing")
 }
 
 func TestReadListNames(t *testing.T) {
@@ -2928,14 +2953,21 @@ func TestReadListSyncFullFlow(t *testing.T) {
 	assert.Equal(t, "Читаю", repulledItem.Status)
 	assert.Equal(t, "updated via sync", repulledItem.Comment)
 
-	// Step 5: Delete (simulates sync deletion)
+	// Step 5: Delete (soft delete — simulates sync deletion)
 	req4, _ := http.NewRequest("DELETE", "/api/v1/user/readlist/"+clientUUID, nil)
 	req4.Header.Set("Authorization", "Bearer "+token)
 	w5 := httptest.NewRecorder()
 	r.ServeHTTP(w5, req4)
-	require.Equal(t, http.StatusNoContent, w5.Code, "DELETE should return 204")
+	require.Equal(t, http.StatusOK, w5.Code, "DELETE should return 200")
 
-	// Verify deletion via pull
+	var deletedItem ReadListItem
+	err = json.Unmarshal(w5.Body.Bytes(), &deletedItem)
+	require.NoError(t, err)
+	assert.Equal(t, clientUUID, deletedItem.ID)
+	assert.True(t, deletedItem.Deleted, "deleted item must have deleted=true")
+	assert.NotEmpty(t, deletedItem.UpdatedAt, "deleted item must have updated_at")
+
+	// Verify deletion via pull (deleted items excluded from listing)
 	getReq3, _ := http.NewRequest("GET", "/api/v1/user/readlist?limit=9999", nil)
 	getReq3.Header.Set("Authorization", "Bearer "+token)
 	w6 := httptest.NewRecorder()

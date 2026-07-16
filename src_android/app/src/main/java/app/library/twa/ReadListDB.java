@@ -16,7 +16,7 @@ import java.util.List;
 public class ReadListDB extends SQLiteOpenHelper {
     private static final String TAG = "ReadListDB";
     private static final String DB_NAME = "readlist.db";
-    private static final int DB_VERSION = 1;
+    private static final int DB_VERSION = 2;
 
     private static final String TABLE_ITEMS = "readlist_items";
     private static final String TABLE_QUEUE = "offline_queue";
@@ -39,6 +39,7 @@ public class ReadListDB extends SQLiteOpenHelper {
             "user_id INTEGER NOT NULL DEFAULT 0," +
             "comment TEXT NOT NULL DEFAULT ''," +
             "status TEXT NOT NULL DEFAULT 'Не заполнено'," +
+            "deleted INTEGER NOT NULL DEFAULT 0," +
             "created_at TEXT," +
             "updated_at TEXT," +
             "synced_at TEXT," +
@@ -60,9 +61,9 @@ public class ReadListDB extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        db.execSQL("DROP TABLE IF EXISTS " + TABLE_ITEMS);
-        db.execSQL("DROP TABLE IF EXISTS " + TABLE_QUEUE);
-        onCreate(db);
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE " + TABLE_ITEMS + " ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
     }
 
     public void replaceAll(String jsonArray) {
@@ -126,6 +127,7 @@ public class ReadListDB extends SQLiteOpenHelper {
                 item.put("priority", c.getInt(c.getColumnIndexOrThrow("priority")));
                 item.put("comment", getString(c, "comment"));
                 item.put("status", getString(c, "status"));
+                item.put("deleted", c.getInt(c.getColumnIndexOrThrow("deleted")) != 0);
                 item.put("created_at", getString(c, "created_at"));
                 item.put("updated_at", getString(c, "updated_at"));
                 item.put("synced_at", getString(c, "synced_at"));
@@ -236,6 +238,7 @@ public class ReadListDB extends SQLiteOpenHelper {
         cv.put("priority", item.optInt("priority", 0));
         cv.put("comment", item.optString("comment", ""));
         cv.put("status", item.optString("status", "Не заполнено"));
+        cv.put("deleted", item.optBoolean("deleted", false) ? 1 : 0);
         cv.put("created_at", item.optString("created_at"));
         cv.put("updated_at", item.optString("updated_at"));
         cv.put("synced_at", item.optString("synced_at"));

@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private TokenStore tokenStore;
     private ReadListDB readListDB;
     private boolean hasError = false;
+    private boolean offlineMode = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -159,12 +160,13 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 appendDebug("Loading: " + url);
                 hasError = false;
+                offlineMode = false;
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 appendDebug("Finished: " + url);
-                if (!hasError) {
+                if (!hasError || offlineMode) {
                     debugPanel.setVisibility(View.GONE);
                 }
             }
@@ -181,7 +183,20 @@ public class MainActivity extends Activity {
                     String msg = "ERROR [" + code + "]: " + desc
                             + " | url: " + (request != null ? request.getUrl() : "null");
                     appendDebug(msg);
-                    showError("HTTP Error: " + code + "\n" + desc);
+                    // Load offline page from bundled assets (works without network)
+                    try {
+                        java.io.InputStream is = getAssets().open("www/offline.html");
+                        byte[] buffer = new byte[is.available()];
+                        is.read(buffer);
+                        is.close();
+                        String html = new String(buffer, "UTF-8");
+                        view.loadDataWithBaseURL("file:///android_asset/www/", html, "text/html", "UTF-8", null);
+                        appendDebug("Loaded offline page from assets");
+                        offlineMode = true;
+                    } catch (java.io.IOException e) {
+                        showError("HTTP Error: " + code + "\n" + desc);
+                        appendDebug("Failed to load offline page: " + e.getMessage());
+                    }
                 }
             }
 

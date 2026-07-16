@@ -159,7 +159,7 @@
         query(listname, bookname, author, status) {
             this._ensureCache();
             var uid = getCurrentUserId();
-            var items = this._cache.filter(function(i) { return i.user_id === uid; });
+            var items = this._cache.filter(function(i) { return i.user_id === uid && !i.deleted; });
             if (listname) items = items.filter(function(i) { return i.listname === listname; });
             if (bookname) items = items.filter(function(i) { return (i.bookname||'').toLowerCase().indexOf(bookname.toLowerCase()) !== -1; });
             if (author) items = items.filter(function(i) { return (i.author||'').toLowerCase().indexOf(author.toLowerCase()) !== -1; });
@@ -314,6 +314,24 @@
                 for (var i = 0; i < dirty.length; i++) {
                     var item = dirty[i];
                     if (item.user_id !== uid) continue;
+
+                    var applyServerItem = function(serverItem) {
+                        if (!serverItem) return;
+                        // Update local item with server values (priority, timestamps)
+                        var localItem = ReadListStore.getById(serverItem.id);
+                        if (localItem) {
+                            for (var k in serverItem) {
+                                if (serverItem.hasOwnProperty(k) && k !== 'user_id') {
+                                    localItem[k] = serverItem[k];
+                                }
+                            }
+                            localItem.user_id = uid;
+                            ReadListStore._syncOne(localItem);
+                            // Don't markSynced here — let the pull phase confirm item exists on server.
+                            // If we markSynced and pull doesn't return this item, it gets removed.
+                        }
+                    };
+
                     try {
                         var putResp = await fetch('/api/v1/user/readlist/' + item.id, {
                             method: 'PUT',
@@ -321,7 +339,7 @@
                             body: JSON.stringify(item)
                         });
                         if (putResp.ok || putResp.status === 201) {
-                            ReadListStore.markSynced(item.id, item.updated_at);
+                            try { var putBody = await putResp.json(); applyServerItem(putBody); } catch(e) {}
                             debug('push UPDATE ok: ' + item.id);
                         } else if (putResp.status === 404) {
                             var postResp = await fetch('/api/v1/user/readlist', {
@@ -330,11 +348,10 @@
                                 body: JSON.stringify(item)
                             });
                             if (postResp.ok || postResp.status === 201) {
-                                ReadListStore.markSynced(item.id, item.updated_at);
+                                try { var postBody = await postResp.json(); applyServerItem(postBody); } catch(e) {}
                                 debug('push CREATE ok: ' + item.id);
                             } else if (postResp.status === 500) {
-                                ReadListStore.markSynced(item.id, item.updated_at);
-                                debug('push: exists on server (dup), marked synced: ' + item.id);
+                                debug('push: exists on server (dup), will confirm in pull: ' + item.id);
                             } else {
                                 debug('push CREATE failed: ' + item.id + ' status=' + postResp.status);
                             }
@@ -379,10 +396,16 @@
                             var sTime = sItem.updated_at || '';
                             var lSynced = lItem.synced_at || '';
                             if (sTime > lSynced) {
-                                sItem.synced_at = sItem.updated_at;
-                                ReadListStore.upsert(sItem);
-                                ReadListStore.markSynced(sItem.id, sItem.updated_at);
-                                debug('pull updated: ' + sItem.id);
+                                // If local has newer updated_at (user modified after push), don't overwrite
+                                var lUpdated = lItem.updated_at || '';
+                                if (lUpdated > sTime) {
+                                    debug('pull: local ' + sItem.id + ' is newer, keeping local');
+                                } else {
+                                    sItem.synced_at = sItem.updated_at;
+                                    ReadListStore.upsert(sItem);
+                                    ReadListStore.markSynced(sItem.id, sItem.updated_at);
+                                    debug('pull updated: ' + sItem.id);
+                                }
                             }
                         }
                     }

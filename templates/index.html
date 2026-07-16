@@ -271,8 +271,16 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=2"></script>
-    <script src="/static/js/auth.js?v=2"></script>
-    <script src="/static/js/offline.js?v=1"></script>
+    <script src="/static/js/app.js?v=5"></script>
+    <script src="/static/js/auth.js?v=5"></script>
+    <script src="/static/js/import.js?v=5"></script>
+    <script src="/static/js/offline.js?v=5"></script>
+    <script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/service-worker.js').catch(function(e) {
+            console.warn('SW registration failed:', e);
+        });
+    }
+    </script>
 </body>
 </html>

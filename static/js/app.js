@@ -2178,12 +2178,22 @@ async function loadReadlist() {
 
     // Android: always read from local SQLite
     if (isAndroid() && window.ReadListStore) {
-        var allItems = ReadListStore.query(listname, bookname, author, statusFilter);
-        var total = allItems.length;
-        var items = allItems.slice(offset, offset + limit);
-        var data = { items: items, total: total };
-        renderReadlistTable(data);
-        renderReadlistPagination(total, readlistPage, limit);
+        // Trigger background sync if online (errors are handled internally)
+        if (window.SyncService && typeof navigator !== 'undefined' && navigator.onLine) {
+            try { SyncService.sync(); } catch(e) {}
+        }
+        try {
+            var allItems = ReadListStore.query(listname, bookname, author, statusFilter);
+            var total = allItems.length;
+            var items = allItems.slice(offset, offset + limit);
+            var data = { items: items, total: total };
+            renderReadlistTable(data);
+            renderReadlistPagination(total, readlistPage, limit);
+        } catch(e) {
+            // If local read fails (bridge error), render empty list gracefully
+            renderReadlistTable({ items: [], total: 0 });
+            renderReadlistPagination(0, readlistPage, limit);
+        }
         return;
     }
 
@@ -2612,6 +2622,17 @@ function setupReadlistEvents() {
             var id = editId || (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random()*16|0, v = c=='x'?r:(r&0x3|0x8); return v.toString(16); }));
             var now = new Date().toISOString();
             var existing = editId ? ReadListStore.getById(editId) : null;
+
+            // Auto-assign priority: max existing + 1 (same as server-side logic)
+            if (!editId && (!data.priority || data.priority <= 0)) {
+                var allLocal = ReadListStore.getAll();
+                var maxP = 0;
+                for (var pi = 0; pi < allLocal.length; pi++) {
+                    if (allLocal[pi].priority > maxP) maxP = allLocal[pi].priority;
+                }
+                data.priority = maxP + 1;
+            }
+
             var item = {
                 id: editId || id,
                 listname: data.listname,
@@ -2628,7 +2649,8 @@ function setupReadlistEvents() {
                 format_name: existing ? (existing.format_name||'') : '',
                 on_shelf: existing ? (existing.on_shelf||false) : false,
                 user_id: existing ? (existing.user_id||0) : 0,
-                edition_id: existing ? (existing.edition_id||null) : null
+                edition_id: existing ? (existing.edition_id||null) : null,
+                deleted: existing ? (existing.deleted||false) : false
             };
             ReadListStore.upsert(item);
             closeReadlistModal();
@@ -2686,9 +2708,13 @@ function setupReadlistEvents() {
             e.preventDefault();
             var id = deleteBtn.dataset.id;
             if (!confirm('Удалить запись из списка чтения?')) return;
-            // Android: remove from local store, sync in background
+            // Android: soft delete locally, sync in background
             if (isAndroid() && window.ReadListStore) {
-                ReadListStore.remove(id);
+                var item = ReadListStore.getById(id);
+                if (item) {
+                    item.deleted = true;
+                    ReadListStore.upsert(item);
+                }
                 loadReadlist();
                 loadReadlistNames();
                 if (window.SyncService) SyncService.sync(true);
@@ -2707,7 +2733,6 @@ function setupReadlistEvents() {
                     }
                 } catch (err) { alert('Ошибка: ' + err.message); }
             })();
-            return;
         }
 
         var downloadLink = e.target.closest('.readlist-download-link');

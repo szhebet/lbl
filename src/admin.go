@@ -452,3 +452,54 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, tags)
 	}
 }
+
+// ─── Settings ──────────────────────────────────────────────────
+
+type SettingsData struct {
+	BackupDir string `json:"backup_dir"`
+}
+
+func adminGetSettings(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rows, err := db.Query(`SELECT key, value FROM settings`)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		defer rows.Close()
+
+		settings := SettingsData{}
+		for rows.Next() {
+			var key, value string
+			if err := rows.Scan(&key, &value); err != nil {
+				adminInternalError(c, err)
+				return
+			}
+			switch key {
+			case "backup_dir":
+				settings.BackupDir = value
+			}
+		}
+		c.JSON(http.StatusOK, settings)
+	}
+}
+
+func adminUpdateSettings(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req SettingsData
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат данных"})
+			return
+		}
+
+		_, err := db.Exec(`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+			"backup_dir", req.BackupDir)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	}
+}

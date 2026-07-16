@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -61,7 +62,13 @@ var embeddedMigration25 string
 //go:embed migration_3.0.sql
 var embeddedMigration30 string
 
-const currentDBVersion = "3.0"
+//go:embed migration_3.1.sql
+var embeddedMigration31 string
+
+//go:embed migration_4.0.sql
+var embeddedMigration40 string
+
+const currentDBVersion = "4.0"
 
 type migration struct {
 	Version     string
@@ -115,6 +122,16 @@ var migrations = []migration{
 		Description: "Read list UUID PK + timestamps for offline sync",
 		SQL:         stripSchema(embeddedMigration30),
 	},
+	{
+		Version:     "3.1",
+		Description: "Read list soft delete (deleted BOOLEAN)",
+		SQL:         stripSchema(embeddedMigration31),
+	},
+	{
+		Version:     "4.0",
+		Description: "Settings table and backup infrastructure",
+		SQL:         stripSchema(embeddedMigration40),
+	},
 }
 
 func parseVersion(v string) (major, minor int) {
@@ -137,7 +154,7 @@ func versionGreater(a, b string) bool {
 	return amin > bmin
 }
 
-func runMigrations(db *sql.DB) error {
+func runMigrations(db *sql.DB, cfg *config.Config) error {
 	// Ensure db_version table exists
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS db_version (
 		version     VARCHAR(20) NOT NULL,
@@ -165,6 +182,32 @@ func runMigrations(db *sql.DB) error {
 		return versionGreater(sorted[j].Version, sorted[i].Version)
 	})
 
+	// Check if any pending migrations exist
+	hasPending := false
+	for _, m := range sorted {
+		if m.SQL == "" {
+			continue
+		}
+		if versionGreater(m.Version, currentVer) {
+			hasPending = true
+			break
+		}
+	}
+
+	// Require backup_dir when pending migrations exist
+	if hasPending {
+		backupDir := cfg.Directories.Backup
+		if backupDir == "" {
+			return fmt.Errorf("BACKUP DIRECTORY NOT SET — ABORTING FOR SAFETY.\n" +
+				"Before running migrations, configure [directories] backup_dir in config.toml\n" +
+				"or set the LIBAPP_DIR_BACKUP environment variable.\n" +
+				"Migration would modify the database without a safety backup.")
+		}
+		if err := os.MkdirAll(backupDir, 0755); err != nil {
+			return fmt.Errorf("failed to create backup directory %s: %w", backupDir, err)
+		}
+	}
+
 	// Apply pending migrations
 	applied := 0
 	for _, m := range sorted {
@@ -172,6 +215,14 @@ func runMigrations(db *sql.DB) error {
 			continue
 		}
 		if versionGreater(m.Version, currentVer) {
+			// Create backup before this migration
+			backupFile := filepath.Join(cfg.Directories.Backup,
+				fmt.Sprintf("library_%s_before_%s.sql", currentVer, m.Version))
+			log.Printf("Creating backup: %s", backupFile)
+			if err := createDBBackup(cfg, backupFile); err != nil {
+				return fmt.Errorf("backup failed before migration %s: %w", m.Version, err)
+			}
+
 			log.Printf("Running migration: %s — %s", m.Version, m.Description)
 			_, err := db.Exec(m.SQL)
 			if err != nil {
@@ -183,6 +234,8 @@ func runMigrations(db *sql.DB) error {
 				return fmt.Errorf("failed to update version after migration %s: %w", m.Version, err)
 			}
 			applied++
+
+			currentVer = m.Version
 		}
 	}
 
@@ -190,6 +243,24 @@ func runMigrations(db *sql.DB) error {
 		log.Printf("DB migration complete: %d script(s) applied", applied)
 	} else {
 		log.Printf("DB is up to date (version %s)", currentVer)
+	}
+	return nil
+}
+
+func createDBBackup(cfg *config.Config, filePath string) error {
+	cmd := exec.Command("pg_dump",
+		"-h", cfg.Database.Host,
+		"-p", strconv.Itoa(cfg.Database.Port),
+		"-U", cfg.Database.User,
+		"-d", cfg.Database.Name,
+		"-f", filePath,
+		"--no-owner",
+		"--no-privileges",
+	)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+cfg.Database.Password)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump failed: %w\nOutput: %s", err, string(output))
 	}
 	return nil
 }
@@ -569,7 +640,7 @@ func main() {
 
 	log.Println("Connected to database")
 
-	if err := runMigrations(db); err != nil {
+	if err := runMigrations(db, cfg); err != nil {
 		log.Fatal("Migration failed: ", err)
 	}
 
@@ -700,13 +771,29 @@ func main() {
 		admin.PUT("/tags/:id", adminUpdateTag(db))
 		admin.DELETE("/tags/:id", adminDeleteTag(db))
 		admin.GET("/genres", adminGetGenres(db))
+		admin.GET("/settings", adminGetSettings(db))
+		admin.PUT("/settings", adminUpdateSettings(db))
 	}
 
-	// Serve static files
+	// Serve static files with cache-busting headers for JS
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static/js/") || strings.HasPrefix(c.Request.URL.Path, "/static/css/") || c.Request.URL.Path == "/" || c.Request.URL.Path == "/admin" || c.Request.URL.Path == "/service-worker.js" {
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+		}
+		c.Next()
+	})
 	r.Static("/static", "./static")
 
 	// Favicon
 	r.StaticFile("/favicon.ico", "./static/favicon.svg")
+
+	// Service Worker (served at root for default scope "/")
+	r.GET("/service-worker.js", func(c *gin.Context) {
+		c.Header("Service-Worker-Allowed", "/")
+		c.File("./static/service-worker.js")
+	})
 
 	// Serve templates with mobile platform detection
 	mobileTopBarIndex := `<div class="mobile-top-bar">
@@ -3924,6 +4011,9 @@ obs.observe(el,{attributes:true,attributeFilter:['class']});
 </script>`
 
 	return func(c *gin.Context, isAndroid bool) {
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
 		if isAndroid {
 			html := strings.Replace(htmlContent, "</head>", mobileCSS+"\n</head>", 1)
 			html = strings.Replace(html, "<body>", androidBody+"\n    "+mobileTopBar, 1)
