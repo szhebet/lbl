@@ -33,6 +33,7 @@ type DirectoriesConfig struct {
 	Logs      string `toml:"logs"`
 	Templates string `toml:"templates"`
 	Static    string `toml:"static"`
+	Backup    string `toml:"backup"`
 }
 
 type DatabaseConfig struct {
@@ -155,6 +156,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LIBAPP_DIR_STATIC"); v != "" {
 		cfg.Directories.Static = v
+	}
+	if v := os.Getenv("LIBAPP_DIR_BACKUP"); v != "" {
+		cfg.Directories.Backup = v
 	}
 
 	dsn := os.Getenv("LIBAPP_DATABASE_URL")

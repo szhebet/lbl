@@ -1,0 +1,261 @@
+package app.library.twa;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.util.Log;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class ReadListDB extends SQLiteOpenHelper {
+    private static final String TAG = "ReadListDB";
+    private static final String DB_NAME = "readlist.db";
+    private static final int DB_VERSION = 2;
+
+    private static final String TABLE_ITEMS = "readlist_items";
+    private static final String TABLE_QUEUE = "offline_queue";
+
+    public ReadListDB(Context context) {
+        super(context, DB_NAME, null, DB_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        db.execSQL(
+            "CREATE TABLE " + TABLE_ITEMS + " (" +
+            "id TEXT PRIMARY KEY," +
+            "listname TEXT NOT NULL DEFAULT 'default'," +
+            "bookname TEXT NOT NULL DEFAULT ''," +
+            "author TEXT NOT NULL DEFAULT ''," +
+            "priority INTEGER NOT NULL DEFAULT 0," +
+            "author_id INTEGER," +
+            "book_id INTEGER," +
+            "user_id INTEGER NOT NULL DEFAULT 0," +
+            "comment TEXT NOT NULL DEFAULT ''," +
+            "status TEXT NOT NULL DEFAULT 'Не заполнено'," +
+            "deleted INTEGER NOT NULL DEFAULT 0," +
+            "created_at TEXT," +
+            "updated_at TEXT," +
+            "synced_at TEXT," +
+            "format_name TEXT DEFAULT ''," +
+            "on_shelf INTEGER DEFAULT 0," +
+            "edition_id INTEGER" +
+            ")"
+        );
+        db.execSQL(
+            "CREATE TABLE " + TABLE_QUEUE + " (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "operation TEXT NOT NULL," +
+            "item_id TEXT NOT NULL," +
+            "body TEXT," +
+            "created_at TEXT NOT NULL DEFAULT (datetime('now'))" +
+            ")"
+        );
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE " + TABLE_ITEMS + " ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
+    }
+
+    public void replaceAll(String jsonArray) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete(TABLE_ITEMS, null, null);
+            JSONArray arr = new JSONArray(jsonArray);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject item = arr.getJSONObject(i);
+                ContentValues cv = itemToValues(item);
+                db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            db.setTransactionSuccessful();
+        } catch (Exception e) {
+            Log.e(TAG, "replaceAll error: " + e.getMessage());
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    public String queryAll(String listname, String bookname, String author, String statusFilter) {
+        SQLiteDatabase db = getReadableDatabase();
+        List<String> args = new ArrayList<>();
+        StringBuilder sql = new StringBuilder("SELECT * FROM " + TABLE_ITEMS + " WHERE 1=1");
+
+        if (listname != null && !listname.isEmpty()) {
+            sql.append(" AND listname = ?");
+            args.add(listname);
+        }
+        if (bookname != null && !bookname.isEmpty()) {
+            sql.append(" AND bookname LIKE ?");
+            args.add("%" + bookname + "%");
+        }
+        if (author != null && !author.isEmpty()) {
+            sql.append(" AND author LIKE ?");
+            args.add("%" + author + "%");
+        }
+        if (statusFilter != null && !statusFilter.isEmpty()) {
+            String[] statuses = statusFilter.split(",");
+            sql.append(" AND status IN (");
+            for (int i = 0; i < statuses.length; i++) {
+                if (i > 0) sql.append(",");
+                sql.append("?");
+                args.add(statuses[i].trim());
+            }
+            sql.append(")");
+        }
+
+        sql.append(" ORDER BY priority DESC");
+
+        Cursor c = db.rawQuery(sql.toString(), args.toArray(new String[0]));
+        JSONArray result = new JSONArray();
+        while (c.moveToNext()) {
+            JSONObject item = new JSONObject();
+            try {
+                item.put("id", getString(c, "id"));
+                item.put("listname", getString(c, "listname"));
+                item.put("bookname", getString(c, "bookname"));
+                item.put("author", getString(c, "author"));
+                item.put("priority", c.getInt(c.getColumnIndexOrThrow("priority")));
+                item.put("comment", getString(c, "comment"));
+                item.put("status", getString(c, "status"));
+                item.put("deleted", c.getInt(c.getColumnIndexOrThrow("deleted")) != 0);
+                item.put("created_at", getString(c, "created_at"));
+                item.put("updated_at", getString(c, "updated_at"));
+                item.put("synced_at", getString(c, "synced_at"));
+                item.put("format_name", getString(c, "format_name"));
+                item.put("on_shelf", c.getInt(c.getColumnIndexOrThrow("on_shelf")) != 0);
+                if (!c.isNull(c.getColumnIndexOrThrow("user_id")))
+                    item.put("user_id", c.getInt(c.getColumnIndexOrThrow("user_id")));
+                if (!c.isNull(c.getColumnIndexOrThrow("edition_id")))
+                    item.put("edition_id", c.getInt(c.getColumnIndexOrThrow("edition_id")));
+                if (!c.isNull(c.getColumnIndexOrThrow("author_id")))
+                    item.put("author_id", c.getInt(c.getColumnIndexOrThrow("author_id")));
+                if (!c.isNull(c.getColumnIndexOrThrow("book_id")))
+                    item.put("book_id", c.getInt(c.getColumnIndexOrThrow("book_id")));
+                result.put(item);
+            } catch (Exception e) {
+                Log.e(TAG, "Error reading row: " + e.getMessage());
+            }
+        }
+        c.close();
+        return result.toString();
+    }
+
+    public void upsertItem(String jsonString) {
+        try {
+            JSONObject item = new JSONObject(jsonString);
+            ContentValues cv = itemToValues(item);
+            SQLiteDatabase db = getWritableDatabase();
+            db.insertWithOnConflict(TABLE_ITEMS, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        } catch (Exception e) {
+            Log.e(TAG, "upsertItem error: " + e.getMessage());
+        }
+    }
+
+    public void deleteItem(String id) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete(TABLE_ITEMS, "id = ?", new String[]{id});
+    }
+
+    public void clearAll() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete(TABLE_ITEMS, null, null);
+    }
+
+    public void enqueue(String operation, String itemId, String body) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("operation", operation);
+        cv.put("item_id", itemId);
+        cv.put("body", body);
+        db.insert(TABLE_QUEUE, null, cv);
+    }
+
+    public void enqueueDelete(String itemId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete(TABLE_ITEMS, "id = ?", new String[]{itemId});
+        ContentValues cv = new ContentValues();
+        cv.put("operation", "delete");
+        cv.put("item_id", itemId);
+        db.insert(TABLE_QUEUE, null, cv);
+    }
+
+    public String getPendingQueue() {
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = db.rawQuery("SELECT * FROM " + TABLE_QUEUE + " ORDER BY id ASC", null);
+        JSONArray result = new JSONArray();
+        while (c.moveToNext()) {
+            JSONObject entry = new JSONObject();
+            try {
+                entry.put("id", c.getInt(c.getColumnIndexOrThrow("id")));
+                entry.put("operation", getString(c, "operation"));
+                entry.put("item_id", getString(c, "item_id"));
+                entry.put("body", getString(c, "body"));
+                entry.put("created_at", getString(c, "created_at"));
+                result.put(entry);
+            } catch (Exception e) {
+                Log.e(TAG, "Error reading queue: " + e.getMessage());
+            }
+        }
+        c.close();
+        return result.toString();
+    }
+
+    public int getPendingCount() {
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM " + TABLE_QUEUE, null);
+        int count = 0;
+        if (c.moveToFirst()) count = c.getInt(0);
+        c.close();
+        return count;
+    }
+
+    public void clearQueue() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete(TABLE_QUEUE, null, null);
+    }
+
+    public void dequeue(int queueId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete(TABLE_QUEUE, "id = ?", new String[]{String.valueOf(queueId)});
+    }
+
+    private ContentValues itemToValues(JSONObject item) throws Exception {
+        ContentValues cv = new ContentValues();
+        cv.put("id", item.optString("id", ""));
+        cv.put("listname", item.optString("listname", "default"));
+        cv.put("bookname", item.optString("bookname", ""));
+        cv.put("author", item.optString("author", ""));
+        cv.put("priority", item.optInt("priority", 0));
+        cv.put("comment", item.optString("comment", ""));
+        cv.put("status", item.optString("status", "Не заполнено"));
+        cv.put("deleted", item.optBoolean("deleted", false) ? 1 : 0);
+        cv.put("created_at", item.optString("created_at"));
+        cv.put("updated_at", item.optString("updated_at"));
+        cv.put("synced_at", item.optString("synced_at"));
+        cv.put("format_name", item.optString("format_name", ""));
+        cv.put("user_id", item.optInt("user_id", 0));
+        if (item.has("author_id") && !item.isNull("author_id"))
+            cv.put("author_id", item.getInt("author_id"));
+        if (item.has("book_id") && !item.isNull("book_id"))
+            cv.put("book_id", item.getInt("book_id"));
+        if (item.has("edition_id") && !item.isNull("edition_id"))
+            cv.put("edition_id", item.getInt("edition_id"));
+        cv.put("on_shelf", item.optBoolean("on_shelf", false) ? 1 : 0);
+        return cv;
+    }
+
+    private String getString(Cursor c, String col) {
+        int idx = c.getColumnIndexOrThrow(col);
+        return c.isNull(idx) ? "" : c.getString(idx);
+    }
+}

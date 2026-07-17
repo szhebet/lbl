@@ -4,21 +4,67 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Book icon for launcher -->
     <group
-        android:translateX="24"
-        android:translateY="18">
+        android:translateX="17"
+        android:translateY="24">
+        <!-- Left cover -->
         <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M8,10h44v44h-44z" />
+            android:fillColor="#555"
+            android:pathData="M4,14 L22,17 L22,51 L4,46 Z" />
+        <!-- Right cover -->
         <path
-            android:fillColor="#3498DB"
-            android:pathData="M10,12h40v36h-40z" />
+            android:fillColor="#555"
+            android:pathData="M42,14 L24,17 L24,51 L42,46 Z" />
+        <!-- Spine -->
         <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M16,20h28v2h-28zM16,26h28v2h-28zM16,32h20v2h-20z" />
+            android:fillColor="#444"
+            android:pathData="M22,15.5 h3 v36 h-3 z" />
+        <!-- Left pages -->
         <path
-            android:fillColor="#2ECC71"
-            android:pathData="M10,48l10,-8l8,6l12,-12l10,8v6h-40z" />
+            android:fillColor="#e8e8e8"
+            android:alpha="0.9"
+            android:pathData="M5.5,15.5 L21.5,18.5 L21.5,49.5 L5.5,45 Z" />
+        <!-- Right pages -->
+        <path
+            android:fillColor="#e8e8e8"
+            android:alpha="0.9"
+            android:pathData="M40.5,15.5 L24.5,18.5 L24.5,49.5 L40.5,45 Z" />
+        <!-- Page lines left -->
+        <path
+            android:strokeColor="#c0c0c0"
+            android:strokeWidth="0.4"
+            android:pathData="M8,23 L18,24.5 M8,28 L18,29.5 M8,33 L18,34.5 M8,38 L18,39.5" />
+        <!-- Page lines right -->
+        <path
+            android:strokeColor="#c0c0c0"
+            android:strokeWidth="0.4"
+            android:pathData="M27.5,24.5 L37.5,23 M27.5,29.5 L37.5,28 M27.5,34.5 L37.5,33" />
+        <!-- Bookmark -->
+        <path
+            android:fillColor="#888"
+            android:pathData="M23,17 L23,42 L21.5,39.5 L20,42 L20,17 Z" />
+        <!-- Pen shaft (vertical) -->
+        <path
+            android:fillColor="#999"
+            android:strokeColor="#777"
+            android:strokeWidth="0.3"
+            android:pathData="M54,18 L59,18 L57,54 L55,54 Z" />
+        <!-- Pen nib -->
+        <path
+            android:fillColor="#444"
+            android:strokeColor="#222"
+            android:strokeWidth="0.3"
+            android:pathData="M54,18 L59,18 L56.5,8 Z" />
+        <!-- Ink slit on nib -->
+        <path
+            android:strokeColor="#333"
+            android:strokeWidth="0.5"
+            android:pathData="M56.5,8 L56.5,15" />
+        <!-- Pen band / ferrule -->
+        <path
+            android:fillColor="#888"
+            android:strokeColor="#666"
+            android:strokeWidth="0.3"
+            android:pathData="M54,18 h5 v2.5 h-5 z" />
     </group>
 </vector>

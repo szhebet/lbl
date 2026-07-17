@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>Домашняя библиотека</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+        .mobile-top-bar { display: flex; align-items: center; background: #2c3e50; color: #fff; padding: 8px 12px; position: sticky; top: 0; z-index: 100; }
+        .mobile-user-btn { background: none; border: 1px solid #555; color: #fff; font-size: 18px; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+        .mobile-user-btn.sync-offline { border-color: #e74c3c; }
+        .offline-banner { background: #e74c3c; color: #fff; padding: 10px 16px; font-size: 14px; display: flex; align-items: center; justify-content: space-between; }
+        .offline-banner .retry-btn { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .content { padding: 12px; max-width: 600px; margin: 0 auto; }
+        h2 { font-size: 16px; margin: 12px 0 8px; color: #555; }
+        .rl-card { background: #fff; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .rl-card-title { font-weight: 600; font-size: 15px; }
+        .rl-card-meta { font-size: 12px; color: #888; margin-top: 4px; }
+        .rl-card-status { font-size: 12px; display: inline-block; padding: 1px 6px; border-radius: 3px; margin-top: 4px; }
+        .status-not-started { background: #eee; color: #666; }
+        .status-reading { background: #d4edda; color: #155724; }
+        .status-finished { background: #cce5ff; color: #004085; }
+        .status-dropped { background: #f8d7da; color: #721c24; }
+        .status-postponed { background: #fff3cd; color: #856404; }
+        .empty { text-align: center; padding: 40px 20px; color: #999; font-size: 14px; }
+        .loading { text-align: center; padding: 40px; color: #999; }
+        .rl-card .rl-card-priority { float: right; color: #aaa; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="mobile-top-bar">
+        <span>Домашняя библиотека</span>
+        <span style="flex:1"></span>
+        <button class="mobile-user-btn sync-offline" id="userBtn">☰</button>
+    </div>
+    <div class="offline-banner" id="offlineBanner">
+        <span>Сервер недоступен — данные из локального хранилища</span>
+        <button class="retry-btn" id="retryBtn">Повторить</button>
+    </div>
+    <div class="content">
+        <h2>Список чтения</h2>
+        <div id="readlistContainer"><div class="loading">Загрузка...</div></div>
+    </div>
+
+    <script>
+    function getBridge() { return window.AndroidReadListDB || null; }
+
+    function loadReadlist() {
+        var container = document.getElementById('readlistContainer');
+        var bridge = getBridge();
+        if (!bridge) {
+            container.innerHTML = '<div class="empty">Нет доступа к локальному хранилищу</div>';
+            return;
+        }
+        try {
+            var raw = bridge.queryAll('', '', '', '');
+            var items = JSON.parse(raw) || [];
+            container.innerHTML = '';
+            if (items.length === 0) {
+                container.innerHTML = '<div class="empty">Нет записей</div>';
+                return;
+            }
+            items.sort(function(a,b) { return (b.priority||0) - (a.priority||0); });
+            items.forEach(function(item) {
+                var card = document.createElement('div');
+                card.className = 'rl-card';
+                var statusClass = 'status-not-started';
+                var statusMap = {'Прочитано':'status-finished','Читаю':'status-reading','Отложил':'status-postponed','Бросил':'status-dropped'};
+                if (statusMap[item.status]) statusClass = statusMap[item.status];
+                var statusText = item.status || 'Не заполнено';
+                var priorityHtml = item.priority ? '<span class="rl-card-priority">#' + item.priority + '</span>' : '';
+                card.innerHTML = '<div class="rl-card-title">' + (priorityHtml || '') + escapeHtml(item.bookname || 'Без названия') + '</div>' +
+                    '<div class="rl-card-meta">' + escapeHtml(item.author || '') + (item.listname ? ' — ' + escapeHtml(item.listname) : '') + '</div>' +
+                    '<span class="rl-card-status ' + statusClass + '">' + escapeHtml(statusText) + '</span>';
+                container.appendChild(card);
+            });
+        } catch(e) {
+            container.innerHTML = '<div class="empty">Ошибка загрузки: ' + escapeHtml(e.message) + '</div>';
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+
+    document.getElementById('retryBtn').addEventListener('click', function() {
+        document.getElementById('offlineBanner').innerHTML = '<span>Подключение...</span>';
+        // Try to reload the main page (SW cache or server)
+        window.location.href = '/';
+    });
+
+    document.addEventListener('DOMContentLoaded', loadReadlist);
+    </script>
+</body>
+</html>

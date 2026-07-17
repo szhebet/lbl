@@ -17,6 +17,7 @@ sessions can verify changes immediately.
 ```
 lbl/
 ├── bookarch/         # Book archive files (ZIP format, one per edition)
+├── backup/           # DB backups (created before migrations, kept on failure)
 ├── certres/          # SSL certificates + generation scripts
 │   ├── generate-certs.sh
 │   ├── generate-keystore.sh
@@ -125,6 +126,16 @@ See `config.toml.example` for all options.
 | `LIBAPP_DIR_*` | directories.* |
 | `LIBAPP_DB_*` | database.* |
 | `LIBAPP_LLM_*` | llm.* |
+
+### Config Sections
+
+| Section | Fields | Description |
+|---------|--------|-------------|
+| `[server]` | `port`, `bind`, `enable_delete`, `log_level` | HTTP server settings |
+| `[server]` | `jwt_secret`, `token_ttl` | JWT secret key (auto-generated if empty), token TTL in hours |
+| `[directories]` | `bookarch`, `temp`, `logs`, `templates`, `static`, `backup` | File system paths |
+| `[database]` | `host`, `port`, `name`, `user`, `password`, `sslmode`, `pgdata` (all-in-one) | PostgreSQL connection |
+| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `timeout` | LLM endpoint settings |
 
 ## API Endpoints
 
@@ -294,6 +305,7 @@ Three tabs:
 - User management: create, edit role, delete users
 - All catalog CRUD operations
 - Settings: LLM prompt config
+- Settings: backup_dir path (read from DB, synced from config)
 - LLM metadata refresh for all books
 
 ## LLM Book Recognition
@@ -546,9 +558,54 @@ timeout = 60    # Seconds
   - `MainActivity.java` reads URL and cert password from `Config.java`
   - `build.gradle` reads app identity and keystore from `build-extras.gradle`
   - All generated files cleaned up after build; `.apk.conf` in `.gitignore`, `.apk.conf.example` provided
+- UUID migration for readlist (migration 3.0):
+  - `read_list.id` SERIAL → UUID PK
+  - `updated_at` / `synced_at` TIMESTAMP columns
+  - All Go CRUD handlers updated for UUID + timestamps
+  - All tests migrated to UUID
+- Android offline SQLite bridge (`src_android/…/ReadListDB.java`):
+  - `readlist_items` table mirroring PostgreSQL schema
+  - `offline_queue` table for pending mutations
+  - CRUD methods: `replaceAll`, `queryAll`, `upsertItem`, `deleteItem`, `clearAll`
+  - Queue management: `enqueue`, `enqueueDelete`, `getPendingQueue`, `getPendingCount`, `clearQueue`, `dequeue`
+- `@JavascriptInterface` bridge (`MainActivity.java`):
+  - `AndroidReadListDB` object exposing all ReadListDB methods to JS
+- JS offline layer (`static/js/offline.js`):
+  - `ReadListStore` — in-memory cache backed by Android SQLite
+  - `OfflineQueue` — mutations queued locally, stored in SQLite
+  - `SyncService` — push pending mutations → pull full server state
+- Frontend offline support (`static/js/app.js`, `templates/index.html`):
+  - `loadReadlist()` falls back to `ReadListStore.query()` when offline
+  - `loadReadlistNames()` falls back to `ReadListStore` cache
+  - `openEditReadlistModal()` uses `ReadListStore.getById()` when offline
+  - Create/edit form submits via `ReadListStore.upsert()` + `OfflineQueue.enqueue()` when offline
+  - Delete via `ReadListStore.remove()` + `OfflineQueue.enqueueDelete()`
+  - `setReadlistItemStatus()` updates locally when offline
+  - Online/offline detection with status indicators
+  - Sync button + pending count badge in readlist filters
+  - Auto-sync on reconnect or app start
+- Полная переработка офлайн-синхронизации:
+  - Локальная SQLite = источник истины для отображения
+  - Фоновая асинхронная синхронизация Push (dirty по updated_at > synced_at) + Pull
+  - User-scoping: синхронизация только для текущего пользователя, очистка чужих данных при смене УЗ
+  - Индикация: #mobileUserBtn (зелёный/жёлтый/красный) + счётчик dirty + кнопка синхронизации
+  - `sync_task_spec.md` — полная спецификация алгоритма
+  - `auth-changed` event для повторного init при логине/логауте
+- **Серверный конфликт-детектор + тест** (`src/reading.go`):
+  - Добавлено поле `UpdatedAt` в `CreateReadListRequest`
+  - `updateReadListItem` проверяет: если `server.updated_at > client.updated_at` → 409 с `server_item` в теле
+  - `isServerNewer()` — парсит оба timestamps как `time.Time` с поддержкой PG и RFC3339 форматов
+  - `offline.js`: при 409 применяет серверное состояние через `applyServerItem`
+  - `TestReadListSyncConflictServerNewer` — полный цикл: create → server-update → stale push → 409 → GET подтверждает серверную версию
+- **Статика встроена в APK** (`MainActivity.java`, `build-android.sh`, `auth.js`):
+  - `build-android.sh`: копирует `static/css/*.css`, `static/js/*.js`, `templates/*.html`, `service-worker.js`, `favicon.*` в `assets/www/` перед сборкой
+  - `shouldInterceptRequest()` перехватывает запросы к `/`, `/admin`, `/static/*`, `/service-worker.js`, `/favicon.*` и отдаёт из APK-ассетов (без сети)
+  - Мобильные инъекции (CSS-линк, mobile-top-bar, Android JS) применяются на лету в Java — полный аналог серверной обработки
+  - При логине `auth.js` вызывает `AndroidTokenBridge.setForceNetworkRefresh(true)` и перезагружает страницу — все файлы загружаются свежими с сервера
+  - После загрузки флаг сбрасывается, последующие страницы снова идут из ассетов
 
 ### In Progress
-- (none)
+- *(none)*
 
 ### Blocked
 - `.rar` files in example (10_the_active_side_of_infinity.rar, 11_the_wheel_of_time.rar) are not supported – no RAR extraction; user has not requested this.
@@ -559,6 +616,36 @@ timeout = 60    # Seconds
 - Double-ZIP bug fix ensures the stored archive in `bookarch/` contains the actual book file instead of a nested ZIP.
 - nginx is the recommended HTTPS reverse proxy for production; the Docker override (`docker-compose-nginx.yml`) adds it without modifying the base compose file.
 - Session cookie Secure flag is hardcoded to `false` — acceptable for local/RPi deployment, but should be made dynamic for production.
+
+### APK Asset Duplication
+
+The offline fallback page `src_android/app/src/main/assets/www/offline.html` is a **self-contained copy of the SPA with inlined CSS/JS**. It is used only as a last resort when the server is unreachable AND the Service Worker has no cached page (first visit).
+
+**All static files (`static/css/`, `static/js/`, `templates/`, `service-worker.js`, `favicon.*`) are now bundled into the APK assets** at build time by `build-android.sh`. The `shouldInterceptRequest` in `MainActivity.java` serves them directly from the APK — no network needed. On login, `forceNetworkRefresh` flag causes one fresh load from server, then falls back to assets for subsequent pages.
+
+**When changing static files, rebuild the APK** — changes won't be visible until a new APK is installed OR the user logs in (which trigger a server-side refresh):
+
+| What changed | Need to update offline.html? |
+|---|---|
+| CSS styling (colors, layout, card design) | **Yes** — inline styles in `offline.html` should match |
+| Readlist card structure | **Yes** — HTML structure in `offline.html` is hardcoded |
+| JS bridge API (`AndroidReadListDB.*`) | **Yes** — `offline.html` calls `bridge.queryAll()` directly |
+| Go template changes (e.g., `index.html`) | Only if it affects mobile readlist tab layout |
+| New API endpoints | No — offline page doesn't call API |
+| Backend logic | No |
+
+To update, edit `src_android/app/src/main/assets/www/offline.html` to match the new UI, then rebuild the APK via `./build-android.sh`.
+
+### DB Migration + Backup Policy
+
+**Before every migration, the application creates a `pg_dump` backup** in the configured `backup_dir`.
+
+- `backup_dir` must be set in `config.toml` (`[directories] backup`) or via `LIBAPP_DIR_BACKUP`.
+- If `backup_dir` is empty and pending migrations exist, the application **refuses to start** with a clear error message.
+- Backup filename format: `library_{currentVersion}_before_{targetVersion}.sql`
+- On successful migration, the backup file is **kept** (not deleted) for safety.
+- To force a manual backup: run `pg_dump` directly or use the application's backup mechanism.
+- The backup path is also stored in the `settings` DB table and visible in the admin panel (Settings tab).
 
 ## Next Steps
 - Add graceful shutdown (SIGTERM/SIGINT handler) to avoid connection drops on restart.

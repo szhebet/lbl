@@ -8,9 +8,11 @@ WORKDIR /app
 # Copy source code
 COPY src_android/ .
 
-# Build APKs (uses system Gradle from SDK image)
+# Build APKs with Gradle cache mount (prevents re-download on every build)
 ENV GRADLE_OPTS="-Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000"
-RUN gradle assembleDebug assembleRelease --no-daemon --no-build-cache -x lint -x lintVitalAnalyzeRelease -x lintVitalReportRelease -x lintVitalRelease
+RUN --mount=type=cache,target=/root/.gradle/caches,sharing=shared \
+    --mount=type=cache,target=/root/.gradle/wrapper,sharing=shared \
+    gradle assembleDebug assembleRelease --no-daemon -x lint -x lintVitalAnalyzeRelease -x lintVitalReportRelease -x lintVitalRelease
 
 # Extract APKs
 RUN mkdir -p /output && \
