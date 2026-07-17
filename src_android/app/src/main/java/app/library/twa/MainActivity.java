@@ -186,10 +186,15 @@ public class MainActivity extends Activity {
                     // Load offline page from bundled assets (works without network)
                     try {
                         java.io.InputStream is = getAssets().open("www/offline.html");
-                        byte[] buffer = new byte[is.available()];
-                        is.read(buffer);
+                        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+                        byte[] data = new byte[1024];
+                        int nRead;
+                        while ((nRead = is.read(data, 0, data.length)) != -1) {
+                            buffer.write(data, 0, nRead);
+                        }
+                        buffer.flush();
                         is.close();
-                        String html = new String(buffer, "UTF-8");
+                        String html = buffer.toString("UTF-8");
                         view.loadDataWithBaseURL("file:///android_asset/www/", html, "text/html", "UTF-8", null);
                         appendDebug("Loaded offline page from assets");
                         offlineMode = true;
