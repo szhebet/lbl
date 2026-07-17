@@ -650,6 +650,12 @@ body.android .readlist-filters {
     flex-direction: column;
 }
 
+body.android #readlistFilterBtn {
+    max-width: 30vw;
+    width: 100%;
+    min-width: 0;
+}
+
 body.android .back-link {
     font-size: 14px;
     padding: 8px 0;

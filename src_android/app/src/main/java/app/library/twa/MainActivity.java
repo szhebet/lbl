@@ -411,12 +411,6 @@ public class MainActivity extends Activity {
                 return true;
             }
 
-            @Override
-            public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
-                appendDebug("JS CONFIRM: " + message);
-                // Let the default dialog show (do NOT auto-confirm)
-                return false;
-            }
         });
 
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");

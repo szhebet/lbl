@@ -3989,9 +3989,11 @@ updateMobileUser();
 setInterval(updateMobileUser,1000);
 document.getElementById('mobileUserBtn')?.addEventListener('click',function(){
 if(localStorage.getItem('auth_user')){
+if(confirm('Вы хотите завершить сессию пользователя?')){
 localStorage.removeItem('auth_token');
 localStorage.removeItem('auth_user');
 window.location.reload();
+}
 }else{
 var lb=document.getElementById('loginBtn');
 if(lb)lb.click();
