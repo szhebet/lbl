@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Администрирование — Домашняя библиотека</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link" id="adminBackLink">&larr; Назад к библиотеке</a>
+        <h1 style="margin-bottom:20px">Администрирование</h1>
+
+        <div class="admin-tabs">
+            <button class="admin-tab active" data-tab="users" data-short="П">Пользователи</button>
+            <button class="admin-tab" data-tab="authors" data-short="А">Авторы</button>
+            <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
+            <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
+            <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
+            <span style="flex:1"></span>
+            <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
+            <button class="admin-tab" data-tab="settings" data-short="Н">Настройки</button>
+        </div>
+
+        <div id="tab-users" class="admin-content active">
+            <div class="admin-toolbar">
+                <button id="addUserBtn" class="btn">+ Создать пользователя</button>
+                <input type="text" class="filter-input" id="filter-users" placeholder="Фильтр: имя, email, роль...">
+            </div>
+            <table class="admin-table" id="table-users">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="username">Имя пользователя<span class="sort-arrow"></span></th>
+                    <th data-sort="email">Email<span class="sort-arrow"></span></th>
+                    <th data-sort="role">Роль<span class="sort-arrow"></span></th>
+                    <th data-sort="created_at">Создан<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="usersTableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="tab-authors" class="admin-content">
+            <div class="admin-toolbar">
+                <button id="addAuthorBtn" class="btn">+ Создать автора</button>
+                <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним...">
+            </div>
+            <table class="admin-table" id="table-authors">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="last_name">Фамилия<span class="sort-arrow"></span></th>
+                    <th data-sort="first_name">Имя<span class="sort-arrow"></span></th>
+                    <th data-sort="middle_name">Отчество<span class="sort-arrow"></span></th>
+                    <th data-sort="pseudonym">Псевдоним<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="authorsTableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="tab-books" class="admin-content">
+            <div class="admin-toolbar">
+                <input type="text" id="bookAuthorFilter" class="filter-input" placeholder="Автор...">
+                <input type="text" id="bookTitleFilter" class="filter-input" placeholder="Название...">
+                <input type="text" id="bookGenreFilter" class="filter-input" placeholder="Жанр...">
+                <input type="date" id="bookDateFrom" class="filter-input" style="width:140px">
+                <input type="date" id="bookDateTo" class="filter-input" style="width:140px">
+                <select id="bookStatusFilter" class="filter-input" style="width:140px">
+                    <option value="">Все статусы</option>
+                    <option value="Не заполнено">Не заполнено</option>
+                    <option value="Прочитано">Прочитано</option>
+                    <option value="Читаю">Читаю</option>
+                    <option value="Отложил">Отложил</option>
+                    <option value="Бросил">Бросил</option>
+                </select>
+            </div>
+            <div class="pagination" id="booksPagination"></div>
+            <div id="booksTableContainer"><div class="loading">Загрузка...</div></div>
+            <div class="pagination" id="booksPaginationBottom"></div>
+        </div>
+
+        <div id="tab-genres" class="admin-content">
+            <div class="admin-toolbar">
+                <button id="addGenreBtn" class="btn">+ Создать жанр</button>
+                <input type="text" class="filter-input" id="filter-genres" placeholder="Фильтр: название, родитель...">
+            </div>
+            <table class="admin-table" id="table-genres">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="parent_name">Родитель<span class="sort-arrow"></span></th>
+                    <th data-sort="description">Описание<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="genresTableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="tab-tags" class="admin-content">
+            <div class="admin-toolbar">
+                <button id="addTagBtn" class="btn">+ Создать тег</button>
+                <input type="text" class="filter-input" id="filter-tags" placeholder="Фильтр: название...">
+            </div>
+            <table class="admin-table" id="table-tags">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="color">Цвет<span class="sort-arrow"></span></th>
+                    <th data-sort="description">Описание<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="tagsTableBody"></tbody>
+            </table>
+        </div>
+
+        <div id="tab-import" class="admin-content">
+            <h2>Импорт книг</h2>
+            <div class="admin-toolbar">
+                <button id="showImportProgressBtn" class="btn" style="display:none">Прогресс загрузки</button>
+            </div>
+            <div class="import-section">
+                <h3>Загрузить файл книги</h3>
+                <form id="uploadForm">
+                    <div class="form-group">
+                        <label for="bookFile" style="display:none">Выберите файл (FB2, EPUB, ZIP):</label>
+                        <input type="file" id="bookFile" accept=".fb2,.fb2.zip,.epub,.zip" class="file-input">
+                    </div>
+                    <div id="uploadPreview" class="upload-preview" style="display: none;"></div>
+                    <button type="submit" class="btn">Загрузить</button>
+                </form>
+                <div id="uploadResult" class="upload-result"></div>
+            </div>
+            <div class="import-section">
+                <h3>Импорт из локальной папки</h3>
+                <p style="display:none">Выберите папку с книгами на вашем компьютере:</p>
+                <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
+                <button id="loadBooksBtn" class="btn">Загрузить книги</button>
+            </div>
+            <div class="import-section">
+                <h3>Импорт книг из папки на сервере</h3>
+                <form id="directoryForm">
+                    <div class="form-group">
+                        <label for="directoryPath" style="display:none">Путь к папке:</label>
+                        <input type="text" id="directoryPath" placeholder="/path/to/books" class="directory-input">
+                    </div>
+                    <button type="submit" class="btn">Импортировать все книги</button>
+                </form>
+                <div id="directoryResult" class="upload-result"></div>
+            </div>
+            <div id="importProgressArea" class="import-section" style="display:none"></div>
+        </div>
+
+        <div id="tab-settings" class="admin-content">
+            <h2>Настройки</h2>
+            <form id="settingsForm" class="settings-form">
+                <div class="form-group">
+                    <label for="settingsBackupDir">Путь к папке с бекапами (backup_dir):</label>
+                    <input type="text" id="settingsBackupDir" class="form-input" placeholder="/var/backups/library" style="width:100%;max-width:500px">
+                    <p class="form-help">Директория для автоматического бекапа БД перед миграциями. <br>Задаётся в config.toml <code>[directories] backup</code> или через <code>LIBAPP_DIR_BACKUP</code>.</p>
+                </div>
+                <button type="submit" class="btn">Сохранить</button>
+                <span id="settingsSaveStatus" style="margin-left:12px;color:#888"></span>
+            </form>
+        </div>
+    </div>
+
+    <div id="adminModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="adminModalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeAdminModal()">&times;</button>
+            </div>
+            <form id="adminForm">
+                <div id="adminModalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAdminModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="editForm">
+                <div id="modalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=2"></script>
+    <script src="/static/js/auth.js?v=2"></script>
+    <script src="/static/js/import.js"></script>
+    <script src="/static/js/admin.js?v=2"></script>
+</body>
+</html>

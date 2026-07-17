@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Домашняя библиотека</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="authors" data-short="А">Авторы</button>
+            <button class="tab" data-tab="books" data-short="К">Книги</button>
+            <button class="tab" data-tab="genres" data-short="Ж">Жанры</button>
+            <button class="tab" data-tab="readlist" data-short="Ч">Список чтения</button>
+            <span class="tabs-spacer"></span>
+            <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
+            <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
+        </nav>
+
+        <main>
+            <!-- Вкладка Авторы -->
+            <div id="authors" class="tab-content active">
+                    <div class="filters">
+                        <div class="filter-group">
+                            <input type="text" id="authorFilter" placeholder="Поиск по автору...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookFilter" placeholder="Поиск по книге...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="genreFilter" placeholder="Поиск по жанру...">
+                        </div>
+                    <button id="clearFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
+                    <span class="shelf-link">
+                        <a href="/shelf/">📚 Полка<span class="shelf-count">(0)</span></a>
+                        <button id="addToShelfBtn" class="btn btn-small" title="Добавить на полку">＋</button>
+                        <button id="clearShelfBtn" class="btn btn-small btn-secondary" title="Очистить полку">🗑</button>
+                    </span>
+                </div>
+
+                <div class="pagination" id="authorsPagination"></div>
+                <div class="tree-view" id="authorsTree">
+                    <div class="loading">Загрузка...</div>
+                </div>
+                <div class="pagination" id="authorsPaginationBottom"></div>
+            </div>
+
+            <!-- Вкладка Книги -->
+            <div id="books" class="tab-content">
+                    <div class="filters">
+                        <div class="filter-group">
+                            <input type="text" id="bookAuthorFilter" placeholder="Поиск по автору...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookTitleFilter" placeholder="Поиск по названию...">
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="bookGenreFilter" placeholder="Поиск по жанру...">
+                        </div>
+                        <div class="filter-group">
+                            <select id="bookStatusFilter" class="filter-select">
+                                <option value="">Все статусы</option>
+                                <option value="Не заполнено">Не заполнено</option>
+                                <option value="Прочитано">Прочитано</option>
+                                <option value="Читаю">Читаю</option>
+                                <option value="Отложил">Отложил</option>
+                                <option value="Бросил">Бросил</option>
+                            </select>
+                        </div>
+                    <div class="filter-date-row">
+                        <div class="filter-group">
+                            <label for="bookDateFrom">Дата загрузки с: ДД.ММ.ГГГГ</label>
+                            <input type="date" id="bookDateFrom">
+                        </div>
+                        <div class="filter-group">
+                            <label for="bookDateTo">Дата загрузки по: ДД.ММ.ГГГГ</label>
+                            <input type="date" id="bookDateTo">
+                        </div>
+                        <span class="filter-date-actions">
+                            <button id="clearBookFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
+                        </span>
+                    </div>
+                    <span class="shelf-link">
+                        <a href="/shelf/">📚 Полка<span class="shelf-count">(0)</span></a>
+                        <button id="clearShelfBooksBtn" class="btn btn-small btn-secondary" title="Очистить полку">🗑</button>
+                    </span>
+                </div>
+
+                <div class="pagination" id="booksPagination"></div>
+                <div id="booksTableContainer">
+                    <div class="loading">Загрузка...</div>
+                </div>
+                <div class="pagination" id="booksPaginationBottom"></div>
+            </div>
+
+            <!-- Вкладка Жанры -->
+            <div id="genres" class="tab-content">
+                <div class="filters">
+                    <div class="filter-group">
+                        <input type="text" id="genreNameFilter" placeholder="Поиск по жанру...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="genreAuthorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="genreBookFilter" placeholder="Поиск по книге...">
+                    </div>
+                    <button id="clearGenreFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
+                </div>
+
+                <div class="tree-view" id="genresTree">
+                    <div class="loading">Загрузка...</div>
+                </div>
+            </div>
+
+            <!-- Вкладка Список чтения -->
+            <div id="readlist" class="tab-content">
+                <div class="filters">
+                    <div class="filter-group" style="flex:0 0 auto">
+                        <input type="hidden" id="readlistUserId" value="">
+                        <select id="readlistNameFilter" class="filter-select" style="display:none">
+                            <option value="">Все списки</option>
+                            <option value="default">default</option>
+                        </select>
+                        <input type="hidden" id="readlistStatusFilter" value="">
+                        <button id="readlistFilterBtn" class="btn btn-secondary" title="Фильтр">Все списки</button>
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="readlistBookFilter" placeholder="Поиск по названию...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="readlistAuthorFilter" placeholder="Поиск по автору...">
+                    </div>
+                    <div class="filter-group">
+                        <input type="text" id="readlistCommentFilter" placeholder="Поиск по комментарию...">
+                    </div>
+                    <button id="clearReadlistFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
+                    <button id="createReadlistBtn" class="btn btn-primary" style="margin-left:auto">Создать</button>
+                    <span id="pendingCount" class="pending-count" style="display:none;margin-left:8px;font-size:0.85em"></span>
+                    <button id="syncReadlistBtn" class="btn btn-secondary" style="display:none;margin-left:4px;font-size:0.85em">⟳ Синхр.</button>
+                </div>
+
+                <div class="pagination" id="readlistPagination"></div>
+                <div id="readlistTableContainer">
+                    <div class="loading">Загрузка...</div>
+                </div>
+                <div class="pagination" id="readlistPaginationBottom"></div>
+            </div>
+
+            <!-- Модальное окно расширенной фильтрации списка чтения -->
+            <div id="readlistFilterModal" class="modal" style="display:none">
+                <div class="modal-content" style="max-width:400px">
+                    <div class="modal-header">
+                        <h2>Фильтр списка чтения</h2>
+                        <button class="modal-close close-rlfilter-btn" aria-label="Закрыть">&times;</button>
+                    </div>
+                    <div class="modal-body rl-filter-body">
+                        <div class="rl-filter-section">
+                            <div class="form-group">
+                                <label for="rlFilterListname">Список:</label>
+                                <select id="rlFilterListname" class="filter-select">
+                                    <option value="">Все списки</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Статус:</label>
+                                <div id="rlFilterStatuses">
+                                    <label class="checkbox-label"><input type="checkbox" value="Не заполнено" checked><span class="checkbox-custom"></span> Не заполнено</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Прочитано"><span class="checkbox-custom"></span> Прочитано</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Читаю" checked><span class="checkbox-custom"></span> Читаю</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Отложил" checked><span class="checkbox-custom"></span> Отложил</label>
+                                    <label class="checkbox-label"><input type="checkbox" value="Бросил" checked><span class="checkbox-custom"></span> Бросил</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="rl-filter-section">
+                            <div class="form-group">
+                                <label for="rlFilterBook">Название:</label>
+                                <input type="text" id="rlFilterBook" class="form-input" placeholder="Поиск по названию...">
+                            </div>
+                            <div class="form-group">
+                                <label for="rlFilterAuthor">Автор:</label>
+                                <input type="text" id="rlFilterAuthor" class="form-input" placeholder="Поиск по автору...">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer rl-filter-footer">
+                        <button id="rlFilterClear" class="btn btn-secondary" style="border-color:#d1d5db">Очистить</button>
+                        <button id="rlFilterCancel" class="btn btn-secondary close-rlfilter-btn">Отмена</button>
+                        <button id="rlFilterApply" class="btn btn-primary">Применить</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Модальное окно для редактирования -->
+    <!-- Модальное окно для создания элемента списка чтения -->
+    <div id="readlistModal" class="modal" style="display:none">
+        <div class="modal-content" style="max-width:500px">
+            <div class="modal-header">
+                <h2 id="readlistModalTitle">Новая запись</h2>
+                <button class="modal-close close-readlist-btn">&times;</button>
+            </div>
+            <form id="readlistForm" style="padding:20px">
+                <input type="hidden" id="rlEditId" value="">
+                <div class="form-group">
+                    <label for="rlListname">Список:</label>
+                    <input type="text" id="rlListname" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="rlBookname">Название книги:</label>
+                    <input type="hidden" id="rlBookId" value="">
+                    <input type="text" id="rlBookname" class="form-input" autocomplete="off" placeholder="Начните вводить название...">
+                    <select id="rlBookSelect" class="form-input" size="5" style="margin-top:5px;display:none">
+                        <option value="">— книги не загружены —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rlAuthor">Автор:</label>
+                    <input type="hidden" id="rlAuthorId" value="">
+                    <input type="text" id="rlAuthor" class="form-input" autocomplete="off" placeholder="Начните вводить автора...">
+                    <select id="rlAuthorSelect" class="form-input" size="5" style="margin-top:5px;display:none">
+                        <option value="">— авторы не загружены —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rlPriority">Приоритет:</label>
+                    <input type="number" id="rlPriority" class="form-input" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="rlComment">Комментарий:</label>
+                    <textarea id="rlComment" class="form-input" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="rlStatus">Статус:</label>
+                    <select id="rlStatus" class="filter-select">
+                        <option value="Не заполнено">Не заполнено</option>
+                        <option value="Прочитано">Прочитано</option>
+                        <option value="Читаю">Читаю</option>
+                        <option value="Отложил">Отложил</option>
+                        <option value="Бросил">Бросил</option>
+                    </select>
+                </div>
+                <div class="modal-footer" style="padding:0;border:none;margin-top:15px">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary close-readlist-btn">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактирование</h2>
+                <button class="modal-close close-modal-btn">&times;</button>
+            </div>
+            <form id="editForm">
+                <div id="modalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary close-modal-btn">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=5"></script>
+    <script src="/static/js/auth.js?v=5"></script>
+    <script src="/static/js/import.js?v=5"></script>
+    <script src="/static/js/offline.js?v=5"></script>
+    <script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/service-worker.js').catch(function(e) {
+            console.warn('SW registration failed:', e);
+        });
+    }
+    </script>
+</body>
+</html>

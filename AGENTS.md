@@ -597,9 +597,15 @@ timeout = 60    # Seconds
   - `isServerNewer()` — парсит оба timestamps как `time.Time` с поддержкой PG и RFC3339 форматов
   - `offline.js`: при 409 применяет серверное состояние через `applyServerItem`
   - `TestReadListSyncConflictServerNewer` — полный цикл: create → server-update → stale push → 409 → GET подтверждает серверную версию
+- **Статика встроена в APK** (`MainActivity.java`, `build-android.sh`, `auth.js`):
+  - `build-android.sh`: копирует `static/css/*.css`, `static/js/*.js`, `templates/*.html`, `service-worker.js`, `favicon.*` в `assets/www/` перед сборкой
+  - `shouldInterceptRequest()` перехватывает запросы к `/`, `/admin`, `/static/*`, `/service-worker.js`, `/favicon.*` и отдаёт из APK-ассетов (без сети)
+  - Мобильные инъекции (CSS-линк, mobile-top-bar, Android JS) применяются на лету в Java — полный аналог серверной обработки
+  - При логине `auth.js` вызывает `AndroidTokenBridge.setForceNetworkRefresh(true)` и перезагружает страницу — все файлы загружаются свежими с сервера
+  - После загрузки флаг сбрасывается, последующие страницы снова идут из ассетов
 
 ### In Progress
-- (none)
+- *(none)*
 
 ### Blocked
 - `.rar` files in example (10_the_active_side_of_infinity.rar, 11_the_wheel_of_time.rar) are not supported – no RAR extraction; user has not requested this.
@@ -615,7 +621,9 @@ timeout = 60    # Seconds
 
 The offline fallback page `src_android/app/src/main/assets/www/offline.html` is a **self-contained copy of the SPA with inlined CSS/JS**. It is used only as a last resort when the server is unreachable AND the Service Worker has no cached page (first visit).
 
-**When changing static files (`static/css/`, `static/js/`, `templates/`), check if `offline.html` needs updating:**
+**All static files (`static/css/`, `static/js/`, `templates/`, `service-worker.js`, `favicon.*`) are now bundled into the APK assets** at build time by `build-android.sh`. The `shouldInterceptRequest` in `MainActivity.java` serves them directly from the APK — no network needed. On login, `forceNetworkRefresh` flag causes one fresh load from server, then falls back to assets for subsequent pages.
+
+**When changing static files, rebuild the APK** — changes won't be visible until a new APK is installed OR the user logs in (which trigger a server-side refresh):
 
 | What changed | Need to update offline.html? |
 |---|---|

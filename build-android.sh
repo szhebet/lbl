@@ -68,6 +68,20 @@ ext {
 }
 GRADLE
 
+# ── Step 5.5: Copy static files to APK assets for offline use ──
+echo ""
+echo "--- Copying static files to assets ---"
+mkdir -p src_android/app/src/main/assets/www/static/css
+mkdir -p src_android/app/src/main/assets/www/static/js
+cp static/css/*.css src_android/app/src/main/assets/www/static/css/ 2>/dev/null || true
+cp static/js/*.js src_android/app/src/main/assets/www/static/js/ 2>/dev/null || true
+cp static/favicon.* src_android/app/src/main/assets/www/static/ 2>/dev/null || true
+cp static/service-worker.js src_android/app/src/main/assets/www/ 2>/dev/null || true
+cp templates/index.html src_android/app/src/main/assets/www/
+cp templates/admin.html src_android/app/src/main/assets/www/
+echo "BUILD_$(date +%Y%m%d_%H%M%S)" > src_android/app/src/main/assets/www/VERSION
+echo "  $(ls static/css/*.css static/js/*.js | wc -l) files copied"
+
 # ── Step 6: Build APK in Docker ─────────────────────────────────
 echo ""
 echo "--- Building APK in Docker ---"

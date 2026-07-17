@@ -33,4 +33,5 @@ RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools \
     && yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} \
         "platforms;android-34" \
         "build-tools;34.0.0" \
+        "platform-tools" \
     && rm -rf ${ANDROID_SDK_ROOT}/.temp

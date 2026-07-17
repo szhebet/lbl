@@ -496,10 +496,10 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 		req.Status = "Не заполнено"
 	}
 
-	// Default priority: max existing priority for this user + 1
+	// Default priority: max priority of non-deleted, non-finished items + 1
 	if req.Priority <= 0 {
 		var maxPriority int
-		db.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM read_list WHERE user_id = $1", uid).Scan(&maxPriority)
+		db.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM read_list WHERE user_id = $1 AND deleted = false AND status != 'Прочитано'", uid).Scan(&maxPriority)
 		req.Priority = maxPriority + 1
 	}
 

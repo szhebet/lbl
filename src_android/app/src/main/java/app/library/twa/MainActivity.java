@@ -8,12 +8,17 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
+import android.os.Handler;
 import android.os.Bundle;
 import android.os.Environment;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.security.KeyStore;
 import java.security.Principal;
 import java.security.PrivateKey;
@@ -31,6 +36,7 @@ import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -51,6 +57,83 @@ public class MainActivity extends Activity {
     private ReadListDB readListDB;
     private boolean hasError = false;
     private boolean offlineMode = false;
+    private boolean forceNetworkRefresh = false;
+    private Handler startupTimeoutHandler = new Handler();
+    private Runnable startupTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            appendDebug("Startup: 5s timeout reached, loading offline page");
+            loadOfflinePage();
+        }
+    };
+
+    // ── Static file asset injection (matches Go server's mobile injection) ──
+    private static final String MOBILE_CSS_TAG =
+        "<link rel=\"stylesheet\" href=\"/static/css/mobile.css\">";
+    private static final String ANDROID_BODY =
+        "<body class=\"android\">";
+    private static final String MOBILE_TOP_BAR_INDEX =
+        "<div class=\"mobile-top-bar\">\n" +
+        "    <a href=\"/admin\" class=\"mobile-admin-btn\" title=\"Администрирование\">А</a>\n" +
+        "    <span class=\"mobile-top-spacer\"></span>\n" +
+        "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
+        "</div>";
+    private static final String MOBILE_TOP_BAR_ADMIN =
+        "<div class=\"mobile-top-bar\">\n" +
+        "    <a href=\"/\" class=\"mobile-back-btn\" title=\"Назад к библиотеке\">←</a>\n" +
+        "    <span class=\"mobile-top-title\">Админ</span>\n" +
+        "    <span class=\"mobile-top-spacer\"></span>\n" +
+        "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
+        "</div>";
+    private static final String ANDROID_JS =
+        "<script>\n" +
+        "(function(){\n" +
+        "var a=document.body.classList.contains('android');\n" +
+        "if(!a)return;\n" +
+        "var q=function(s){return document.querySelector(s)};\n" +
+        "var qa=function(s){return document.querySelectorAll(s)};\n" +
+        "function updateMobileUser(){\n" +
+        "var btn=document.getElementById('mobileUserBtn');\n" +
+        "if(!btn)return;\n" +
+        "try{\n" +
+        "var stored=localStorage.getItem('auth_user');\n" +
+        "if(stored){\n" +
+        "var user=JSON.parse(stored);\n" +
+        "if(user&&user.username){\n" +
+        "btn.textContent=user.username.charAt(0).toUpperCase();\n" +
+        "btn.classList.add('logged-in');\n" +
+        "return;\n" +
+        "}\n" +
+        "}\n" +
+        "}catch(e){}\n" +
+        "btn.textContent='\\u2630';\n" +
+        "btn.classList.remove('logged-in');\n" +
+        "}\n" +
+        "window.updateMobileUser=updateMobileUser;\n" +
+        "updateMobileUser();\n" +
+        "setInterval(updateMobileUser,1000);\n" +
+        "document.getElementById('mobileUserBtn')?.addEventListener('click',function(){\n" +
+        "if(localStorage.getItem('auth_user')){\n" +
+        "if(confirm('Вы хотите завершить сессию пользователя?')){\n" +
+        "localStorage.removeItem('auth_token');\n" +
+        "localStorage.removeItem('auth_user');\n" +
+        "window.location.reload();\n" +
+        "}\n" +
+        "}else{\n" +
+        "var lb=document.getElementById('loginBtn');\n" +
+        "if(lb)lb.click();\n" +
+        "}\n" +
+        "});\n" +
+        "['books','tab-books'].forEach(function(tabId){\n" +
+        "var el=document.getElementById(tabId);\n" +
+        "if(!el)return;\n" +
+        "var obs=new MutationObserver(function(){\n" +
+        "if(el.classList.contains('active'))updateMobileUser();\n" +
+        "});\n" +
+        "obs.observe(el,{attributes:true,attributeFilter:['class']});\n" +
+        "});\n" +
+        "})();\n" +
+        "</script>";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,6 +175,9 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(TARGET_URL);
         }
+
+        // Start 5-second startup timeout — if page doesn't start loading, switch to offline
+        startupTimeoutHandler.postDelayed(startupTimeoutRunnable, 5000);
     }
 
     private LinearLayout createDebugPanel() {
@@ -161,11 +247,14 @@ public class MainActivity extends Activity {
                 appendDebug("Loading: " + url);
                 hasError = false;
                 offlineMode = false;
+                startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 appendDebug("Finished: " + url);
+                // Clear force-network flag after page loads → subsequent resources use assets
+                forceNetworkRefresh = false;
                 if (!hasError || offlineMode) {
                     debugPanel.setVisibility(View.GONE);
                 }
@@ -176,6 +265,7 @@ public class MainActivity extends Activity {
                                         WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
                     hasError = true;
+                    startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
                     int code = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
                             ? error.getErrorCode() : -1;
                     CharSequence desc = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
@@ -183,25 +273,7 @@ public class MainActivity extends Activity {
                     String msg = "ERROR [" + code + "]: " + desc
                             + " | url: " + (request != null ? request.getUrl() : "null");
                     appendDebug(msg);
-                    // Load offline page from bundled assets (works without network)
-                    try {
-                        java.io.InputStream is = getAssets().open("www/offline.html");
-                        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-                        byte[] data = new byte[1024];
-                        int nRead;
-                        while ((nRead = is.read(data, 0, data.length)) != -1) {
-                            buffer.write(data, 0, nRead);
-                        }
-                        buffer.flush();
-                        is.close();
-                        String html = buffer.toString("UTF-8");
-                        view.loadDataWithBaseURL("file:///android_asset/www/", html, "text/html", "UTF-8", null);
-                        appendDebug("Loaded offline page from assets");
-                        offlineMode = true;
-                    } catch (java.io.IOException e) {
-                        showError("HTTP Error: " + code + "\n" + desc);
-                        appendDebug("Failed to load offline page: " + e.getMessage());
-                    }
+                    loadOfflinePage();
                 }
             }
 
@@ -271,6 +343,57 @@ public class MainActivity extends Activity {
                     request.cancel();
                 }
             }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                String path = request.getUrl().getPath();
+
+                // When forceNetworkRefresh is true (user just logged in), bypass asset cache
+                if (forceNetworkRefresh) {
+                    return null;
+                }
+
+                // Serve main pages from assets
+                if ("/".equals(path) || path.isEmpty()) {
+                    WebResourceResponse res = serveIndexFromAssets();
+                    if (res != null) return res;
+                }
+                if ("/admin".equals(path)) {
+                    WebResourceResponse res = serveAdminFromAssets();
+                    if (res != null) return res;
+                }
+                // Serve /shelf/ page from assets (it's a simple redirect page, use index)
+                if (path != null && path.startsWith("/shelf/")) {
+                    WebResourceResponse res = serveIndexFromAssets();
+                    if (res != null) return res;
+                }
+
+                // Serve static files from assets
+                if (path != null && path.startsWith("/static/")) {
+                    String assetPath = "www" + path;
+                    String mime = getMimeType(path);
+                    if (mime == null) return null;
+                    WebResourceResponse res = serveFromAssets(assetPath, mime);
+                    if (res != null) return res;
+                }
+
+                // Serve service worker from assets
+                if ("/service-worker.js".equals(path)) {
+                    WebResourceResponse res = serveFromAssets("www/service-worker.js", "application/javascript");
+                    if (res != null) return res;
+                }
+
+                // Serve favicon from assets
+                if ("/favicon.ico".equals(path) || "/favicon.svg".equals(path)) {
+                    String assetPath = "www" + path;
+                    String mime = path.endsWith(".svg") ? "image/svg+xml" : "image/x-icon";
+                    WebResourceResponse res = serveFromAssets(assetPath, mime);
+                    if (res != null) return res;
+                }
+
+                return null; // default: network
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -291,8 +414,8 @@ public class MainActivity extends Activity {
             @Override
             public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
                 appendDebug("JS CONFIRM: " + message);
-                result.confirm();
-                return true;
+                // Let the default dialog show (do NOT auto-confirm)
+                return false;
             }
         });
 
@@ -430,6 +553,12 @@ public class MainActivity extends Activity {
             Log.i(TAG, "Clearing refresh token via JS bridge");
             tokenStore.clearRefreshToken();
         }
+
+        @JavascriptInterface
+        public void setForceNetworkRefresh(boolean force) {
+            Log.i(TAG, "Force network refresh set to: " + force);
+            forceNetworkRefresh = force;
+        }
     }
 
     private class ReadListBridge {
@@ -487,6 +616,102 @@ public class MainActivity extends Activity {
         public void dequeue(int queueId) {
             readListDB.dequeue(queueId);
         }
+    }
+
+    // ── Asset serving helpers ──────────────────────────────────────
+    private void loadOfflinePage() {
+        try {
+            java.io.InputStream is = getAssets().open("www/offline.html");
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            byte[] data = new byte[1024];
+            int nRead;
+            while ((nRead = is.read(data, 0, data.length)) != -1) {
+                buffer.write(data, 0, nRead);
+            }
+            buffer.flush();
+            is.close();
+            String html = buffer.toString("UTF-8");
+            webView.loadDataWithBaseURL("file:///android_asset/www/", html, "text/html", "UTF-8", null);
+            appendDebug("Loaded offline page from assets");
+            offlineMode = true;
+        } catch (java.io.IOException e) {
+            showError("Failed to load offline page");
+            appendDebug("Failed to load offline page: " + e.getMessage());
+        }
+    }
+
+    private WebResourceResponse serveFromAssets(String assetPath, String mimeType) {
+        try {
+            InputStream is = getAssets().open(assetPath);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                Map<String, String> headers = new HashMap<>();
+                headers.put("Cache-Control", "no-cache, no-store, must-revalidate");
+                return new WebResourceResponse(mimeType, "UTF-8", 200, "OK", headers, is);
+            }
+            return new WebResourceResponse(mimeType, "UTF-8", is);
+        } catch (IOException e) {
+            appendDebug("Asset not found: " + assetPath);
+            return null;
+        }
+    }
+
+    private WebResourceResponse serveIndexFromAssets() {
+        try {
+            String html = readAssetToString("www/index.html");
+            html = html.replace("</head>", MOBILE_CSS_TAG + "\n</head>");
+            html = html.replace("<body>", ANDROID_BODY + "\n    " + MOBILE_TOP_BAR_INDEX);
+            html = html.replace("</body>", ANDROID_JS + "\n</body>");
+            InputStream is = new ByteArrayInputStream(html.getBytes("UTF-8"));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                return new WebResourceResponse("text/html", "UTF-8", 200, "OK", null, is);
+            }
+            return new WebResourceResponse("text/html", "UTF-8", is);
+        } catch (IOException e) {
+            appendDebug("Failed to serve index from assets: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private WebResourceResponse serveAdminFromAssets() {
+        try {
+            String html = readAssetToString("www/admin.html");
+            html = html.replace("</head>", MOBILE_CSS_TAG + "\n</head>");
+            html = html.replace("<body>", ANDROID_BODY + "\n    " + MOBILE_TOP_BAR_ADMIN);
+            html = html.replace("</body>", ANDROID_JS + "\n</body>");
+            InputStream is = new ByteArrayInputStream(html.getBytes("UTF-8"));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                return new WebResourceResponse("text/html", "UTF-8", 200, "OK", null, is);
+            }
+            return new WebResourceResponse("text/html", "UTF-8", is);
+        } catch (IOException e) {
+            appendDebug("Failed to serve admin from assets: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private String readAssetToString(String path) throws IOException {
+        BufferedReader reader = new BufferedReader(
+            new InputStreamReader(getAssets().open(path), "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line).append("\n");
+        }
+        reader.close();
+        return sb.toString();
+    }
+
+    private String getMimeType(String path) {
+        if (path == null) return null;
+        if (path.endsWith(".css")) return "text/css";
+        if (path.endsWith(".js")) return "application/javascript";
+        if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".ico")) return "image/x-icon";
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".woff2")) return "font/woff2";
+        if (path.endsWith(".woff")) return "font/woff";
+        return null;
     }
 
     private void setupDebug() {
