@@ -62,8 +62,25 @@ public class MainActivity extends Activity {
     private Runnable startupTimeoutRunnable = new Runnable() {
         @Override
         public void run() {
-            appendDebug("Startup: 5s timeout reached, loading offline page");
-            loadOfflinePage();
+            if (offlineMode) return;
+            appendDebug("Startup: 5s timeout reached, checking page status");
+            webView.evaluateJavascript(
+                "(function(){var b=document.body;if(!b)return false;" +
+                "var hasContent=b.querySelector('.tabs,.tab-content,.container,.loading,.error,.empty,.tree-view,#authorsTree,#booksTableContainer,#readlistTableContainer');" +
+                "return !!hasContent;})()",
+                new android.webkit.ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        if (value != null && value.contains("true")) {
+                            appendDebug("Page has content, keeping current page");
+                            startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                        } else {
+                            appendDebug("Page appears blank, loading offline page");
+                            loadOfflinePage();
+                        }
+                    }
+                }
+            );
         }
     };
 
@@ -247,17 +264,30 @@ public class MainActivity extends Activity {
                 appendDebug("Loading: " + url);
                 hasError = false;
                 offlineMode = false;
-                startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 appendDebug("Finished: " + url);
-                // Clear force-network flag after page loads → subsequent resources use assets
                 forceNetworkRefresh = false;
-                if (!hasError || offlineMode) {
-                    debugPanel.setVisibility(View.GONE);
-                }
+                webView.evaluateJavascript(
+                    "(function(){var b=document.body;if(!b)return false;" +
+                    "var hasContent=b.querySelector('.tabs,.tab-content,.container,.loading,.error,.empty,.tree-view,#authorsTree,#booksTableContainer,#readlistTableContainer');" +
+                    "return !!hasContent;})()",
+                    new android.webkit.ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String value) {
+                            if (value != null && value.contains("true")) {
+                                startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                                if (!hasError || offlineMode) {
+                                    debugPanel.setVisibility(View.GONE);
+                                }
+                            } else {
+                                appendDebug("Page appears blank after load, watchdog will handle");
+                            }
+                        }
+                    }
+                );
             }
 
             @Override
@@ -552,6 +582,21 @@ public class MainActivity extends Activity {
         public void setForceNetworkRefresh(boolean force) {
             Log.i(TAG, "Force network refresh set to: " + force);
             forceNetworkRefresh = force;
+        }
+
+        @JavascriptInterface
+        public void notifyCriticalResourceFailed(String type) {
+            Log.i(TAG, "Critical resource failed: " + type);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (!offlineMode) {
+                        appendDebug("Critical " + type + " resource failed, loading offline page");
+                        startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                        loadOfflinePage();
+                    }
+                }
+            });
         }
     }
 
