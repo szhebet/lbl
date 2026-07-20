@@ -3,8 +3,14 @@ package app.library.twa;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Context;
+import android.content.ActivityNotFoundException;
+import android.content.ContentResolver;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Color;
+import android.provider.DocumentsContract;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
@@ -33,6 +39,7 @@ import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -55,6 +62,10 @@ public class MainActivity extends Activity {
     private TextView debugLog;
     private TokenStore tokenStore;
     private ReadListDB readListDB;
+    private ValueCallback<Uri[]> mUploadMessage;
+    private static final int FILECHOOSER_RESULTCODE = 1001;
+    private static final int FOLDER_PICKER_RESULTCODE = 1002;
+    private String pendingFolderAuthToken;
     private boolean hasError = false;
     private boolean offlineMode = false;
     private boolean forceNetworkRefresh = false;
@@ -62,8 +73,25 @@ public class MainActivity extends Activity {
     private Runnable startupTimeoutRunnable = new Runnable() {
         @Override
         public void run() {
-            appendDebug("Startup: 5s timeout reached, loading offline page");
-            loadOfflinePage();
+            if (offlineMode) return;
+            appendDebug("Startup: 5s timeout reached, checking page status");
+            webView.evaluateJavascript(
+                "(function(){var b=document.body;if(!b)return false;" +
+                "var hasContent=b.querySelector('.tabs,.tab-content,.container,.loading,.error,.empty,.tree-view,#authorsTree,#booksTableContainer,#readlistTableContainer');" +
+                "return !!hasContent;})()",
+                new android.webkit.ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        if (value != null && value.contains("true")) {
+                            appendDebug("Page has content, keeping current page");
+                            startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                        } else {
+                            appendDebug("Page appears blank, loading offline page");
+                            loadOfflinePage();
+                        }
+                    }
+                }
+            );
         }
     };
 
@@ -247,17 +275,30 @@ public class MainActivity extends Activity {
                 appendDebug("Loading: " + url);
                 hasError = false;
                 offlineMode = false;
-                startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 appendDebug("Finished: " + url);
-                // Clear force-network flag after page loads → subsequent resources use assets
                 forceNetworkRefresh = false;
-                if (!hasError || offlineMode) {
-                    debugPanel.setVisibility(View.GONE);
-                }
+                webView.evaluateJavascript(
+                    "(function(){var b=document.body;if(!b)return false;" +
+                    "var hasContent=b.querySelector('.tabs,.tab-content,.container,.loading,.error,.empty,.tree-view,#authorsTree,#booksTableContainer,#readlistTableContainer');" +
+                    "return !!hasContent;})()",
+                    new android.webkit.ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String value) {
+                            if (value != null && value.contains("true")) {
+                                startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                                if (!hasError || offlineMode) {
+                                    debugPanel.setVisibility(View.GONE);
+                                }
+                            } else {
+                                appendDebug("Page appears blank after load, watchdog will handle");
+                            }
+                        }
+                    }
+                );
             }
 
             @Override
@@ -412,15 +453,28 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
-                appendDebug("JS CONFIRM: " + message);
-                // Let the default dialog show (do NOT auto-confirm)
-                return false;
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (mUploadMessage != null) {
+                    mUploadMessage.onReceiveValue(null);
+                    mUploadMessage = null;
+                }
+                mUploadMessage = filePathCallback;
+
+                Intent intent = fileChooserParams.createIntent();
+                try {
+                    startActivityForResult(intent, FILECHOOSER_RESULTCODE);
+                } catch (ActivityNotFoundException e) {
+                    mUploadMessage = null;
+                    return false;
+                }
+                return true;
             }
+
         });
 
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
         webView.addJavascriptInterface(new ReadListBridge(), "AndroidReadListDB");
+        webView.addJavascriptInterface(new FileImportBridge(), "AndroidFileImport");
 
         // Handle file downloads via direct HTTPS connection (trusts self-signed cert)
         webView.setDownloadListener(new DownloadListener() {
@@ -455,6 +509,44 @@ public class MainActivity extends Activity {
                 }).start();
             }
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILECHOOSER_RESULTCODE) {
+            if (mUploadMessage == null) return;
+            Uri[] results = null;
+            if (resultCode == Activity.RESULT_OK) {
+                if (data != null) {
+                    String dataString = data.getDataString();
+                    if (dataString != null) {
+                        results = new Uri[]{Uri.parse(dataString)};
+                    }
+                }
+            }
+            mUploadMessage.onReceiveValue(results);
+            mUploadMessage = null;
+        } else if (requestCode == FOLDER_PICKER_RESULTCODE) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                final Uri treeUri = data.getData();
+                final int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                try {
+                    getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+                } catch (SecurityException e) {
+                    appendDebug("No persistable permission: " + e.getMessage());
+                }
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        importFolderFromTreeUri(treeUri);
+                    }
+                }).start();
+            } else {
+                callJsCallback("{\"error\":\"Folder selection cancelled\"}");
+            }
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
+        }
     }
 
     private void downloadFile(String urlStr, String filename) {
@@ -534,8 +626,185 @@ public class MainActivity extends Activity {
         }
     }
 
-    private class TokenBridge {
+    // ── Folder Import (Android bridge) ──────────────────────────────
+    private void importFolderFromTreeUri(Uri treeUri) {
+        try {
+            final java.util.ArrayList<String> fileUris = new java.util.ArrayList<String>();
+            final java.util.ArrayList<String> fileNames = new java.util.ArrayList<String>();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                enumerateFiles(treeUri, treeUri, fileUris, fileNames);
+            }
+
+            if (fileUris.isEmpty()) {
+                callJsCallback("{\"error\":\"В выбранной папке не найдены книги\"}");
+                return;
+            }
+
+            uploadFilesToServer(fileUris, fileNames);
+        } catch (Exception e) {
+            appendDebug("Folder import error: " + e.getMessage());
+            String err = e.getMessage();
+            if (err == null) err = "Unknown error";
+            callJsCallback("{\"error\":\"" + err.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}");
+        }
+    }
+
+    @android.annotation.TargetApi(21)
+    private void enumerateFiles(Uri treeUri, Uri dirUri, java.util.ArrayList<String> fileUris, java.util.ArrayList<String> fileNames) {
+        String dirDocId = DocumentsContract.getTreeDocumentId(dirUri);
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dirDocId);
+        Cursor cursor = null;
+        try {
+            cursor = getContentResolver().query(childrenUri,
+                    new String[]{
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    }, null, null, null);
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String docId = cursor.getString(0);
+                    String name = cursor.getString(1);
+                    String mimeType = cursor.getString(2);
+                    if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType)) {
+                        Uri subDirUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                        enumerateFiles(treeUri, subDirUri, fileUris, fileNames);
+                    } else {
+                        String lower = name.toLowerCase();
+                        if (lower.endsWith(".fb2") || lower.endsWith(".epub") ||
+                            lower.endsWith(".pdf") || lower.endsWith(".doc") ||
+                            lower.endsWith(".docx") || lower.endsWith(".zip") ||
+                            lower.endsWith(".fb2.zip")) {
+                            Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                            fileUris.add(fileUri.toString());
+                            fileNames.add(name);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            appendDebug("Enumerate error: " + e.getMessage());
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+    }
+
+    private void uploadFilesToServer(java.util.ArrayList<String> fileUris, java.util.ArrayList<String> fileNames) {
+        java.io.OutputStream os = null;
+        java.io.InputStream is = null;
+        try {
+            String boundary = "Boundary-" + System.currentTimeMillis();
+            String targetUrl = Config.TARGET_URL;
+            if (!targetUrl.endsWith("/")) targetUrl += "/";
+            targetUrl += "api/v1/import/upload";
+
+            java.net.URL url = new java.net.URL(targetUrl);
+            javax.net.ssl.HttpsURLConnection conn = (javax.net.ssl.HttpsURLConnection) url.openConnection();
+            conn.setSSLSocketFactory(createTrustAllSslSocketFactory());
+            conn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+            });
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            if (pendingFolderAuthToken != null) {
+                conn.setRequestProperty("Authorization", "Bearer " + pendingFolderAuthToken);
+            }
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(120000);
+
+            os = conn.getOutputStream();
+            byte[] buffer = new byte[8192];
+            for (int i = 0; i < fileUris.size(); i++) {
+                os.write(("--" + boundary + "\r\n").getBytes());
+                String disposition = "Content-Disposition: form-data; name=\"files\"; filename=\"" + fileNames.get(i) + "\"\r\n";
+                os.write(disposition.getBytes("UTF-8"));
+                os.write("Content-Type: application/octet-stream\r\n\r\n".getBytes());
+
+                is = getContentResolver().openInputStream(Uri.parse(fileUris.get(i)));
+                int n;
+                while ((n = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, n);
+                }
+                is.close();
+                is = null;
+                os.write("\r\n".getBytes());
+            }
+            os.write(("--" + boundary + "--\r\n").getBytes());
+            os.close();
+            os = null;
+
+            int responseCode = conn.getResponseCode();
+            java.io.InputStream responseStream = (responseCode >= 200 && responseCode < 300)
+                ? conn.getInputStream() : conn.getErrorStream();
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(responseStream, "UTF-8"));
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
+            reader.close();
+
+            if (responseCode >= 200 && responseCode < 300) {
+                appendDebug("Folder import upload OK: " + responseCode + " files=" + fileUris.size());
+                callJsCallback(response.toString());
+            } else {
+                appendDebug("Folder import upload failed: " + responseCode + " " + response.toString());
+                callJsCallback("{\"error\":\"HTTP " + responseCode + ": " + response.toString().replace("\\", "\\\\").replace("\"", "\\\"") + "\"}");
+            }
+        } catch (Exception e) {
+            appendDebug("Upload error: " + e.getMessage());
+            String err = e.getMessage();
+            if (err == null) err = "Upload failed";
+            callJsCallback("{\"error\":\"" + err.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}");
+        } finally {
+            try { if (os != null) os.close(); } catch (Exception e) {}
+            try { if (is != null) is.close(); } catch (Exception e) {}
+            pendingFolderAuthToken = null;
+        }
+    }
+
+    private void callJsCallback(final String jsonResult) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                String js = "if(window._folderImportCallback)_folderImportCallback('" +
+                    jsonResult.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n") + "')";
+                webView.evaluateJavascript(js, null);
+            }
+        });
+    }
+
+    private javax.net.ssl.SSLSocketFactory createTrustAllSslSocketFactory() throws Exception {
+        javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
+            new javax.net.ssl.X509TrustManager() {
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+                public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+            }
+        };
+        javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+        sc.init(null, trustAll, new java.security.SecureRandom());
+        return sc.getSocketFactory();
+    }
+
+    private class FileImportBridge {
         @JavascriptInterface
+        public void pickAndImportFolder(final String authToken) {
+            pendingFolderAuthToken = authToken;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(intent, FOLDER_PICKER_RESULTCODE);
+                }
+            });
+        }
+    }
+
+    private class TokenBridge {
         public void storeRefreshToken(String token) {
             Log.i(TAG, "Storing refresh token via JS bridge");
             tokenStore.storeRefreshToken(token);
@@ -558,6 +827,21 @@ public class MainActivity extends Activity {
         public void setForceNetworkRefresh(boolean force) {
             Log.i(TAG, "Force network refresh set to: " + force);
             forceNetworkRefresh = force;
+        }
+
+        @JavascriptInterface
+        public void notifyCriticalResourceFailed(String type) {
+            Log.i(TAG, "Critical resource failed: " + type);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (!offlineMode) {
+                        appendDebug("Critical " + type + " resource failed, loading offline page");
+                        startupTimeoutHandler.removeCallbacks(startupTimeoutRunnable);
+                        loadOfflinePage();
+                    }
+                }
+            });
         }
     }
 

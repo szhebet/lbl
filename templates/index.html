@@ -281,6 +281,20 @@
             console.warn('SW registration failed:', e);
         });
     }
+    if (typeof AndroidTokenBridge !== 'undefined') {
+        var criticalLoaded = { css: false, js: true };
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(function(link) {
+            link.addEventListener('load', function() { criticalLoaded.css = true; });
+            link.addEventListener('error', function() {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('css'); } catch(e) {}
+            });
+        });
+        window.addEventListener('error', function(e) {
+            if (e.filename && e.filename.indexOf('/static/js/') !== -1) {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('js'); } catch(e2) {}
+            }
+        }, true);
+    }
     </script>
 </body>
 </html>

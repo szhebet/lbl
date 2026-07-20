@@ -206,5 +206,19 @@
     <script src="/static/js/auth.js?v=2"></script>
     <script src="/static/js/import.js"></script>
     <script src="/static/js/admin.js?v=2"></script>
+    <script>
+    if (typeof AndroidTokenBridge !== 'undefined') {
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(function(link) {
+            link.addEventListener('error', function() {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('css'); } catch(e) {}
+            });
+        });
+        window.addEventListener('error', function(e) {
+            if (e.filename && e.filename.indexOf('/static/js/') !== -1) {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('js'); } catch(e2) {}
+            }
+        }, true);
+    }
+    </script>
 </body>
 </html>

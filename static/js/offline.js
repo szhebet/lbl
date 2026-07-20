@@ -483,12 +483,22 @@
         }
 
         updatePendingCount();
+
+        // Trigger sync on init if user is logged in (handles page reload after login)
+        if (window.SyncService && !SyncService.isSyncing()) {
+            SyncService.sync();
+        }
     }
 
     // Retry init on auth change
     window.addEventListener('auth-changed', function() {
         debug('auth-changed event received');
         init();
+        // Sync after login
+        var uid = getCurrentUserId();
+        if (uid !== null && window.SyncService && !SyncService.isSyncing()) {
+            setTimeout(function() { SyncService.sync(); }, 500);
+        }
     });
 
     if (document.readyState === 'loading') {
