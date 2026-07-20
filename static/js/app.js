@@ -121,7 +121,32 @@ var startImportPolling = function() {};
 var switchToImportTab = function() {};
 
 document.getElementById('loadBooksBtn')?.addEventListener('click', () => {
-    document.getElementById('folderInput').click();
+    if (typeof AndroidFileImport !== 'undefined') {
+        const token = localStorage.getItem('auth_token');
+        if (!token) { alert('Ошибка авторизации'); return; }
+        window._folderImportCallback = function(json) {
+            try {
+                const data = JSON.parse(json);
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    return;
+                }
+                if (data.started) {
+                    removeSimpleProgress();
+                    showImportProgress('', data.total);
+                    startImportPolling();
+                } else {
+                    alert('Ошибка импорта');
+                }
+            } catch(e) {
+                alert('Ошибка обработки: ' + e.message);
+            }
+        };
+        showSimpleProgress('Выберите папку с книгами...');
+        AndroidFileImport.pickAndImportFolder(token);
+    } else {
+        document.getElementById('folderInput').click();
+    }
 });
 
 document.getElementById('showImportProgressBtn')?.addEventListener('click', () => {
