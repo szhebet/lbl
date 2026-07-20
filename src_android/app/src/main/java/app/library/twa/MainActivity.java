@@ -3,6 +3,7 @@ package app.library.twa;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Context;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
@@ -33,6 +34,7 @@ import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -55,6 +57,8 @@ public class MainActivity extends Activity {
     private TextView debugLog;
     private TokenStore tokenStore;
     private ReadListDB readListDB;
+    private ValueCallback<Uri[]> mUploadMessage;
+    private static final int FILECHOOSER_RESULTCODE = 1001;
     private boolean hasError = false;
     private boolean offlineMode = false;
     private boolean forceNetworkRefresh = false;
@@ -441,6 +445,24 @@ public class MainActivity extends Activity {
                 return true;
             }
 
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (mUploadMessage != null) {
+                    mUploadMessage.onReceiveValue(null);
+                    mUploadMessage = null;
+                }
+                mUploadMessage = filePathCallback;
+
+                Intent intent = fileChooserParams.createIntent();
+                try {
+                    startActivityForResult(intent, FILECHOOSER_RESULTCODE);
+                } catch (ActivityNotFoundException e) {
+                    mUploadMessage = null;
+                    return false;
+                }
+                return true;
+            }
+
         });
 
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
@@ -479,6 +501,26 @@ public class MainActivity extends Activity {
                 }).start();
             }
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILECHOOSER_RESULTCODE) {
+            if (mUploadMessage == null) return;
+            Uri[] results = null;
+            if (resultCode == Activity.RESULT_OK) {
+                if (data != null) {
+                    String dataString = data.getDataString();
+                    if (dataString != null) {
+                        results = new Uri[]{Uri.parse(dataString)};
+                    }
+                }
+            }
+            mUploadMessage.onReceiveValue(results);
+            mUploadMessage = null;
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
+        }
     }
 
     private void downloadFile(String urlStr, String filename) {
