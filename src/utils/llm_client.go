@@ -49,6 +49,9 @@ func RecognizeBook(firstPages, baseURL, model, token, prompt, prompt2 string, ti
 }
 
 func llmCall(firstPages, baseURL, model, token, prompt string, timeout int, debug bool) *LLMResult {
+	if timeout <= 0 {
+		timeout = 60
+	}
 	llmMu.Lock()
 	defer llmMu.Unlock()
 
@@ -81,7 +84,7 @@ func llmCall(firstPages, baseURL, model, token, prompt string, timeout int, debu
 	if debug {
 		curl := fmt.Sprintf("curl -s -X POST '%s' -H 'Content-Type: application/json'", apiURL)
 		if token != "" {
-			curl += fmt.Sprintf(" -H 'Authorization: Bearer %s'", token)
+			curl += " -H 'Authorization: Bearer ***'"
 		}
 		curl += fmt.Sprintf(" -d '%s'", string(body))
 		log.Printf("[LLM DEBUG] curl: %s", curl)
@@ -147,10 +150,11 @@ func splitAuthors(text string) []string {
 		if part == "" {
 			continue
 		}
-		// Detect "Last, First" pattern: both parts are single words
+		// Detect "Last, First" pattern: current part has no space (surname),
+		// name following the comma is the given name (may be multi-word).
 		if !strings.Contains(part, " ") && i+1 < len(parts) {
 			next := strings.TrimSpace(parts[i+1])
-			if !strings.Contains(next, " ") {
+			if next != "" {
 				result = append(result, next+" "+part)
 				i++
 				continue
@@ -164,8 +168,9 @@ func splitAuthors(text string) []string {
 func parseLLMResponse(content string) *LLMResult {
 	result := &LLMResult{}
 
-	authorIdx := strings.Index(content, "AUTHOR:")
-	bookIdx := strings.Index(content, "BOOKNAME:")
+	lowerContent := strings.ToLower(content)
+	authorIdx := strings.Index(lowerContent, "author:")
+	bookIdx := strings.Index(lowerContent, "bookname:")
 
 	if authorIdx >= 0 {
 		start := authorIdx + len("AUTHOR:")
@@ -198,7 +203,8 @@ func parseLLMResponse(content string) *LLMResult {
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "AUTHOR:") {
+			lowerLine := strings.ToLower(line)
+			if strings.HasPrefix(lowerLine, "author:") {
 				author := strings.TrimSpace(strings.TrimPrefix(line, "AUTHOR:"))
 				if author != "" {
 					for _, a := range splitAuthors(author) {
@@ -207,7 +213,7 @@ func parseLLMResponse(content string) *LLMResult {
 						}
 					}
 				}
-			} else if strings.HasPrefix(line, "BOOKNAME:") {
+			} else if strings.HasPrefix(lowerLine, "bookname:") {
 				title := strings.TrimSpace(strings.TrimPrefix(line, "BOOKNAME:"))
 				if title != "" {
 					result.Title = title

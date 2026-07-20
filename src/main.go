@@ -867,6 +867,29 @@ func main() {
 	}
 }
 
+// detectImageType validates the image magic bytes and returns the detected
+// MIME type, or "" if the data is not a supported image.
+func detectImageType(data []byte) string {
+	if len(data) < 12 {
+		return ""
+	}
+	// JPEG: FF D8 FF
+	if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+		return "image/jpeg"
+	}
+	// PNG: 89 50 4E 47 0D 0A 1A 0A
+	if data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+		data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A {
+		return "image/png"
+	}
+	// WEBP: "RIFF" .... "WEBP"
+	if data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+		data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P' {
+		return "image/webp"
+	}
+	return ""
+}
+
 func uploadCover(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
@@ -875,20 +898,21 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
 
-		file, header, err := c.Request.FormFile("cover")
+		file, _, err := c.Request.FormFile("cover")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
 			return
 		}
 		defer file.Close()
 
-		allowedTypes := map[string]bool{
-			"image/jpeg": true,
-			"image/png":  true,
-			"image/webp": true,
+		// Read into memory to validate magic bytes (don't trust Content-Type header).
+		data, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read cover"})
+			return
 		}
-		contentType := header.Header.Get("Content-Type")
-		if !allowedTypes[contentType] {
+		contentType := detectImageType(data)
+		if contentType == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported file type. Use JPEG, PNG, or WebP"})
 			return
 		}
@@ -898,6 +922,13 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 		if err != nil || !editionExists {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Edition not found"})
 			return
+		}
+
+		// Remove any previously stored cover so a changed extension doesn't orphan it.
+		var oldCover sql.NullString
+		db.QueryRow("SELECT cover_path FROM editions WHERE id = $1", editionID).Scan(&oldCover)
+		if oldCover.Valid && oldCover.String != "" {
+			os.Remove(oldCover.String)
 		}
 
 		coverDir := filepath.Join(cfg.Directories.Bookarch, "covers")
@@ -912,21 +943,14 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 		filename := fmt.Sprintf("cover_%s%s", editionID, ext)
 		coverPath := filepath.Join(coverDir, filename)
 
-		out, err := os.Create(coverPath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save cover"})
-			return
-		}
-		defer out.Close()
-
-		_, err = io.Copy(out, file)
-		if err != nil {
+		if err := os.WriteFile(coverPath, data, 0644); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save cover"})
 			return
 		}
 
 		_, err = db.Exec("UPDATE editions SET cover_path = $1 WHERE id = $2", coverPath, editionID)
 		if err != nil {
+			os.Remove(coverPath)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update edition"})
 			return
 		}
@@ -3131,13 +3155,14 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 	if err != nil {
 		return nil, fmt.Errorf("db begin: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		} else {
-			tx.Commit()
-		}
-	}()
+		defer func() {
+			if err != nil {
+				tx.Rollback()
+				os.Remove(destPath)
+			} else {
+				tx.Commit()
+			}
+		}()
 
 	langCode := "eng"
 	if bookInfo != nil && bookInfo.Lang != "" {
@@ -3813,10 +3838,18 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 		tmpDir := cfg.Directories.Temp
 		os.MkdirAll(tmpDir, 0755)
 
+		baseName := fmt.Sprintf("%s_%s_", sanitizeFilename(title), editionID)
 		safeName := fmt.Sprintf("%s_%s.zip", sanitizeFilename(title), editionID)
-		tmpPath := filepath.Join(tmpDir, safeName)
+		tmpFile, err := os.CreateTemp(tmpDir, baseName+"*.zip")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare file"})
+			return
+		}
+		tmpPath := tmpFile.Name()
+		tmpFile.Close()
 
 		if err := copyFile(fullPath, tmpPath); err != nil {
+			os.Remove(tmpPath)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare file"})
 			return
 		}

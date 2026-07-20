@@ -615,6 +615,7 @@ function collectExtendedBookData() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    setupReadlistEvents();
     if (document.body.classList.contains('android')) {
         var readlistTab = document.querySelector('.tab[data-tab="readlist"]');
         if (readlistTab) {
@@ -627,11 +628,12 @@ document.addEventListener('DOMContentLoaded', () => {
             updateOfflineUI();
         }
     }
-    loadAuthors();
+    if (document.getElementById('authorsTree')) {
+        loadAuthors();
+    }
     updateShelfCount();
     fetchConfig();
     setupBooksTableEvents();
-    setupReadlistEvents();
     loadUserBookStatuses();
 });
 

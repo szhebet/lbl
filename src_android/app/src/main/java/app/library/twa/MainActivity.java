@@ -36,7 +36,6 @@ import android.view.ViewGroup;
 import android.webkit.ClientCertRequest;
 import android.webkit.ConsoleMessage;
 import android.webkit.DownloadListener;
-import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
@@ -45,7 +44,6 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
-import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -805,6 +803,7 @@ public class MainActivity extends Activity {
     }
 
     private class TokenBridge {
+        @JavascriptInterface
         public void storeRefreshToken(String token) {
             Log.i(TAG, "Storing refresh token via JS bridge");
             tokenStore.storeRefreshToken(token);

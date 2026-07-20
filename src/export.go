@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"libapp/src/utils"
 )
 
 func exportBooksJSON(db *sql.DB) gin.HandlerFunc {
@@ -132,42 +134,105 @@ func containsComma(s string) bool {
 	return false
 }
 
+func splitAuthorString(s string) []string {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\t'
+	})
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 func importBooksFromJSON(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var data struct {
 			Books []map[string]interface{} `json:"books"`
 		}
-		
+
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 			return
 		}
 
 		imported := 0
+		skipped := 0
 		for _, book := range data.Books {
-			title, _ := book["title"].(string)
-			authors, _ := book["authors"].(string)
-			year, _ := book["year"].(float64)
-			
-			if title == "" {
+			rawTitle, _ := book["title"].(string)
+			if rawTitle == "" {
+				if t, ok := book["original_title"].(string); ok {
+					rawTitle = t
+				}
+			}
+			rawTitle = strings.TrimSpace(rawTitle)
+			if rawTitle == "" {
+				skipped++
 				continue
 			}
 
-			var workID int
-			err := db.QueryRow(`
-				INSERT INTO works (original_title, original_language, first_published, work_type)
-				VALUES ($1, 'eng', $2, 'novel')
-				ON CONFLICT (original_title) DO UPDATE SET original_title = EXCLUDED.original_title
-				RETURNING id
-			`, title, int(year)).Scan(&workID)
+			authorsRaw, _ := book["authors"].(string)
+			year := 0
+			switch v := book["year"].(type) {
+			case float64:
+				year = int(v)
+			case string:
+				fmt.Sscanf(v, "%d", &year)
+			}
+			if year == 0 {
+				switch v := book["first_published"].(type) {
+				case float64:
+					year = int(v)
+				case string:
+					fmt.Sscanf(v, "%d", &year)
+				}
+			}
 
-			if err == nil && authors != "" {
+			normTitle := normalizeQuery(rawTitle)
+
+			// Look up existing work by normalized title, or create it.
+			var workID int
+			err := db.QueryRow(
+				`SELECT id FROM works WHERE lower_original_title = $1 LIMIT 1`,
+				normTitle,
+			).Scan(&workID)
+			if err == sql.ErrNoRows {
+				lang := "eng"
+				if l, ok := book["original_language"].(string); ok && l != "" {
+					lang = l
+				}
+				err = db.QueryRow(`
+					INSERT INTO works (original_title, original_language, first_published, work_type, lower_original_title)
+					VALUES ($1, $2, $3, 'novel', $4)
+					RETURNING id
+				`, rawTitle, lang, nullInt(year), normTitle).Scan(&workID)
+			}
+			if err != nil {
+				skipped++
+				continue
+			}
+
+			// Link authors via persons + work_contributors.
+			for _, name := range splitAuthorString(authorsRaw) {
+				firstName, lastName := utils.NormalizeAuthorName(name)
+				var personID int
+				perr := db.QueryRow(`
+					INSERT INTO persons (first_name, last_name, lower_fio)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (first_name, last_name) DO UPDATE SET last_name = EXCLUDED.last_name
+					RETURNING id
+				`, nullStr(firstName), lastName, normalizeQuery(firstName+" "+lastName)).Scan(&personID)
+				if perr != nil {
+					continue
+				}
 				db.Exec(`
-					INSERT INTO work_authors (work_id, author_id, role)
-					SELECT $1, a.id, 'author'
-					FROM authors a WHERE a.name = $2
+					INSERT INTO work_contributors (work_id, person_id, role)
+					VALUES ($1, $2, 'author')
 					ON CONFLICT DO NOTHING
-				`, workID, authors)
+				`, workID, personID)
 			}
 			imported++
 		}
@@ -175,6 +240,15 @@ func importBooksFromJSON(db *sql.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"message":  "Import completed",
 			"imported": imported,
+			"skipped":  skipped,
 		})
 	}
+}
+
+func nullStr(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func nullInt(i int) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(i), Valid: i != 0}
 }

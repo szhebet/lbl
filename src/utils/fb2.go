@@ -46,6 +46,9 @@ type fb2Description struct {
 		ISBN       string `xml:"isbn"`
 		Publisher  string `xml:"publisher"`
 		Sequence   string `xml:"sequence"`
+		Annotation struct {
+			Inner string `xml:",innerxml"`
+		} `xml:"annotation"`
 	} `xml:"title-info"`
 	DocumentInfo struct {
 		Author struct {
@@ -74,7 +77,7 @@ func ParseFB2(filePath string) (*FB2Book, error) {
 			break
 		}
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("parse fb2 stream: %w", err)
 		}
 
 		if startElement, ok := token.(xml.StartElement); ok {
@@ -85,12 +88,13 @@ func ParseFB2(filePath string) (*FB2Book, error) {
 				}
 
 				book := &FB2Book{
-					Title:    desc.TitleInfo.BookTitle,
-					Lang:     desc.TitleInfo.Lang,
-					Year:     extractYear(desc.TitleInfo.Date),
-					ISBN:     getISBN(desc),
-					Publisher: getPublisher(desc),
-					Genres:   desc.TitleInfo.Genre,
+					Title:      desc.TitleInfo.BookTitle,
+					Lang:       desc.TitleInfo.Lang,
+					Year:       extractYear(desc.TitleInfo.Date),
+					ISBN:       getISBN(desc),
+					Publisher:  getPublisher(desc),
+					Genres:     desc.TitleInfo.Genre,
+					Annotation: stripXMLTags(desc.TitleInfo.Annotation.Inner),
 				}
 
 				for _, author := range desc.TitleInfo.Author {
@@ -149,12 +153,13 @@ func ParseFB2FromBytes(data []byte) (*FB2Book, error) {
 	}
 
 	book := &FB2Book{
-		Title:     desc.TitleInfo.BookTitle,
-		Lang:      desc.TitleInfo.Lang,
-		Year:      extractYear(desc.TitleInfo.Date),
-		ISBN:      getISBN(desc),
-		Publisher: desc.TitleInfo.Publisher,
-		Genres:    desc.TitleInfo.Genre,
+		Title:      desc.TitleInfo.BookTitle,
+		Lang:       desc.TitleInfo.Lang,
+		Year:       extractYear(desc.TitleInfo.Date),
+		ISBN:       getISBN(desc),
+		Publisher:  desc.TitleInfo.Publisher,
+		Genres:     desc.TitleInfo.Genre,
+		Annotation: stripXMLTags(desc.TitleInfo.Annotation.Inner),
 	}
 
 	for _, author := range desc.TitleInfo.Author {
@@ -243,6 +248,25 @@ func extractYear(dateStr string) string {
 		return dateStr[:4]
 	}
 	return dateStr
+}
+
+// stripXMLTags removes XML tags from inner content and collapses whitespace,
+// producing a plain-text annotation from FB2/EPUB markup.
+func stripXMLTags(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+			b.WriteRune(' ')
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func getISBN(desc fb2Description) string {
