@@ -26,6 +26,7 @@ services:
       - LIBAPP_DB_NAME=${LIBAPP_DB_NAME}
       - LIBAPP_DATABASE_URL=host=db port=5432 user=${LIBAPP_DB_USER} password=${LIBAPP_DB_PASSWORD} dbname=${LIBAPP_DB_NAME} sslmode=disable
       - PORT=8080
+      - LIBAPP_DIR_BACKUP=/app/backup
     ports:
       - "9092:8080"
     depends_on:
@@ -35,4 +36,5 @@ services:
       - ${SERVER_BOOKSTORAGE_FOLDER}:/app/bookarch
       - ${SERVER_LOGS}:/app/logs
       - ${SERVER_TMP_FOLDER}:/app/tempfld
+      - ${BACKUP_PATH}:/app/backup
       - ./config.toml:/app/config.toml:ro
