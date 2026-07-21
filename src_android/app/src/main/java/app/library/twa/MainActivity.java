@@ -268,6 +268,28 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             private boolean clientCertLoaded = false;
 
+            // Intercept download URLs to prevent WebView from navigating to binary content
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url != null && url.contains("/download")) {
+                    startDownload(url);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            @android.annotation.TargetApi(Build.VERSION_CODES.N)
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (url != null && url.contains("/download")) {
+                    startDownload(url);
+                    return true;
+                }
+                return false;
+            }
+
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 appendDebug("Loading: " + url);
@@ -402,12 +424,6 @@ public class MainActivity extends Activity {
                     WebResourceResponse res = serveAdminFromAssets();
                     if (res != null) return res;
                 }
-                // Serve /shelf/ page from assets (it's a simple redirect page, use index)
-                if (path != null && path.startsWith("/shelf/")) {
-                    WebResourceResponse res = serveIndexFromAssets();
-                    if (res != null) return res;
-                }
-
                 // Serve static files from assets
                 if (path != null && path.startsWith("/static/")) {
                     String assetPath = "www" + path;
@@ -478,33 +494,19 @@ public class MainActivity extends Activity {
         webView.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                appendDebug("Download: " + url);
-
-                // Extract filename from Content-Disposition
-                final String filename;
-                if (contentDisposition != null) {
-                    String[] parts = contentDisposition.split("filename\\*=UTF-8''");
-                    if (parts.length > 1) {
-                        filename = Uri.decode(parts[1].split(";")[0].trim());
-                    } else {
-                        String[] parts2 = contentDisposition.split("filename=\"");
-                        if (parts2.length > 1) {
-                            filename = parts2[1].split("\"")[0];
-                        } else {
-                            filename = "book.zip";
+                try {
+                    appendDebug("Download: " + url);
+                    final String filename = parseFilename(contentDisposition);
+                    final String downloadUrl = url;
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            downloadFile(downloadUrl, filename);
                         }
-                    }
-                } else {
-                    filename = "book.zip";
+                    }).start();
+                } catch (Exception e) {
+                    appendDebug("Download onDownloadStart error: " + e.getMessage());
                 }
-
-                final String downloadUrl = url;
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        downloadFile(downloadUrl, filename);
-                    }
-                }).start();
             }
         });
     }
@@ -547,36 +549,172 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void startDownload(final String urlStr) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                appendDebug("startDownload: " + urlStr);
+            }
+        });
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                java.io.BufferedInputStream bis = null;
+                java.io.FileOutputStream fos = null;
+                try {
+                    java.net.URL url = new java.net.URL(urlStr);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    if (urlStr.startsWith("https")) {
+                        javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
+                            new javax.net.ssl.X509TrustManager() {
+                                public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+                                public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                                public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                            }
+                        };
+                        javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+                        sc.init(null, trustAll, new java.security.SecureRandom());
+                        javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                        httpsConn.setSSLSocketFactory(sc.getSocketFactory());
+                        httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                            public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                        });
+                    }
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(30000);
+
+                    // Forward auth cookies
+                    String cookies = android.webkit.CookieManager.getInstance().getCookie(urlStr);
+                    if (cookies != null) {
+                        conn.setRequestProperty("Cookie", cookies);
+                    }
+
+                    conn.connect();
+
+                    final int responseCode = conn.getResponseCode();
+                    if (responseCode != 200) {
+                        showErrorUi("Download failed: HTTP " + responseCode);
+                        return;
+                    }
+
+                    String contentDisposition = conn.getHeaderField("Content-Disposition");
+                    String filename = parseFilename(contentDisposition);
+
+                    java.io.File downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                            android.os.Environment.DIRECTORY_DOWNLOADS);
+                    java.io.File outFile = resolveUniqueFile(downloadsDir, filename);
+
+                    bis = new java.io.BufferedInputStream(conn.getInputStream());
+                    fos = new java.io.FileOutputStream(outFile);
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    long total = 0;
+                    while ((bytesRead = bis.read(buffer)) != -1) {
+                        fos.write(buffer, 0, bytesRead);
+                        total += bytesRead;
+                    }
+                    fos.flush();
+
+                    final String msg = "Скачано: " + outFile.getName();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            appendDebug("Download error: " + e.getMessage());
+                            showError("Download error: " + e.getMessage());
+                        }
+                    });
+                } finally {
+                    try { if (bis != null) bis.close(); } catch (Exception e) {}
+                    try { if (fos != null) fos.close(); } catch (Exception e) {}
+                }
+            }
+        }).start();
+    }
+
+    private String parseFilename(String contentDisposition) {
+        if (contentDisposition == null) return "book.zip";
+        // Try filename*=UTF-8'' format first
+        String[] parts = contentDisposition.split("filename\\*=UTF-8''");
+        if (parts.length > 1) {
+            String name = Uri.decode(parts[1].split(";")[0].trim());
+            if (name != null && !name.isEmpty()) return name;
+        }
+        // Fallback to filename="..."
+        String[] parts2 = contentDisposition.split("filename=\"");
+        if (parts2.length > 1) {
+            String name = parts2[1].split("\"")[0];
+            if (name != null && !name.isEmpty()) return name;
+        }
+        return "book.zip";
+    }
+
+    private java.io.File resolveUniqueFile(java.io.File dir, String filename) {
+        java.io.File f = new java.io.File(dir, filename);
+        if (!f.exists()) return f;
+        int dot = filename.lastIndexOf('.');
+        String base = (dot > 0) ? filename.substring(0, dot) : filename;
+        String ext = (dot > 0) ? filename.substring(dot) : "";
+        int counter = 1;
+        while (f.exists()) {
+            f = new java.io.File(dir, base + " (" + counter + ")" + ext);
+            counter++;
+        }
+        return f;
+    }
+
+    private void showErrorUi(final String msg) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                showError(msg);
+            }
+        });
+    }
+
     private void downloadFile(String urlStr, String filename) {
         java.io.BufferedInputStream bis = null;
         java.io.FileOutputStream fos = null;
         try {
-            // Create SSL context that trusts all certificates (self-signed dev cert)
-            javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
-                new javax.net.ssl.X509TrustManager() {
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
-                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
-                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
-                }
-            };
-            javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-            sc.init(null, trustAll, new java.security.SecureRandom());
-
             java.net.URL url = new java.net.URL(urlStr);
-            javax.net.ssl.HttpsURLConnection conn = (javax.net.ssl.HttpsURLConnection) url.openConnection();
-            conn.setSSLSocketFactory(sc.getSocketFactory());
-            conn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
-                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
-            });
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            if (urlStr.startsWith("https")) {
+                javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
+                    new javax.net.ssl.X509TrustManager() {
+                        public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+                        public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                        public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                    }
+                };
+                javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
+                sc.init(null, trustAll, new java.security.SecureRandom());
+                javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                httpsConn.setSSLSocketFactory(sc.getSocketFactory());
+                httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                    public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                });
+            }
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);
+
+            String cookies = android.webkit.CookieManager.getInstance().getCookie(urlStr);
+            if (cookies != null) {
+                conn.setRequestProperty("Cookie", cookies);
+            }
+
             conn.connect();
 
             int responseCode = conn.getResponseCode();
-            appendDebug("Download response: " + responseCode);
             if (responseCode != 200) {
-                showError("Download failed: HTTP " + responseCode);
+                showErrorUi("Download failed: HTTP " + responseCode);
                 return;
             }
 
@@ -605,19 +743,25 @@ public class MainActivity extends Activity {
             }
             fos.flush();
 
-            appendDebug("Download saved: " + outFile.getAbsolutePath() + " (" + total + " bytes)");
-
             // Notify via Toast on UI thread
+            final long savedTotal = total;
+            final String savedPath = outFile.getAbsolutePath();
             final String msg = "Скачано: " + outFile.getName();
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
+                    appendDebug("Download saved: " + savedPath + " (" + savedTotal + " bytes)");
                     Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
                 }
             });
-        } catch (Exception e) {
-            appendDebug("Download error: " + e.getMessage());
-            showError("Download error: " + e.getMessage());
+        } catch (final Exception e) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    appendDebug("Download error: " + e.getMessage());
+                    showError("Download error: " + e.getMessage());
+                }
+            });
         } finally {
             try { if (bis != null) bis.close(); } catch (Exception e) {}
             try { if (fos != null) fos.close(); } catch (Exception e) {}
