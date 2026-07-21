@@ -261,9 +261,11 @@
 
         clearByUser(uid) {
             this._ensureCache();
-            this._cache = this._cache.filter(function(i) { return i.user_id !== uid; });
-            // Remove from SQLite too - we'd need to query all and remove ones with matching user_id
-            // For simplicity, just reload from bridge after save
+            // Purge other users' data on account switch: keep only the
+            // current user's items (and locally-created ones with no user_id yet).
+            this._cache = this._cache.filter(function(i) {
+                return !i.user_id || i.user_id === uid;
+            });
             this._saveToBridge();
             debug('clearByUser: ' + uid);
         }

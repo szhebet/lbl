@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -421,7 +422,7 @@ func getBaseURL(c *gin.Context) string {
 	if c.Request.TLS != nil {
 		scheme = "https"
 	}
-	host := c.Request.Host
+	host := html.EscapeString(c.Request.Host)
 	return scheme + "://" + host
 }
 

@@ -5,25 +5,17 @@
     and allows cleartext for local development.
 -->
 <network-security-config>
-    <!-- Trust the bundled CA certificate for HTTPS -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">192.168.95.200</domain>
-        <trust-anchors>
-            <certificates src="@raw/ca_cert" />
-            <certificates src="system" />
-        </trust-anchors>
-    </domain-config>
-
     <!-- Allow cleartext (HTTP) for local development -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">192.168.95.200</domain>
         <domain includeSubdomains="true">10.0.0.0</domain>
     </domain-config>
 
-    <!-- Base config: trust system certificates -->
+    <!-- Base config: trust system certificates + bundled self-signed CA -->
     <base-config>
         <trust-anchors>
+            <certificates src="@raw/ca_cert" />
             <certificates src="system" />
         </trust-anchors>
     </base-config>

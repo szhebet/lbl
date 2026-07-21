@@ -61,7 +61,7 @@ ext {
     apkCompileSdk = ${APK_COMPILE_SDK}
     apkMinSdk = ${APK_MIN_SDK}
     apkTargetSdk = ${APK_TARGET_SDK}
-    apkKeystorePath = file('${APK_KEYSTORE_PATH}')
+    apkKeystorePath = rootProject.file('${APK_KEYSTORE_PATH}')
     apkKeystorePassword = "${APK_KEYSTORE_PASSWORD}"
     apkKeyAlias = "${APK_KEY_ALIAS}"
     apkKeyPassword = "${APK_KEY_PASSWORD}"

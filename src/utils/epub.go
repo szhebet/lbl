@@ -201,7 +201,7 @@ func parseOPF(data []byte) (*EPUBBook, error) {
 	}
 
 	for _, identifier := range pkg.Metadata.Identifiers {
-		if identifier.Scheme == "ISBN" || strings.EqualFold(identifier.ID, "isbn") {
+		if strings.EqualFold(identifier.Scheme, "ISBN") || strings.EqualFold(identifier.ID, "isbn") {
 			book.ISBN = strings.TrimSpace(identifier.Value)
 			break
 		}
@@ -210,7 +210,13 @@ func parseOPF(data []byte) (*EPUBBook, error) {
 	if book.ISBN == "" {
 		for _, identifier := range pkg.Metadata.Identifiers {
 			val := strings.TrimSpace(identifier.Value)
-			if len(val) == 13 || len(val) == 10 {
+			digits := strings.Map(func(r rune) rune {
+				if r >= '0' && r <= '9' {
+					return r
+				}
+				return -1
+			}, val)
+			if len(digits) == 10 || len(digits) == 13 {
 				book.ISBN = val
 				break
 			}
@@ -231,8 +237,9 @@ func parseOPF(data []byte) (*EPUBBook, error) {
 }
 
 func readZipFileFromCloser(reader *zip.ReadCloser, name string) ([]byte, error) {
+	name = strings.TrimPrefix(name, "./")
 	for _, f := range reader.File {
-		if f.Name == name {
+		if strings.TrimPrefix(f.Name, "./") == name {
 			rc, err := f.Open()
 			if err != nil {
 				return nil, err
@@ -245,8 +252,9 @@ func readZipFileFromCloser(reader *zip.ReadCloser, name string) ([]byte, error) 
 }
 
 func readZipFileFromReader(reader *zip.Reader, name string) ([]byte, error) {
+	name = strings.TrimPrefix(name, "./")
 	for _, f := range reader.File {
-		if f.Name == name {
+		if strings.TrimPrefix(f.Name, "./") == name {
 			rc, err := f.Open()
 			if err != nil {
 				return nil, err
