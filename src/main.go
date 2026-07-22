@@ -68,7 +68,10 @@ var embeddedMigration31 string
 //go:embed migration_4.0.sql
 var embeddedMigration40 string
 
-const currentDBVersion = "4.0"
+//go:embed migration_4.1.sql
+var embeddedMigration41 string
+
+const currentDBVersion = "4.1"
 
 type migration struct {
 	Version     string
@@ -129,8 +132,13 @@ var migrations = []migration{
 	},
 	{
 		Version:     "4.0",
-		Description: "Settings table and backup infrastructure",
+		Description: "Settings and backup infrastructure",
 		SQL:         stripSchema(embeddedMigration40),
+	},
+	{
+		Version:     "4.1",
+		Description: "Add uploaded_by field to editions",
+		SQL:         stripSchema(embeddedMigration41),
 	},
 }
 
@@ -350,6 +358,7 @@ type ImportManager struct {
 	cancel context.CancelFunc
 	db     *sql.DB
 	cfg    *config.Config
+	userID interface{}
 }
 
 var importManager *ImportManager
@@ -378,12 +387,13 @@ func isSupportedFile(name string) bool {
 	return supportedExts[ext]
 }
 
-func (im *ImportManager) Start(dirPath string, files []string) error {
+func (im *ImportManager) Start(dirPath string, files []string, userID interface{}) error {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	if im.state.Running {
 		return fmt.Errorf("import already in progress")
 	}
+	im.userID = userID
 	ctx, cancel := context.WithCancel(context.Background())
 	im.cancel = cancel
 	items := make([]ImportItem, len(files))
@@ -447,40 +457,42 @@ func (im *ImportManager) run(ctx context.Context, dirPath string) {
 			os.RemoveAll(dirPath)
 		}
 	}()
-	processDirectoryImport(ctx, dirPath, im.db, im.cfg, im.state.Items, im.updateItemStatus)
+	processDirectoryImport(ctx, dirPath, im.db, im.cfg, im.state.Items, im.updateItemStatus, im.userID)
 }
 
 // BookDetails represents the denormalized book information from the view
 type BookDetails struct {
-	WorkID           int             `json:"work_id"`
-	OriginalTitle    string          `json:"original_title"`
-	OriginalLanguage sql.NullString  `json:"original_language,omitempty"`
-	FirstPublished   sql.NullInt64   `json:"first_published,omitempty"`
-	WorkType         sql.NullString  `json:"work_type,omitempty"`
-	EditionID        int             `json:"edition_id"`
-	EditionTitle     string          `json:"edition_title"`
-	EditionLanguage  sql.NullString  `json:"edition_language,omitempty"`
-	ISBN             sql.NullString  `json:"isbn,omitempty"`
-	Publisher        sql.NullString  `json:"publisher,omitempty"`
-	Year             sql.NullInt64   `json:"year,omitempty"`
-	Pages            sql.NullInt64   `json:"pages,omitempty"`
-	Series           sql.NullString  `json:"series,omitempty"`
-	SeriesNumber     sql.NullString  `json:"series_number,omitempty"`
-	Quality          sql.NullString  `json:"quality,omitempty"`
-	Authors          sql.NullString  `json:"authors,omitempty"`
-	Translators      sql.NullString  `json:"translators,omitempty"`
-	Genres           sql.NullString  `json:"genres,omitempty"`
-	AvailableFormats sql.NullString  `json:"available_formats,omitempty"`
-	FormatCount      int             `json:"format_count,omitempty"` // This is a count, so it's never NULL
-	PrimaryFilePath  sql.NullString  `json:"primary_file_path,omitempty"`
-	ReadingProgress  sql.NullInt64   `json:"reading_progress,omitempty"`
-	Rating           sql.NullInt64   `json:"rating,omitempty"`
-	FinishedAt       sql.NullString  `json:"finished_at,omitempty"`
-	CreatedAt        string          `json:"created_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW(), so it's never NULL
-	UpdatedAt        string          `json:"updated_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW() and updated by trigger, so it's never NULL
-	UploadDate       string          `json:"upload_date,omitempty"`
-	OnShelf          bool            `json:"on_shelf"`
-	ShelfOrder       int             `json:"shelf_order"`
+	WorkID               int             `json:"work_id"`
+	OriginalTitle        string          `json:"original_title"`
+	OriginalLanguage     sql.NullString  `json:"original_language,omitempty"`
+	FirstPublished       sql.NullInt64   `json:"first_published,omitempty"`
+	WorkType             sql.NullString  `json:"work_type,omitempty"`
+	EditionID            int             `json:"edition_id"`
+	EditionTitle         string          `json:"edition_title"`
+	EditionLanguage      sql.NullString  `json:"edition_language,omitempty"`
+	ISBN                 sql.NullString  `json:"isbn,omitempty"`
+	Publisher            sql.NullString  `json:"publisher,omitempty"`
+	Year                 sql.NullInt64   `json:"year,omitempty"`
+	Pages                sql.NullInt64   `json:"pages,omitempty"`
+	Series               sql.NullString  `json:"series,omitempty"`
+	SeriesNumber         sql.NullString  `json:"series_number,omitempty"`
+	Quality              sql.NullString  `json:"quality,omitempty"`
+	Authors              sql.NullString  `json:"authors,omitempty"`
+	Translators          sql.NullString  `json:"translators,omitempty"`
+	Genres               sql.NullString  `json:"genres,omitempty"`
+	AvailableFormats     sql.NullString  `json:"available_formats,omitempty"`
+	FormatCount          int             `json:"format_count,omitempty"` // This is a count, so it's never NULL
+	PrimaryFilePath      sql.NullString  `json:"primary_file_path,omitempty"`
+	ReadingProgress      sql.NullInt64   `json:"reading_progress,omitempty"`
+	Rating               sql.NullInt64   `json:"rating,omitempty"`
+	FinishedAt           sql.NullString  `json:"finished_at,omitempty"`
+	CreatedAt            string          `json:"created_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW(), so it's never NULL
+	UpdatedAt            string          `json:"updated_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW() and updated by trigger, so it's never NULL
+	UploadDate           string          `json:"upload_date,omitempty"`
+	OnShelf              bool            `json:"on_shelf"`
+	ShelfOrder           int             `json:"shelf_order"`
+	UploadedBy           sql.NullInt64   `json:"uploaded_by,omitempty"`
+	UploadedByUsername   sql.NullString  `json:"uploaded_by_username,omitempty"`
 }
 
 // CreateBookRequest represents the request body for creating a book
@@ -691,8 +703,16 @@ func main() {
 		})
 	}
 
-	// Read-only guest routes
+	// Public routes (no auth required)
+	public := r.Group("/api/v1")
+	{
+		public.GET("/shelf/count", getShelfCount(db))
+		public.GET("/books/:id/download", downloadBook(db))
+	}
+
+	// Read-only routes (require auth)
 	api := r.Group("/api/v1")
+	api.Use(requireAuthMiddleware())
 	{
 		setupOPDSRoutes(api, db)
 
@@ -710,8 +730,8 @@ func main() {
 		api.GET("/languages", getLanguages(db))
 		api.GET("/config", getAppConfig())
 		api.GET("/import/status", getImportStatus())
-		api.GET("/books/:id/download", downloadBook(db))
-		api.GET("/shelf/count", getShelfCount(db))
+		api.GET("/export/json", exportBooksJSON(db))
+		api.GET("/export/csv", exportBooksCSV(db))
 	}
 
 	// Write API routes (require auth)
@@ -719,29 +739,33 @@ func main() {
 	write.Use(requireAuthMiddleware())
 	write.Use(rateLimitMiddleware(writeLimiter))
 	{
-		write.POST("/books", createBook(db))
-		write.PUT("/books/:id", updateBook(db))
-		write.DELETE("/books/:id", deleteBook(db))
-		write.PUT("/books/:id/extended", updateBookExtended(db))
-		write.PUT("/persons/:id", updatePerson(db))
-		write.POST("/genres", createGenre(db))
-		write.PUT("/genres/:id", updateGenre(db))
-		write.DELETE("/genres/:id", deleteGenre(db))
-		write.POST("/tags", createTag(db))
-		write.POST("/import/file", importBookFile(db))
-		write.POST("/import/upload", importUploadFiles())
-		write.POST("/import/directory", startImport())
-		write.POST("/import/cancel", cancelImport())
-		write.POST("/books/:id/cover", uploadCover(db))
+		// Catalog management (editor+ only)
+		write.POST("/books", adminAuthMiddleware(), createBook(db))
+		write.PUT("/books/:id", adminAuthMiddleware(), updateBook(db))
+		write.DELETE("/books/:id", adminAuthMiddleware(), deleteBook(db))
+		write.PUT("/books/:id/extended", adminAuthMiddleware(), updateBookExtended(db))
+		write.PUT("/persons/:id", adminAuthMiddleware(), updatePerson(db))
+		write.POST("/genres", adminAuthMiddleware(), createGenre(db))
+		write.PUT("/genres/:id", adminAuthMiddleware(), updateGenre(db))
+		write.DELETE("/genres/:id", adminAuthMiddleware(), deleteGenre(db))
+		write.POST("/tags", adminAuthMiddleware(), createTag(db))
+		write.POST("/import/file", adminAuthMiddleware(), importBookFile(db))
+		write.POST("/import/upload", adminAuthMiddleware(), importUploadFiles())
+		write.POST("/import/directory", adminAuthMiddleware(), startImport())
+		write.POST("/import/cancel", adminAuthMiddleware(), cancelImport())
+		write.POST("/import/json", adminAuthMiddleware(), importBooksFromJSON(db))
+		write.POST("/books/:id/cover", adminAuthMiddleware(), uploadCover(db))
+
+		// Shelf management (all authenticated users - viewers can manage their shelf)
 		write.PUT("/books/:id/shelf", updateBookShelf(db))
 		write.PUT("/shelf/clear", clearShelf(db))
 
-		// User-book status
+		// User-book status (all authenticated users)
 		write.GET("/user/books", listUserBooks(db))
 		write.GET("/user/books/:edition_id", getUserBook(db))
 		write.PUT("/user/books/:edition_id", setUserBook(db))
 
-		// Read list
+		// Read list (all authenticated users - viewers can manage their own)
 		write.GET("/user/readlist", getReadListItems(db))
 		write.POST("/user/readlist", createReadListItem(db))
 		write.GET("/user/readlist/names", getReadListNames(db))
@@ -771,8 +795,6 @@ func main() {
 		admin.PUT("/tags/:id", adminUpdateTag(db))
 		admin.DELETE("/tags/:id", adminDeleteTag(db))
 		admin.GET("/genres", adminGetGenres(db))
-		admin.GET("/settings", adminGetSettings(db))
-		admin.PUT("/settings", adminUpdateSettings(db))
 	}
 
 	// Serve static files with cache-busting headers for JS
@@ -824,7 +846,6 @@ func main() {
 		serveAdmin(c, isMobilePlatform(c))
 	})
 	r.GET("/shelf/", getShelfPage(db))
-	r.GET("/api/v1/shelf/clear", clearShelf(db))
 
 	// Debug endpoints (admin only)
 	r.GET("/debug/goroutines", adminAuthMiddleware(), func(c *gin.Context) {
@@ -1055,7 +1076,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				series, series_number, quality, authors, translators, genres,
 				available_formats, format_count, primary_file_path,
 				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
-				on_shelf, shelf_order
+				on_shelf, shelf_order, uploaded_by, uploaded_by_username
 			FROM book_details%s
 			ORDER BY %s %s%s
 			LIMIT $%d OFFSET $%d
@@ -1078,7 +1099,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 				&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 				&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
-				&book.OnShelf, &book.ShelfOrder,
+				&book.OnShelf, &book.ShelfOrder, &book.UploadedBy, &book.UploadedByUsername,
 			); err != nil {
 				internalError(c, err)
 				return
@@ -1111,23 +1132,14 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 		limit := c.DefaultQuery("limit", "20")
 		offset := c.DefaultQuery("offset", "0")
 
-		sqlQuery := `
-			SELECT 
-				work_id, original_title, original_language, first_published, work_type,
-				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
-				series, series_number, quality, authors, translators, genres,
-				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
-				on_shelf, shelf_order
-			FROM book_details
-			WHERE 1=1`
-		
+		// Build WHERE clause once for both count and data queries
+		whereClause := " WHERE 1=1"
 		args := []interface{}{}
 		argIndex := 1
 
 		if query != "" {
 			query = "%" + normalizeQuery(query) + "%"
-			sqlQuery += fmt.Sprintf(` AND edition_id IN (
+			whereClause += fmt.Sprintf(` AND edition_id IN (
 				SELECT DISTINCT e.id FROM editions e
 				JOIN works w ON w.id = e.work_id
 				LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
@@ -1137,74 +1149,42 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 			args = append(args, query, query)
 			argIndex += 2
 		}
-
 		if genre != "" {
-			sqlQuery += fmt.Sprintf(" AND genres ILIKE $%d", argIndex)
+			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", argIndex)
 			args = append(args, "%"+genre+"%")
 			argIndex++
 		}
-
 		if language != "" {
-			sqlQuery += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", argIndex, argIndex)
+			whereClause += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", argIndex, argIndex)
 			args = append(args, language)
 			argIndex++
 		}
-
 		if yearFrom != "" {
-			sqlQuery += fmt.Sprintf(" AND first_published >= $%d", argIndex)
+			whereClause += fmt.Sprintf(" AND first_published >= $%d", argIndex)
 			args = append(args, yearFrom)
 			argIndex++
 		}
-
 		if yearTo != "" {
-			sqlQuery += fmt.Sprintf(" AND first_published <= $%d", argIndex)
+			whereClause += fmt.Sprintf(" AND first_published <= $%d", argIndex)
 			args = append(args, yearTo)
 			argIndex++
 		}
 
-		// Build WHERE clause for count query (same conditions, no LIMIT/OFFSET)
-		whereClause := " WHERE 1=1"
-		countArgs := []interface{}{}
-		ci := 1
-		if query != "" {
-			whereClause += fmt.Sprintf(` AND edition_id IN (
-				SELECT DISTINCT e.id FROM editions e
-				JOIN works w ON w.id = e.work_id
-				LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
-				LEFT JOIN persons p ON p.id = wc.person_id
-				WHERE w.lower_original_title LIKE $%d OR p.lower_fio LIKE $%d
-			)`, ci, ci+1)
-			countArgs = append(countArgs, query, query)
-			ci += 2
-		}
-		if genre != "" {
-			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", ci)
-			countArgs = append(countArgs, "%"+genre+"%")
-			ci++
-		}
-		if language != "" {
-			whereClause += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", ci, ci)
-			countArgs = append(countArgs, language)
-			ci++
-		}
-		if yearFrom != "" {
-			whereClause += fmt.Sprintf(" AND first_published >= $%d", ci)
-			countArgs = append(countArgs, yearFrom)
-			ci++
-		}
-		if yearTo != "" {
-			whereClause += fmt.Sprintf(" AND first_published <= $%d", ci)
-			countArgs = append(countArgs, yearTo)
-			ci++
-		}
-
 		var total int
-		if err := db.QueryRow("SELECT COUNT(*) FROM book_details"+whereClause, countArgs...).Scan(&total); err != nil {
+		if err := db.QueryRow("SELECT COUNT(*) FROM book_details"+whereClause, args...).Scan(&total); err != nil {
 			internalError(c, err)
 			return
 		}
 
-		sqlQuery += " ORDER BY original_title LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
+		sqlQuery := `
+			SELECT 
+				work_id, original_title, original_language, first_published, work_type,
+				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
+				series, series_number, quality, authors, translators, genres,
+				available_formats, format_count, primary_file_path,
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
+				on_shelf, shelf_order, uploaded_by, uploaded_by_username
+			FROM book_details` + whereClause + " ORDER BY original_title LIMIT $" + strconv.Itoa(argIndex) + " OFFSET $" + strconv.Itoa(argIndex+1)
 		args = append(args, limit, offset)
 
 		rows, err := db.Query(sqlQuery, args...)
@@ -1223,7 +1203,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 				&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
 				&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 				&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
-				&book.OnShelf, &book.ShelfOrder,
+				&book.OnShelf, &book.ShelfOrder, &book.UploadedBy, &book.UploadedByUsername,
 			); err != nil {
 				internalError(c, err)
 				return
@@ -1252,17 +1232,21 @@ func getBook(db *sql.DB) gin.HandlerFunc {
 			SELECT 
 				work_id, original_title, original_language, first_published, work_type,
 				edition_id, edition_title, edition_language, isbn, publisher, year, pages,
-				series, series_number, quality, authors, translators, genres,
+				series, series_number, quality, on_shelf, shelf_order,
+				authors, translators, genres,
 				available_formats, format_count, primary_file_path,
-				reading_progress, rating, finished_at, created_at, updated_at, upload_date
+				reading_progress, rating, finished_at, created_at, updated_at, upload_date,
+				uploaded_by, uploaded_by_username
 			FROM book_details
 			WHERE edition_id = $1
 		`, id).Scan(
 			&book.WorkID, &book.OriginalTitle, &book.OriginalLanguage, &book.FirstPublished, &book.WorkType,
 			&book.EditionID, &book.EditionTitle, &book.EditionLanguage, &book.ISBN, &book.Publisher, &book.Year, &book.Pages,
-			&book.Series, &book.SeriesNumber, &book.Quality, &book.Authors, &book.Translators, &book.Genres,
+			&book.Series, &book.SeriesNumber, &book.Quality, &book.OnShelf, &book.ShelfOrder,
+			&book.Authors, &book.Translators, &book.Genres,
 			&book.AvailableFormats, &book.FormatCount, &book.PrimaryFilePath,
 			&book.ReadingProgress, &book.Rating, &book.FinishedAt, &book.CreatedAt, &book.UpdatedAt, &book.UploadDate,
+			&book.UploadedBy, &book.UploadedByUsername,
 		)
 		book.Year = normalizeYear(book.Year)
 
@@ -1387,11 +1371,12 @@ func createBook(db *sql.DB) gin.HandlerFunc {
 
 		// Insert edition
 		var editionID int
+		userID, _ := c.Get("user_id")
 		err = tx.QueryRow(`
-			INSERT INTO editions (work_id, title, language, publisher, year, city, pages, annotation, quality, source, upload_date)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+			INSERT INTO editions (work_id, title, language, publisher, year, city, pages, annotation, quality, source, upload_date, uploaded_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11)
 			RETURNING id
-		`, workID, req.Title, languageID, "Self-published", req.PublishedYear, "Self-published", 0, req.Description, "good", "manual").Scan(&editionID)
+		`, workID, req.Title, languageID, "Self-published", req.PublishedYear, "Self-published", 0, req.Description, "good", "manual", userID).Scan(&editionID)
 		if err != nil {
 			internalError(c, err)
 			return
@@ -1906,10 +1891,21 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					}
 					formats = append(formats, format)
 				}
+				if err := formatRows.Err(); err != nil {
+					formatRows.Close()
+					bookRows.Close()
+					internalError(c, err)
+					return
+				}
 				formatRows.Close()
 
 				book.Formats = formats
 				books = append(books, book)
+			}
+			if err := bookRows.Err(); err != nil {
+				bookRows.Close()
+				internalError(c, err)
+				return
 			}
 			bookRows.Close()
 
@@ -2703,6 +2699,12 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 					}
 					formats = append(formats, fi)
 				}
+				if err := formatRows.Err(); err != nil {
+					formatRows.Close()
+					bRows.Close()
+					internalError(c, err)
+					return
+				}
 				formatRows.Close()
 				if formats == nil {
 					book.Formats = []FormatInfo{}
@@ -2710,6 +2712,11 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 					book.Formats = formats
 				}
 				books = append(books, book)
+			}
+			if err := bRows.Err(); err != nil {
+				bRows.Close()
+				internalError(c, err)
+				return
 			}
 			bRows.Close()
 
@@ -2956,7 +2963,7 @@ func (d *duplicateInfo) Error() string {
 	return fmt.Sprintf("book already exists: %s — %s", d.authors, d.title)
 }
 
-func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *config.Config) (result *importFileResult, err error) {
+func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *config.Config, userID interface{}) (result *importFileResult, err error) {
 	var bookContent []byte
 	var bookInfo *utils.FB2Book
 	var parseErr error
@@ -3279,9 +3286,9 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 
 	var editionID int
 	err = tx.QueryRow(`
-		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8) RETURNING id
-	`, workID, title, langCode, publisher, year, "imported", "good", editionISBN).Scan(&editionID)
+		INSERT INTO editions (work_id, title, language, publisher, year, source, quality, upload_date, isbn, uploaded_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8,$9) RETURNING id
+	`, workID, title, langCode, publisher, year, "imported", "good", editionISBN, userID).Scan(&editionID)
 	if err != nil {
 		return nil, fmt.Errorf("insert edition: %w", err)
 	}
@@ -3351,7 +3358,8 @@ func importBookFile(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		res, importErr := importFile(filename, data, ext, db, cfg)
+		userID := c.GetInt("user_id")
+		res, importErr := importFile(filename, data, ext, db, cfg, userID)
 		if importErr != nil {
 			var dup *duplicateInfo
 			if errors.As(importErr, &dup) {
@@ -3469,7 +3477,7 @@ func importUploadFiles() gin.HandlerFunc {
 			return
 		}
 
-		err = importManager.Start(tmpDir, savedFiles)
+		err = importManager.Start(tmpDir, savedFiles, c.GetInt("user_id"))
 		if err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -3484,7 +3492,7 @@ func importUploadFiles() gin.HandlerFunc {
 	}
 }
 
-func processDirectoryImport(ctx context.Context, dirPath string, db *sql.DB, cfg *config.Config, items []ImportItem, updateFn func(int, string, string, string)) {
+func processDirectoryImport(ctx context.Context, dirPath string, db *sql.DB, cfg *config.Config, items []ImportItem, updateFn func(int, string, string, string), userID interface{}) {
 	for i := range items {
 		select {
 		case <-ctx.Done():
@@ -3493,11 +3501,11 @@ func processDirectoryImport(ctx context.Context, dirPath string, db *sql.DB, cfg
 		default:
 		}
 		updateFn(i, "processing", "", "")
-		importOneFile(ctx, dirPath, items[i].File, i, db, cfg, updateFn)
+		importOneFile(ctx, dirPath, items[i].File, i, db, cfg, updateFn, userID)
 	}
 }
 
-func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *sql.DB, cfg *config.Config, updateFn func(int, string, string, string)) {
+func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *sql.DB, cfg *config.Config, updateFn func(int, string, string, string), userID interface{}) {
 	filePath := filepath.Join(dirPath, filename)
 	ext := strings.ToLower(filepath.Ext(filename))
 
@@ -3507,7 +3515,7 @@ func importOneFile(ctx context.Context, dirPath, filename string, idx int, db *s
 		return
 	}
 
-	res, importErr := importFile(filename, data, ext, db, cfg)
+	res, importErr := importFile(filename, data, ext, db, cfg, userID)
 	if importErr != nil {
 		var dup *duplicateInfo
 		if errors.As(importErr, &dup) {
@@ -3720,7 +3728,7 @@ func startImport() gin.HandlerFunc {
 			return
 		}
 
-		err = importManager.Start(safePath, files)
+		err = importManager.Start(safePath, files, c.GetInt("user_id"))
 		if err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return

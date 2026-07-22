@@ -921,43 +921,46 @@ function renderGenreNode(genre, container, depth) {
     header.style.alignItems = 'center';
     header.style.gap = '10px';
 
+    const canEditGenre = authUser && authUser.role && authUser.role !== 'viewer';
     header.innerHTML = `
         <span class="expand-icon">▶</span>
         <span style="font-weight: ${depth === 1 ? 'bold' : 'normal'};">${escapeHtml(genre.name)}</span>
-        <button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>
-        ${enableDelete ? `<button class="delete-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}">Удалить</button>` : ''}
+        ${canEditGenre ? `<button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>` : ''}
+        ${(canEditGenre && enableDelete) ? `<button class="delete-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}">Удалить</button>` : ''}
     `;
 
-    header.querySelector('.edit-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const btn = e.target;
-        openGenreModal({
-            id: btn.dataset.id,
-            name: btn.dataset.name,
-            parent_id: btn.dataset.parent_id ? parseInt(btn.dataset.parent_id) : null
-        });
-    });
-
-    const deleteGenreBtn = header.querySelector('.delete-btn[data-type="genre"]');
-    if (deleteGenreBtn) {
-        deleteGenreBtn.addEventListener('click', async (e) => {
+    if (canEditGenre) {
+        header.querySelector('.edit-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             const btn = e.target;
-            const genreId = btn.dataset.id;
-            const name = btn.dataset.name;
-            if (!confirm(`Удалить жанр "${name}"? Книги не будут удалены.`)) return;
-            try {
-                const res = await apiFetch(`${API_BASE}/genres/${genreId}`, { method: 'DELETE' });
-                if (!res.ok) {
-                    const err = await res.json();
-                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
-                    return;
-                }
-                loadGenres();
-            } catch (err) {
-                alert('Ошибка: ' + err.message);
-            }
+            openGenreModal({
+                id: btn.dataset.id,
+                name: btn.dataset.name,
+                parent_id: btn.dataset.parent_id ? parseInt(btn.dataset.parent_id) : null
+            });
         });
+
+        const deleteGenreBtn = header.querySelector('.delete-btn[data-type="genre"]');
+        if (deleteGenreBtn) {
+            deleteGenreBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const btn = e.target;
+                const genreId = btn.dataset.id;
+                const name = btn.dataset.name;
+                if (!confirm(`Удалить жанр "${name}"? Книги не будут удалены.`)) return;
+                try {
+                    const res = await apiFetch(`${API_BASE}/genres/${genreId}`, { method: 'DELETE' });
+                    if (!res.ok) {
+                        const err = await res.json();
+                        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                        return;
+                    }
+                    loadGenres();
+                } catch (err) {
+                    alert('Ошибка: ' + err.message);
+                }
+        });
+        }
     }
 
     const contentContainer = document.createElement('div');
@@ -1260,9 +1263,11 @@ function renderBooksTable(data) {
         html += '</select></td>';
         html += `<td class="col-shelf"><a href="#" class="shelf-toggle" data-id="${editionId}" data-on-shelf="${onShelf}" title="${shelfTitle}">${shelfIcon}</a></td>`;
         html += `<td class="col-actions">`;
-        html += `<button class="btn btn-small edit-book-btn" data-id="${editionId}" title="Редактировать">✎</button>`;
-        if (enableDelete) {
-            html += `<button class="btn btn-small delete-book-btn" data-id="${editionId}" data-title="${escapeHtml(title)}">Удалить</button>`;
+        if (authUser && authUser.role && authUser.role !== 'viewer') {
+            html += `<button class="btn btn-small edit-book-btn" data-id="${editionId}" title="Редактировать">✎</button>`;
+            if (enableDelete) {
+                html += `<button class="btn btn-small delete-book-btn" data-id="${editionId}" data-title="${escapeHtml(title)}">Удалить</button>`;
+            }
         }
         html += `</td></tr>`;
     });
@@ -1435,22 +1440,25 @@ function renderAuthorsTree(authors, container, expandedState = null) {
         const isExpanded = expandedState && expandedState.authors.has(String(author.id));
         const authorLevel = document.createElement('div');
         authorLevel.className = 'level-1' + (isExpanded ? '' : ' collapsed');
+        const canEdit = authUser && authUser.role && authUser.role !== 'viewer';
         authorLevel.innerHTML = `
             <span class="expand-icon">${isExpanded ? '▼' : '▶'}</span>
             <span class="author-name">${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
             <span style="color: #666; font-size: 12px;">(${author.books_count || 0} книг)</span>
-            <button class="edit-btn" data-type="author" data-id="${author.id}" data-first_name="${escapeHtml(author.first_name || '')}" data-last_name="${escapeHtml(author.last_name || '')}">Редактировать</button>
+            ${canEdit ? `<button class="edit-btn" data-type="author" data-id="${author.id}" data-first_name="${escapeHtml(author.first_name || '')}" data-last_name="${escapeHtml(author.last_name || '')}">Редактировать</button>` : ''}
         `;
 
-        authorLevel.querySelector('.edit-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            const btn = e.target;
-            openAuthorModal({
-                id: btn.dataset.id,
-                first_name: btn.dataset.first_name,
-                last_name: btn.dataset.last_name
+        if (canEdit) {
+            authorLevel.querySelector('.edit-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                const btn = e.target;
+                openAuthorModal({
+                    id: btn.dataset.id,
+                    first_name: btn.dataset.first_name,
+                    last_name: btn.dataset.last_name
+                });
             });
-        });
+        }
 
         authorLevel.addEventListener('click', (e) => {
             if (e.target.classList.contains('edit-btn')) return;
@@ -1493,8 +1501,8 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                     ${book.year ? `<span style="color: #666; font-size: 12px;">(${book.year})</span>` : ''}
                     <button class="download-btn" data-id="${book.id}" title="Скачать">⬇</button>
                     <input type="checkbox" class="shelf-checkbox" data-id="${book.id}" ${book.on_shelf ? 'checked' : ''} title="На полке">
-                    <button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>
-                    ${enableDelete ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
+                    ${canEdit ? `<button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>` : ''}
+                    ${(canEdit && enableDelete) ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
                 `;
 
                 bookLevel.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
@@ -1519,15 +1527,18 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                     }
                 });
 
-                bookLevel.querySelector('.edit-btn').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const btn = e.target;
-                    openBookModal({
-                        id: btn.dataset.id,
-                        title: btn.dataset.title,
-                        year: btn.dataset.year
+                const editBtn = bookLevel.querySelector('.edit-btn');
+                if (editBtn) {
+                    editBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const btn = e.target;
+                        openBookModal({
+                            id: btn.dataset.id,
+                            title: btn.dataset.title,
+                            year: btn.dataset.year
+                        });
                     });
-                });
+                }
 
                 const deleteBtn = bookLevel.querySelector('.delete-btn');
                 if (deleteBtn) {
