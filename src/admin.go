@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -92,6 +93,14 @@ func adminCreateUser(db *sql.DB) gin.HandlerFunc {
 		if req.Role == "" {
 			req.Role = "viewer"
 		}
+		if req.Role != "viewer" && req.Role != "editor" && req.Role != "admin" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin"})
+			return
+		}
+		if len(req.Password) < minPasswordLength {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Пароль должен быть не менее " + strconv.Itoa(minPasswordLength) + " символов"})
+			return
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
@@ -132,6 +141,10 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 			}
 		}
 		if req.Password != nil {
+			if len(*req.Password) < minPasswordLength {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Пароль должен быть не менее " + strconv.Itoa(minPasswordLength) + " символов"})
+				return
+			}
 			hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
@@ -151,6 +164,10 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 			}
 		}
 		if req.Role != nil {
+			if *req.Role != "viewer" && *req.Role != "editor" && *req.Role != "admin" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin"})
+				return
+			}
 			_, err := db.Exec("UPDATE users SET role = $1 WHERE id = $2", *req.Role, id)
 			if err != nil {
 				adminInternalError(c, err)
@@ -453,53 +470,4 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// ─── Settings ──────────────────────────────────────────────────
 
-type SettingsData struct {
-	BackupDir string `json:"backup_dir"`
-}
-
-func adminGetSettings(db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		rows, err := db.Query(`SELECT key, value FROM settings`)
-		if err != nil {
-			adminInternalError(c, err)
-			return
-		}
-		defer rows.Close()
-
-		settings := SettingsData{}
-		for rows.Next() {
-			var key, value string
-			if err := rows.Scan(&key, &value); err != nil {
-				adminInternalError(c, err)
-				return
-			}
-			switch key {
-			case "backup_dir":
-				settings.BackupDir = value
-			}
-		}
-		c.JSON(http.StatusOK, settings)
-	}
-}
-
-func adminUpdateSettings(db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req SettingsData
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат данных"})
-			return
-		}
-
-		_, err := db.Exec(`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-			"backup_dir", req.BackupDir)
-		if err != nil {
-			adminInternalError(c, err)
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	}
-}

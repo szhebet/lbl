@@ -47,6 +47,16 @@ func authMiddleware() gin.HandlerFunc {
 				}
 			}
 		}
+		if userID == 0 {
+			if cookie, err := c.Cookie("session_token"); err == nil && cookie != "" {
+				claims, err := validateToken(cookie)
+				if err == nil {
+					if uid, ok := claims["user_id"].(float64); ok {
+						userID = int(uid)
+					}
+				}
+			}
+		}
 		c.Set("user_id", userID)
 		c.Next()
 	}
@@ -71,12 +81,21 @@ func checkUserExists(c *gin.Context, userID int) bool {
 
 func requireAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		tokenStr := ""
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+		if authHeader != "" && len(authHeader) >= 8 && authHeader[:7] == "Bearer " {
+			tokenStr = authHeader[7:]
+		}
+		// Fallback: check session_token cookie
+		if tokenStr == "" {
+			if cookie, err := c.Cookie("session_token"); err == nil && cookie != "" {
+				tokenStr = cookie
+			}
+		}
+		if tokenStr == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
 			return
 		}
-		tokenStr := authHeader[7:]
 		claims, err := validateToken(tokenStr)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})

@@ -22,7 +22,6 @@
             <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
             <span style="flex:1"></span>
             <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
-            <button class="admin-tab" data-tab="settings" data-short="Н">Настройки</button>
         </div>
 
         <div id="tab-users" class="admin-content active">
@@ -154,19 +153,6 @@
                 <div id="directoryResult" class="upload-result"></div>
             </div>
             <div id="importProgressArea" class="import-section" style="display:none"></div>
-        </div>
-
-        <div id="tab-settings" class="admin-content">
-            <h2>Настройки</h2>
-            <form id="settingsForm" class="settings-form">
-                <div class="form-group">
-                    <label for="settingsBackupDir">Путь к папке с бекапами (backup_dir):</label>
-                    <input type="text" id="settingsBackupDir" class="form-input" placeholder="/var/backups/library" style="width:100%;max-width:500px">
-                    <p class="form-help">Директория для автоматического бекапа БД перед миграциями. <br>Задаётся в config.toml <code>[directories] backup</code> или через <code>LIBAPP_DIR_BACKUP</code>.</p>
-                </div>
-                <button type="submit" class="btn">Сохранить</button>
-                <span id="settingsSaveStatus" style="margin-left:12px;color:#888"></span>
-            </form>
         </div>
     </div>
 

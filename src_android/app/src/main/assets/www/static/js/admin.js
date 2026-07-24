@@ -29,7 +29,6 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
         if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
         if (tab.dataset.tab === 'import') { checkImportStatus(); }
-        if (tab.dataset.tab === 'settings') { loadSettings(); }
     });
 });
 
@@ -688,42 +687,6 @@ document.addEventListener('click', function(e) {
         deleteTag(parseInt(target.dataset.id));
     }
 });
-
-document.getElementById('settingsForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    var statusEl = document.getElementById('settingsSaveStatus');
-    statusEl.textContent = 'Сохранение...';
-    try {
-        var res = await api(API + '/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ backup_dir: document.getElementById('settingsBackupDir').value.trim() })
-        });
-        if (res.ok) {
-            statusEl.textContent = '✓ Сохранено';
-            setTimeout(function() { statusEl.textContent = ''; }, 3000);
-        } else {
-            var err = await res.json();
-            statusEl.textContent = 'Ошибка: ' + (err.error || 'Неизвестная ошибка');
-        }
-    } catch(e) {
-        statusEl.textContent = 'Ошибка сети: ' + e.message;
-    }
-});
-
-async function loadSettings() {
-    var statusEl = document.getElementById('settingsSaveStatus');
-    statusEl.textContent = 'Загрузка...';
-    try {
-        var res = await api(API + '/settings');
-        if (!res.ok) { statusEl.textContent = 'Ошибка загрузки'; return; }
-        var data = await res.json();
-        document.getElementById('settingsBackupDir').value = data.backup_dir || '';
-        statusEl.textContent = '';
-    } catch(e) {
-        statusEl.textContent = 'Ошибка сети: ' + e.message;
-    }
-}
 
 document.addEventListener('DOMContentLoaded', async function() {
     if (!await checkAdminAccess()) return;
