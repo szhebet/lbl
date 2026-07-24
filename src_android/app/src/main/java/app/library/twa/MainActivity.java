@@ -565,6 +565,21 @@ public class MainActivity extends Activity {
                     java.net.URL url = new java.net.URL(urlStr);
                     java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
                     if (urlStr.startsWith("https")) {
+                        // Load client certificate for mTLS
+                        javax.net.ssl.KeyManager[] keyManagers = null;
+                        try {
+                            java.io.InputStream certIn = getResources().openRawResource(R.raw.client_cert);
+                            java.security.KeyStore clientKs = java.security.KeyStore.getInstance("PKCS12");
+                            clientKs.load(certIn, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                            certIn.close();
+                            javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance(
+                                    javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+                            kmf.init(clientKs, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                            keyManagers = kmf.getKeyManagers();
+                        } catch (Exception e) {
+                            appendDebug("Client cert load failed: " + e.getMessage());
+                        }
+
                         javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
                             new javax.net.ssl.X509TrustManager() {
                                 public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
@@ -573,7 +588,7 @@ public class MainActivity extends Activity {
                             }
                         };
                         javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-                        sc.init(null, trustAll, new java.security.SecureRandom());
+                        sc.init(keyManagers, trustAll, new java.security.SecureRandom());
                         javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
                         httpsConn.setSSLSocketFactory(sc.getSocketFactory());
                         httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
@@ -699,6 +714,20 @@ public class MainActivity extends Activity {
             java.net.URL url = new java.net.URL(urlStr);
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
             if (urlStr.startsWith("https")) {
+                javax.net.ssl.KeyManager[] keyManagers = null;
+                try {
+                    java.io.InputStream certIn = getResources().openRawResource(R.raw.client_cert);
+                    java.security.KeyStore clientKs = java.security.KeyStore.getInstance("PKCS12");
+                    clientKs.load(certIn, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                    certIn.close();
+                    javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance(
+                            javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+                    kmf.init(clientKs, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                    keyManagers = kmf.getKeyManagers();
+                } catch (Exception e) {
+                    appendDebug("Client cert load failed: " + e.getMessage());
+                }
+
                 javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
                     new javax.net.ssl.X509TrustManager() {
                         public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
@@ -707,7 +736,7 @@ public class MainActivity extends Activity {
                     }
                 };
                 javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-                sc.init(null, trustAll, new java.security.SecureRandom());
+                sc.init(keyManagers, trustAll, new java.security.SecureRandom());
                 javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
                 httpsConn.setSSLSocketFactory(sc.getSocketFactory());
                 httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
@@ -945,6 +974,19 @@ public class MainActivity extends Activity {
     }
 
     private javax.net.ssl.SSLSocketFactory createTrustAllSslSocketFactory() throws Exception {
+        javax.net.ssl.KeyManager[] keyManagers = null;
+        try {
+            java.io.InputStream certIn = getResources().openRawResource(R.raw.client_cert);
+            java.security.KeyStore clientKs = java.security.KeyStore.getInstance("PKCS12");
+            clientKs.load(certIn, Config.CLIENT_CERT_PASSWORD.toCharArray());
+            certIn.close();
+            javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance(
+                    javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(clientKs, Config.CLIENT_CERT_PASSWORD.toCharArray());
+            keyManagers = kmf.getKeyManagers();
+        } catch (Exception e) {
+            appendDebug("Client cert load failed: " + e.getMessage());
+        }
         javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
             new javax.net.ssl.X509TrustManager() {
                 public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
@@ -953,7 +995,7 @@ public class MainActivity extends Activity {
             }
         };
         javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-        sc.init(null, trustAll, new java.security.SecureRandom());
+        sc.init(keyManagers, trustAll, new java.security.SecureRandom());
         return sc.getSocketFactory();
     }
 
