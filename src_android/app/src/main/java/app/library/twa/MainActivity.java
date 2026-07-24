@@ -629,34 +629,6 @@ public class MainActivity extends Activity {
                     }
                     fos.flush();
 
-                    // Confirm shelf download to server (remove book from shelf)
-                    if (urlStr.contains("/shelf/download/")) {
-                        try {
-                            String confirmUrl = urlStr + "/confirm";
-                            java.net.HttpURLConnection confirmConn = (java.net.HttpURLConnection) new java.net.URL(confirmUrl).openConnection();
-                            confirmConn.setRequestMethod("POST");
-                            confirmConn.setConnectTimeout(5000);
-                            confirmConn.setReadTimeout(5000);
-                            if (confirmUrl.startsWith("https")) {
-                                javax.net.ssl.TrustManager[] trustAll = new javax.net.ssl.TrustManager[]{
-                                    new javax.net.ssl.X509TrustManager() {
-                                        public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
-                                        public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
-                                        public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
-                                    }
-                                };
-                                javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-                                sc.init(null, trustAll, new java.security.SecureRandom());
-                                ((javax.net.ssl.HttpsURLConnection) confirmConn).setSSLSocketFactory(sc.getSocketFactory());
-                                ((javax.net.ssl.HttpsURLConnection) confirmConn).setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
-                                    public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
-                                });
-                            }
-                            confirmConn.getResponseCode();
-                            confirmConn.disconnect();
-                        } catch (Exception ignored) {}
-                    }
-
                     final String msg = "Скачано: " + outFile.getName();
                     runOnUiThread(new Runnable() {
                         @Override

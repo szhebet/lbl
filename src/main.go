@@ -717,7 +717,6 @@ func main() {
 		public.GET("/shelf/count", getShelfCount(db))
 		public.PUT("/shelf/clear", clearShelf(db))
 		public.GET("/shelf/download/:token", downloadShelf(db))
-		public.POST("/shelf/download/:token/confirm", confirmShelfDownload(db))
 	}
 
 	// Read-only routes (require auth)
@@ -3904,11 +3903,14 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 		token := c.Param("token")
 
 		var editionID int
-		err := db.QueryRow("SELECT edition_id FROM shelf_tokens WHERE token = $1", token).Scan(&editionID)
+		err := db.QueryRow("DELETE FROM shelf_tokens WHERE token = $1 RETURNING edition_id", token).Scan(&editionID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Книгу уже кто-то забрал, или ссылка недействительна"})
 			return
 		}
+
+		// Remove from shelf
+		db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
 
 		shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", strconv.Itoa(editionID))
 
@@ -3929,6 +3931,7 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 				}
 
 				serveShelfFile(c, extractedPath, title, ext)
+				os.RemoveAll(shelfDir)
 				return
 			}
 		}
@@ -3948,6 +3951,7 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 					db.QueryRow("SELECT title FROM editions WHERE id = $1", editionID).Scan(&title)
 
 					serveShelfFile(c, extractedPath, title, ext)
+					os.RemoveAll(shelfDir)
 					return
 				}
 			}
@@ -3980,26 +3984,6 @@ func serveShelfFile(c *gin.Context, extractedPath, title, ext string) {
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
 	c.Header("Content-Type", contentType)
 	c.File(extractedPath)
-}
-
-func confirmShelfDownload(db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		cfg := getConfig(c)
-		token := c.Param("token")
-
-		var editionID int
-		err := db.QueryRow("DELETE FROM shelf_tokens WHERE token = $1 RETURNING edition_id", token).Scan(&editionID)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"message": "Already confirmed"})
-			return
-		}
-
-		db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
-		shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", strconv.Itoa(editionID))
-		os.RemoveAll(shelfDir)
-
-		c.JSON(http.StatusOK, gin.H{"message": "Download confirmed"})
-	}
 }
 
 func extractBookForShelf(db *sql.DB, editionID string, cfg *config.Config) error {
@@ -4202,7 +4186,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         .shelf-table th { background: #f8f9fa; font-weight: 600; }
         .shelf-table tr:hover { background: #f5f5f5; }
         .shelf-table .size { color: #666; font-size: 12px; }
-        .shelf-table .download { color: #3498db; text-decoration: none; }
+        .shelf-table .download { color: #3498db; text-decoration: none; background: transparent; border: none; padding: 4px 8px; }
         .shelf-table .download:hover { text-decoration: underline; }
         .back-link { display: inline-block; margin: 20px 0; color: #3498db; cursor: pointer; }
     </style>
@@ -4242,7 +4226,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 
 			downloadLink := "-"
 			if book.FilePath != "" && book.Token != "" {
-				downloadLink = `<button class="btn download" onclick="shelfDownload('/api/v1/shelf/download/` + book.Token + `', '/api/v1/shelf/download/` + book.Token + `/confirm')">⬇ Скачать</button>`
+				downloadLink = `<a class="btn download" href="/api/v1/shelf/download/` + book.Token + `">⬇ Скачать</a>`
 			}
 
 			page += `<tr>
@@ -4279,25 +4263,6 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
                 window.location.href = '/';
             }
         });
-        function shelfDownload(downloadUrl, confirmUrl) {
-            fetch(downloadUrl).then(function(resp) {
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                return resp.blob();
-            }).then(function(blob) {
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = '';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(a.href);
-                return fetch(confirmUrl, { method: 'POST' });
-            }).then(function() {
-                location.reload();
-            }).catch(function(err) {
-                alert('Ошибка скачивания: ' + err.message);
-            });
-        }
         </script>
     </div>
 </body></html>`
