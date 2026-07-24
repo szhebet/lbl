@@ -717,6 +717,7 @@ func main() {
 		public.GET("/shelf/count", getShelfCount(db))
 		public.PUT("/shelf/clear", clearShelf(db))
 		public.GET("/shelf/download/:token", downloadShelf(db))
+		public.POST("/shelf/download/:token/confirm", confirmShelfDownload(db))
 	}
 
 	// Read-only routes (require auth)
@@ -3903,18 +3904,15 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 		token := c.Param("token")
 
 		var editionID int
-		err := db.QueryRow("DELETE FROM shelf_tokens WHERE token = $1 RETURNING edition_id", token).Scan(&editionID)
+		err := db.QueryRow("SELECT edition_id FROM shelf_tokens WHERE token = $1", token).Scan(&editionID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Книгу уже кто-то забрал, или ссылка недействительна"})
 			return
 		}
 
-		// Remove from shelf
-		db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
 		shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", strconv.Itoa(editionID))
-		defer os.RemoveAll(shelfDir)
 
-		// Serve extracted file
+		// Try to serve existing extracted file
 		entries, err := os.ReadDir(shelfDir)
 		if err == nil {
 			for _, entry := range entries {
@@ -3924,46 +3922,18 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 				extractedPath := filepath.Join(shelfDir, entry.Name())
 				ext := strings.ToLower(filepath.Ext(entry.Name()))
 
-				var filePath, title string
-				err := db.QueryRow(`
-					SELECT ef.file_path, e.title
-					FROM edition_files ef
-					JOIN editions e ON e.id = ef.edition_id
-					WHERE ef.edition_id = $1 AND ef.is_primary = true
-				`, editionID).Scan(&filePath, &title)
-				if err != nil {
+				var title string
+				if err := db.QueryRow("SELECT title FROM editions WHERE id = $1", editionID).Scan(&title); err != nil {
 					c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 					return
 				}
-				_ = filePath
 
-				var contentType string
-				switch ext {
-				case ".fb2":
-					contentType = "application/xml"
-				case ".pdf":
-					contentType = "application/pdf"
-				case ".doc":
-					contentType = "application/msword"
-				case ".docx":
-					contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-				case ".epub":
-					contentType = "application/epub+zip"
-				default:
-					contentType = "application/octet-stream"
-				}
-
-				downloadName := sanitizeFilename(title) + ext
-				c.Header("Content-Description", "File Transfer")
-				c.Header("Content-Transfer-Encoding", "binary")
-				c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
-				c.Header("Content-Type", contentType)
-				c.File(extractedPath)
+				serveShelfFile(c, extractedPath, title, ext)
 				return
 			}
 		}
 
-		// Extracted file not found (server restart etc.), extract on demand
+		// Extract on demand
 		if err := extractBookForShelf(db, strconv.Itoa(editionID), cfg); err == nil {
 			entries, err = os.ReadDir(shelfDir)
 			if err == nil {
@@ -3974,42 +3944,61 @@ func downloadShelf(db *sql.DB) gin.HandlerFunc {
 					extractedPath := filepath.Join(shelfDir, entry.Name())
 					ext := strings.ToLower(filepath.Ext(entry.Name()))
 
-					var filePath, title string
-					db.QueryRow(`
-						SELECT ef.file_path, e.title
-						FROM edition_files ef
-						JOIN editions e ON e.id = ef.edition_id
-						WHERE ef.edition_id = $1 AND ef.is_primary = true
-					`, editionID).Scan(&filePath, &title)
+					var title string
+					db.QueryRow("SELECT title FROM editions WHERE id = $1", editionID).Scan(&title)
 
-					var contentType string
-					switch ext {
-					case ".fb2":
-						contentType = "application/xml"
-					case ".pdf":
-						contentType = "application/pdf"
-					case ".doc":
-						contentType = "application/msword"
-					case ".docx":
-						contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-					case ".epub":
-						contentType = "application/epub+zip"
-					default:
-						contentType = "application/octet-stream"
-					}
-
-					downloadName := sanitizeFilename(title) + ext
-					c.Header("Content-Description", "File Transfer")
-					c.Header("Content-Transfer-Encoding", "binary")
-					c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
-					c.Header("Content-Type", contentType)
-					c.File(extractedPath)
+					serveShelfFile(c, extractedPath, title, ext)
 					return
 				}
 			}
 		}
 
 		c.JSON(http.StatusNotFound, gin.H{"error": "Файл не найден на полке"})
+	}
+}
+
+func serveShelfFile(c *gin.Context, extractedPath, title, ext string) {
+	var contentType string
+	switch ext {
+	case ".fb2":
+		contentType = "application/xml"
+	case ".pdf":
+		contentType = "application/pdf"
+	case ".doc":
+		contentType = "application/msword"
+	case ".docx":
+		contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".epub":
+		contentType = "application/epub+zip"
+	default:
+		contentType = "application/octet-stream"
+	}
+
+	downloadName := sanitizeFilename(title) + ext
+	c.Header("Content-Description", "File Transfer")
+	c.Header("Content-Transfer-Encoding", "binary")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
+	c.Header("Content-Type", contentType)
+	c.File(extractedPath)
+}
+
+func confirmShelfDownload(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		token := c.Param("token")
+
+		var editionID int
+		err := db.QueryRow("DELETE FROM shelf_tokens WHERE token = $1 RETURNING edition_id", token).Scan(&editionID)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"message": "Already confirmed"})
+			return
+		}
+
+		db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
+		shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", strconv.Itoa(editionID))
+		os.RemoveAll(shelfDir)
+
+		c.JSON(http.StatusOK, gin.H{"message": "Download confirmed"})
 	}
 }
 
@@ -4253,7 +4242,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 
 			downloadLink := "-"
 			if book.FilePath != "" && book.Token != "" {
-				downloadLink = `<a href="/api/v1/shelf/download/` + book.Token + `" class="download" onclick="setTimeout(function(){location.reload()},1500)">⬇ Скачать</a>`
+				downloadLink = `<button class="btn download" onclick="shelfDownload('/api/v1/shelf/download/` + book.Token + `', '/api/v1/shelf/download/` + book.Token + `/confirm')">⬇ Скачать</button>`
 			}
 
 			page += `<tr>
@@ -4290,6 +4279,25 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
                 window.location.href = '/';
             }
         });
+        function shelfDownload(downloadUrl, confirmUrl) {
+            fetch(downloadUrl).then(function(resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.blob();
+            }).then(function(blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = '';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+                return fetch(confirmUrl, { method: 'POST' });
+            }).then(function() {
+                location.reload();
+            }).catch(function(err) {
+                alert('Ошибка скачивания: ' + err.message);
+            });
+        }
         </script>
     </div>
 </body></html>`
