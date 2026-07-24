@@ -583,17 +583,30 @@ public class MainActivity extends Activity {
                     conn.setRequestMethod("GET");
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(30000);
+                    conn.setInstanceFollowRedirects(true);
 
-                    // Forward auth cookies
+                    // Forward auth cookies (sanitized — Android CookieManager may insert \n)
                     String cookies = android.webkit.CookieManager.getInstance().getCookie(urlStr);
-                    if (cookies != null) {
-                        conn.setRequestProperty("Cookie", cookies);
+                    if (cookies != null && !cookies.isEmpty()) {
+                        conn.setRequestProperty("Cookie", cookies.replaceAll("[\\r\\n]+", "; "));
                     }
 
                     conn.connect();
 
                     final int responseCode = conn.getResponseCode();
                     if (responseCode != 200) {
+                        StringBuilder errBody = new StringBuilder();
+                        try {
+                            java.io.InputStream errStream = conn.getErrorStream();
+                            if (errStream != null) {
+                                java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(errStream));
+                                String line;
+                                while ((line = br.readLine()) != null) errBody.append(line);
+                                br.close();
+                            }
+                        } catch (Exception ignored) {}
+                        final String errDetail = errBody.toString();
+                        appendDebug("Download HTTP " + responseCode + " body: " + errDetail);
                         showErrorUi("Download failed: HTTP " + responseCode);
                         return;
                     }
@@ -704,16 +717,29 @@ public class MainActivity extends Activity {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(true);
 
+            // Forward auth cookies (sanitized — Android CookieManager may insert \n)
             String cookies = android.webkit.CookieManager.getInstance().getCookie(urlStr);
-            if (cookies != null) {
-                conn.setRequestProperty("Cookie", cookies);
+            if (cookies != null && !cookies.isEmpty()) {
+                conn.setRequestProperty("Cookie", cookies.replaceAll("[\\r\\n]+", "; "));
             }
 
             conn.connect();
 
             int responseCode = conn.getResponseCode();
             if (responseCode != 200) {
+                StringBuilder errBody = new StringBuilder();
+                try {
+                    java.io.InputStream errStream = conn.getErrorStream();
+                    if (errStream != null) {
+                        java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(errStream));
+                        String line;
+                        while ((line = br.readLine()) != null) errBody.append(line);
+                        br.close();
+                    }
+                } catch (Exception ignored) {}
+                appendDebug("downloadFile HTTP " + responseCode + " body: " + errBody.toString());
                 showErrorUi("Download failed: HTTP " + responseCode);
                 return;
             }

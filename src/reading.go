@@ -47,6 +47,16 @@ func authMiddleware() gin.HandlerFunc {
 				}
 			}
 		}
+		if userID == 0 {
+			if cookie, err := c.Cookie("session_token"); err == nil && cookie != "" {
+				claims, err := validateToken(cookie)
+				if err == nil {
+					if uid, ok := claims["user_id"].(float64); ok {
+						userID = int(uid)
+					}
+				}
+			}
+		}
 		c.Set("user_id", userID)
 		c.Next()
 	}

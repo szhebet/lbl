@@ -1071,13 +1071,14 @@ async function loadGenreAuthors(genreId, container) {
                 author.books.forEach(book => {
                     const bookDiv = document.createElement('div');
                     bookDiv.className = 'level-3';
+                    const canEditBook = authUser && authUser.role && authUser.role !== 'viewer';
                     bookDiv.innerHTML = `
                         <span class="book-title">${escapeHtml(book.title)}</span>
                         ${book.year ? `<span style="color: #666; font-size: 12px;">(${book.year})</span>` : ''}
                         <button class="download-btn" data-id="${book.id}" title="Скачать">⬇</button>
                         <input type="checkbox" class="shelf-checkbox" data-id="${book.id}" ${book.on_shelf ? 'checked' : ''} title="На полке">
-                        <button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>
-                        ${enableDelete ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
+                        ${canEditBook ? `<button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>` : ''}
+                        ${(canEditBook && enableDelete) ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
                     `;
 
                     bookDiv.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
@@ -1101,15 +1102,18 @@ async function loadGenreAuthors(genreId, container) {
                         }
                     });
 
-                    bookDiv.querySelector('.edit-btn').addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const btn = e.target;
-                        openBookModal({
-                            id: btn.dataset.id,
-                            title: btn.dataset.title,
-                            year: btn.dataset.year
+                    const editBtn = bookDiv.querySelector('.edit-btn');
+                    if (editBtn) {
+                        editBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            const btn = e.target;
+                            openBookModal({
+                                id: btn.dataset.id,
+                                title: btn.dataset.title,
+                                year: btn.dataset.year
+                            });
                         });
-                    });
+                    }
 
                     const deleteBtn = bookDiv.querySelector('.delete-btn');
                     if (deleteBtn) {

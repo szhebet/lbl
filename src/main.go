@@ -71,7 +71,10 @@ var embeddedMigration40 string
 //go:embed migration_4.1.sql
 var embeddedMigration41 string
 
-const currentDBVersion = "4.1"
+//go:embed migration_4.2.sql
+var embeddedMigration42 string
+
+const currentDBVersion = "4.2"
 
 type migration struct {
 	Version     string
@@ -139,6 +142,11 @@ var migrations = []migration{
 		Version:     "4.1",
 		Description: "Add uploaded_by field to editions",
 		SQL:         stripSchema(embeddedMigration41),
+	},
+	{
+		Version:     "4.2",
+		Description: "Add shelf_tokens table for secure shelf downloads",
+		SQL:         stripSchema(embeddedMigration42),
 	},
 }
 
@@ -707,7 +715,8 @@ func main() {
 	public := r.Group("/api/v1")
 	{
 		public.GET("/shelf/count", getShelfCount(db))
-		public.GET("/books/:id/download", downloadBook(db))
+		public.PUT("/shelf/clear", clearShelf(db))
+		public.GET("/shelf/download/:token", downloadShelf(db))
 	}
 
 	// Read-only routes (require auth)
@@ -720,6 +729,7 @@ func main() {
 		api.GET("/books/search", searchBooks(db))
 		api.GET("/books/:id", getBook(db))
 		api.GET("/books/:id/extended", getBookExtended(db))
+		api.GET("/books/:id/download", downloadBook(db))
 		api.GET("/authors", getAuthors(db))
 		api.GET("/genres", getGenres(db))
 		api.GET("/genres/tree", getGenreTree(db))
@@ -758,7 +768,6 @@ func main() {
 
 		// Shelf management (all authenticated users - viewers can manage their shelf)
 		write.PUT("/books/:id/shelf", updateBookShelf(db))
-		write.PUT("/shelf/clear", clearShelf(db))
 
 		// User-book status (all authenticated users)
 		write.GET("/user/books", listUserBooks(db))
@@ -3756,16 +3765,14 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 		cfg := getConfig(c)
 
 		editionID := c.Param("id")
-		mode := c.DefaultQuery("mode", "archive")
 
 		var filePath, title string
-		var onShelf bool
 		err := db.QueryRow(`
-			SELECT ef.file_path, e.title, COALESCE(e.on_shelf, false)
+			SELECT ef.file_path, e.title
 			FROM edition_files ef 
 			JOIN editions e ON e.id = ef.edition_id 
 			WHERE ef.edition_id = $1 AND ef.is_primary = true
-		`, editionID).Scan(&filePath, &title, &onShelf)
+		`, editionID).Scan(&filePath, &title)
 
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -3774,67 +3781,6 @@ func downloadBook(db *sql.DB) gin.HandlerFunc {
 			}
 			internalError(c, err)
 			return
-		}
-
-		// Serve extracted file only when explicitly requested with mode=extracted AND book is on shelf
-		if mode == "extracted" && onShelf {
-			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
-			entries, err := os.ReadDir(shelfDir)
-			if err == nil {
-				for _, entry := range entries {
-					if entry.IsDir() {
-						continue
-					}
-					extractedPath := filepath.Join(shelfDir, entry.Name())
-					ext := strings.ToLower(filepath.Ext(entry.Name()))
-
-					var contentType string
-					switch ext {
-					case ".fb2":
-						contentType = "application/xml"
-					case ".pdf":
-						contentType = "application/pdf"
-					case ".doc":
-						contentType = "application/msword"
-					case ".docx":
-						contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-					case ".epub":
-						contentType = "application/epub+zip"
-					default:
-						contentType = "application/octet-stream"
-					}
-
-					downloadName := sanitizeFilename(title) + ext
-					c.Header("Content-Description", "File Transfer")
-					c.Header("Content-Transfer-Encoding", "binary")
-					c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
-					c.Header("Content-Type", contentType)
-					c.File(extractedPath)
-					return
-				}
-			}
-			// Extracted file not found (server restart etc.), extract on demand
-			if err := extractBookForShelf(db, editionID, cfg); err == nil {
-				// Retry serving after extraction
-				entries, err = os.ReadDir(shelfDir)
-				if err == nil {
-					for _, entry := range entries {
-						if entry.IsDir() {
-							continue
-						}
-						extractedPath := filepath.Join(shelfDir, entry.Name())
-						ext := strings.ToLower(filepath.Ext(entry.Name()))
-						downloadName := sanitizeFilename(title) + ext
-						c.Header("Content-Description", "File Transfer")
-						c.Header("Content-Transfer-Encoding", "binary")
-						c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
-						c.Header("Content-Type", "application/octet-stream")
-						c.File(extractedPath)
-						return
-					}
-				}
-			}
-			// Fall through to serve ZIP
 		}
 
 		fullPath := filepath.Join(".", filePath)
@@ -3923,18 +3869,147 @@ func updateBookShelf(db *sql.DB) gin.HandlerFunc {
 			if err := extractBookForShelf(db, editionID, cfg); err != nil {
 				log.Printf("Shelf extract warning for edition %s: %v", editionID, err)
 			}
+			// Delete old tokens for this edition, then create new one
+			db.Exec("DELETE FROM shelf_tokens WHERE edition_id = $1", editionID)
+			var token string
+			err := db.QueryRow("INSERT INTO shelf_tokens (token, edition_id) VALUES (gen_random_uuid()::text, $1) RETURNING token", editionID).Scan(&token)
+			if err != nil {
+				log.Printf("Shelf token creation warning for edition %s: %v", editionID, err)
+			}
+			_, err = db.Exec("UPDATE editions SET on_shelf = true, shelf_order = COALESCE(shelf_order, 0) + 1 WHERE id = $1", editionID)
+			if err != nil {
+				internalError(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "Book shelf status updated", "shelf_token": token})
 		} else {
+			// Remove from shelf: delete token, clean up
+			db.Exec("DELETE FROM shelf_tokens WHERE edition_id = $1", editionID)
 			shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", editionID)
 			os.RemoveAll(shelfDir)
+			_, err := db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
+			if err != nil {
+				internalError(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "Book shelf status updated"})
 		}
+	}
+}
 
-		_, err := db.Exec("UPDATE editions SET on_shelf = $1, shelf_order = CASE WHEN $1 THEN COALESCE(shelf_order, 0) + 1 ELSE shelf_order END WHERE id = $2", req.OnShelf, editionID)
+func downloadShelf(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		token := c.Param("token")
+
+		var editionID int
+		err := db.QueryRow("DELETE FROM shelf_tokens WHERE token = $1 RETURNING edition_id", token).Scan(&editionID)
 		if err != nil {
-			internalError(c, err)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Книгу уже кто-то забрал, или ссылка недействительна"})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "Book shelf status updated"})
+		// Remove from shelf
+		db.Exec("UPDATE editions SET on_shelf = false WHERE id = $1", editionID)
+		shelfDir := filepath.Join(cfg.Directories.Temp, "shelf", strconv.Itoa(editionID))
+		defer os.RemoveAll(shelfDir)
+
+		// Serve extracted file
+		entries, err := os.ReadDir(shelfDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				extractedPath := filepath.Join(shelfDir, entry.Name())
+				ext := strings.ToLower(filepath.Ext(entry.Name()))
+
+				var filePath, title string
+				err := db.QueryRow(`
+					SELECT ef.file_path, e.title
+					FROM edition_files ef
+					JOIN editions e ON e.id = ef.edition_id
+					WHERE ef.edition_id = $1 AND ef.is_primary = true
+				`, editionID).Scan(&filePath, &title)
+				if err != nil {
+					c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+					return
+				}
+				_ = filePath
+
+				var contentType string
+				switch ext {
+				case ".fb2":
+					contentType = "application/xml"
+				case ".pdf":
+					contentType = "application/pdf"
+				case ".doc":
+					contentType = "application/msword"
+				case ".docx":
+					contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+				case ".epub":
+					contentType = "application/epub+zip"
+				default:
+					contentType = "application/octet-stream"
+				}
+
+				downloadName := sanitizeFilename(title) + ext
+				c.Header("Content-Description", "File Transfer")
+				c.Header("Content-Transfer-Encoding", "binary")
+				c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
+				c.Header("Content-Type", contentType)
+				c.File(extractedPath)
+				return
+			}
+		}
+
+		// Extracted file not found (server restart etc.), extract on demand
+		if err := extractBookForShelf(db, strconv.Itoa(editionID), cfg); err == nil {
+			entries, err = os.ReadDir(shelfDir)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					extractedPath := filepath.Join(shelfDir, entry.Name())
+					ext := strings.ToLower(filepath.Ext(entry.Name()))
+
+					var filePath, title string
+					db.QueryRow(`
+						SELECT ef.file_path, e.title
+						FROM edition_files ef
+						JOIN editions e ON e.id = ef.edition_id
+						WHERE ef.edition_id = $1 AND ef.is_primary = true
+					`, editionID).Scan(&filePath, &title)
+
+					var contentType string
+					switch ext {
+					case ".fb2":
+						contentType = "application/xml"
+					case ".pdf":
+						contentType = "application/pdf"
+					case ".doc":
+						contentType = "application/msword"
+					case ".docx":
+						contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+					case ".epub":
+						contentType = "application/epub+zip"
+					default:
+						contentType = "application/octet-stream"
+					}
+
+					downloadName := sanitizeFilename(title) + ext
+					c.Header("Content-Description", "File Transfer")
+					c.Header("Content-Transfer-Encoding", "binary")
+					c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", downloadName, url.QueryEscape(downloadName)))
+					c.Header("Content-Type", contentType)
+					c.File(extractedPath)
+					return
+				}
+			}
+		}
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "Файл не найден на полке"})
 	}
 }
 
@@ -4076,14 +4151,16 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 				COALESCE(STRING_AGG(DISTINCT p.last_name || ' ' || COALESCE(p.first_name, ''), '; '), '') as authors,
 				e.title as edition_title,
 				ef.file_path,
-				ef.file_size
+				ef.file_size,
+				st.token
 			FROM editions e
 			JOIN works w ON w.id = e.work_id
 			LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
 			LEFT JOIN persons p ON p.id = wc.person_id
 			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+			LEFT JOIN shelf_tokens st ON st.edition_id = e.id
 			WHERE e.on_shelf = true
-			GROUP BY e.id, e.title, ef.file_path, ef.file_size
+			GROUP BY e.id, e.title, ef.file_path, ef.file_size, st.token
 			ORDER BY e.shelf_order DESC, e.title
 		`)
 		if err != nil {
@@ -4098,6 +4175,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			Title       string
 			FilePath    string
 			FileSize    int64
+			Token       string
 		}
 
 		var books []ShelfBook
@@ -4105,7 +4183,8 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			var book ShelfBook
 			var filePath sql.NullString
 			var fileSize sql.NullInt64
-			if err := rows.Scan(&book.ID, &book.Authors, &book.Title, &filePath, &fileSize); err != nil {
+			var token sql.NullString
+			if err := rows.Scan(&book.ID, &book.Authors, &book.Title, &filePath, &fileSize, &token); err != nil {
 				continue
 			}
 			book.Authors = truncateAuthors(book.Authors)
@@ -4114,6 +4193,9 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			}
 			if fileSize.Valid {
 				book.FileSize = fileSize.Int64
+			}
+			if token.Valid {
+				book.Token = token.String
 			}
 			books = append(books, book)
 		}
@@ -4170,8 +4252,8 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 			}
 
 			downloadLink := "-"
-			if book.FilePath != "" {
-				downloadLink = `<a href="/api/v1/books/` + fmt.Sprintf("%d", book.ID) + `/download?mode=extracted" class="download">⬇ Скачать</a>`
+			if book.FilePath != "" && book.Token != "" {
+				downloadLink = `<a href="/api/v1/shelf/download/` + book.Token + `" class="download" onclick="setTimeout(function(){location.reload()},1500)">⬇ Скачать</a>`
 			}
 
 			page += `<tr>
@@ -4188,7 +4270,7 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         async function clearShelf() {
             if (!confirm('Удалить все книги с полки?')) return;
             try {
-                const response = await fetch('/api/v1/shelf/clear');
+                const response = await fetch('/api/v1/shelf/clear', { method: 'PUT', credentials: 'same-origin' });
                 if (response.ok) {
                     window.location.reload();
                 } else {
@@ -4226,6 +4308,8 @@ func clearShelf(db *sql.DB) gin.HandlerFunc {
 			internalError(c, err)
 			return
 		}
+
+		db.Exec("DELETE FROM shelf_tokens")
 
 		shelfRoot := filepath.Join(cfg.Directories.Temp, "shelf")
 		os.RemoveAll(shelfRoot)

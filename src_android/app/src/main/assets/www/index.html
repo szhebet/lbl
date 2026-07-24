@@ -18,6 +18,7 @@
             <button class="tab" data-tab="genres" data-short="Ж">Жанры</button>
             <button class="tab" data-tab="readlist" data-short="Ч">Список чтения</button>
             <span class="tabs-spacer"></span>
+            <a href="/shelf/" id="navShelfLink" class="btn load-books-btn" style="text-decoration:none">📚 Полка</a>
             <a href="/admin" class="btn load-books-btn" style="text-decoration:none">Админ</a>
             <button id="loginBtn" class="btn load-books-btn">Авторизоваться</button>
         </nav>
@@ -276,6 +277,60 @@
     <script src="/static/js/import.js?v=5"></script>
     <script src="/static/js/offline.js?v=5"></script>
     <script>
+    // Handle UI based on auth state
+    (function() {
+        function updateUI() {
+            var adminLink = document.querySelector('a[href="/admin"]');
+            var navShelfLink = document.getElementById('navShelfLink');
+            var tabs = document.querySelectorAll('.tab[data-tab]');
+            var isLoggedIn = authUser && authToken;
+            
+            // Hide admin link for viewers and unauthenticated
+            if (adminLink) {
+                if (!isLoggedIn || (authUser && authUser.role === 'viewer')) {
+                    adminLink.style.display = 'none';
+                } else {
+                    adminLink.style.display = '';
+                }
+            }
+            
+            // Nav shelf link: show only for unauthenticated users
+            if (navShelfLink) {
+                navShelfLink.style.display = isLoggedIn ? 'none' : '';
+            }
+            
+            // Show/hide tabs based on auth state
+            tabs.forEach(function(tab) {
+                var tabName = tab.dataset.tab;
+                if (tabName === 'readlist' || tabName === 'shelf') {
+                    // Always show shelf and readlist tabs
+                    tab.style.display = '';
+                } else {
+                    // Hide other tabs for unauthenticated users
+                    tab.style.display = isLoggedIn ? '' : 'none';
+                }
+            });
+            
+            // If not logged in, activate readlist tab
+            if (!isLoggedIn) {
+                var readlistTab = document.querySelector('.tab[data-tab="readlist"]');
+                if (readlistTab) {
+                    tabs.forEach(function(t) { t.classList.remove('active'); });
+                    document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+                    readlistTab.classList.add('active');
+                    var readlistContent = document.getElementById('readlist');
+                    if (readlistContent) readlistContent.classList.add('active');
+                }
+            }
+        }
+        
+        // Check on load
+        updateUI();
+        // Check on auth changes
+        window.addEventListener('auth-changed', updateUI);
+        // Also check periodically in case auth state changes
+        setInterval(updateUI, 1000);
+    })();
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/service-worker.js').catch(function(e) {
             console.warn('SW registration failed:', e);
