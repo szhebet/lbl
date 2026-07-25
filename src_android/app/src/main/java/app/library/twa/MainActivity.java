@@ -973,6 +973,17 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void callAuthBridgeCallback(final int code, final String body) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                String escaped = body.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n");
+                String js = "if(window._authBridgeCallback)_authBridgeCallback(" + code + ",'" + escaped + "')";
+                webView.evaluateJavascript(js, null);
+            }
+        });
+    }
+
     private javax.net.ssl.SSLSocketFactory createTrustAllSslSocketFactory() throws Exception {
         javax.net.ssl.KeyManager[] keyManagers = null;
         try {
@@ -1054,6 +1065,59 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        @JavascriptInterface
+        public void login(String username, String password, String deviceName, String deviceFingerprint) {
+            appendDebug("Bridge login: " + username);
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String targetUrl = Config.TARGET_URL;
+                        java.net.URL url = new java.net.URL(targetUrl + "api/v1/auth/login");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+
+                        if (url.getProtocol().equals("https")) {
+                            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                            javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                            if (sf != null) {
+                                httpsConn.setSSLSocketFactory(sf);
+                            }
+                            httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                            });
+                        }
+                        conn.setRequestMethod("POST");
+                        conn.setRequestProperty("Content-Type", "application/json");
+                        conn.setRequestProperty("X-Platform", "android");
+                        conn.setDoOutput(true);
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(30000);
+
+                        String body = "{\"username\":\"" + escapeJson(username) + "\",\"password\":\"" + escapeJson(password)
+                                + "\",\"device_name\":\"" + escapeJson(deviceName) + "\",\"device_fingerprint\":\"" + escapeJson(deviceFingerprint) + "\"}";
+                        conn.getOutputStream().write(body.getBytes("UTF-8"));
+
+                        int responseCode = conn.getResponseCode();
+                        java.io.InputStream is = (responseCode >= 200 && responseCode < 300)
+                                ? conn.getInputStream() : conn.getErrorStream();
+                        java.io.BufferedReader reader = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(is, "UTF-8"));
+                        StringBuilder response = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) response.append(line);
+                        reader.close();
+
+                        final String result = response.toString();
+                        appendDebug("Bridge login HTTP " + responseCode + " len=" + result.length());
+                        callAuthBridgeCallback(responseCode, result);
+                    } catch (final Exception e) {
+                        appendDebug("Bridge login error: " + e.getMessage());
+                        callAuthBridgeCallback(0, "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+                    }
+                }
+            }).start();
+        }
     }
 
     private class ReadListBridge {
@@ -1110,6 +1174,50 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void dequeue(int queueId) {
             readListDB.dequeue(queueId);
+        }
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+
+    private javax.net.ssl.SSLSocketFactory createEmbeddedCertSSLSocketFactory() {
+        try {
+            java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+            java.io.InputStream certIn = getResources().openRawResource(R.raw.ca_cert);
+            java.security.cert.X509Certificate caCert = (java.security.cert.X509Certificate) cf.generateCertificate(certIn);
+            certIn.close();
+
+            java.security.KeyStore ks = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());
+            ks.load(null, null);
+            ks.setCertificateEntry("ca", caCert);
+
+            javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(ks);
+
+            javax.net.ssl.KeyManager[] keyManagers = null;
+            try {
+                java.io.InputStream certIn2 = getResources().openRawResource(R.raw.client_cert);
+                java.security.KeyStore clientKs = java.security.KeyStore.getInstance("PKCS12");
+                clientKs.load(certIn2, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                certIn2.close();
+                javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance(
+                        javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+                kmf.init(clientKs, Config.CLIENT_CERT_PASSWORD.toCharArray());
+                keyManagers = kmf.getKeyManagers();
+            } catch (Exception e) {
+                appendDebug("Client cert load for bridge skipped: " + e.getMessage());
+            }
+
+            javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("TLS");
+            sslContext.init(keyManagers, tmf.getTrustManagers(), new java.security.SecureRandom());
+            return sslContext.getSocketFactory();
+        } catch (Exception e) {
+            appendDebug("Embedded cert SSL factory failed: " + e.getMessage());
+            return null;
         }
     }
 

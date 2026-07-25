@@ -132,6 +132,72 @@ header h1 {
     cursor: pointer;
 }
 
+/* Status dropdown (multi-checkbox) */
+.status-dropdown {
+    position: relative;
+    width: 100%;
+    min-width: 200px;
+}
+.status-dropdown-trigger {
+    width: 100%;
+    padding: 8px 28px 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E") no-repeat right 10px center;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+}
+.status-dropdown-trigger.has-selection {
+    color: #2c3e50;
+    font-weight: 500;
+}
+.status-dropdown.open .status-dropdown-menu {
+    display: block;
+}
+.status-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.status-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+}
+.status-option:hover {
+    background: #f0f4f8;
+}
+.status-option input[type="checkbox"] {
+    margin: 0;
+    width: auto;
+    accent-color: #2c3e50;
+}
+
+@media (max-width: 768px) {
+    .status-dropdown {
+        min-width: 0;
+        width: 100%;
+    }
+}
+
 .filter-date-row {
     flex: 0 0 100%;
     display: flex;

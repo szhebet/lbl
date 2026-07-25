@@ -64,14 +64,16 @@
                             <input type="text" id="bookGenreFilter" placeholder="Поиск по жанру...">
                         </div>
                         <div class="filter-group">
-                            <select id="bookStatusFilter" class="filter-select">
-                                <option value="">Все статусы</option>
-                                <option value="Не заполнено">Не заполнено</option>
-                                <option value="Прочитано">Прочитано</option>
-                                <option value="Читаю">Читаю</option>
-                                <option value="Отложил">Отложил</option>
-                                <option value="Бросил">Бросил</option>
-                            </select>
+                            <div class="status-dropdown" id="bookStatusFilter">
+                                <div class="status-dropdown-trigger">Статус</div>
+                                <div class="status-dropdown-menu">
+                                    <label class="status-option"><input type="checkbox" value="Не заполнено"> Не заполнено</label>
+                                    <label class="status-option"><input type="checkbox" value="Прочитано"> Прочитано</label>
+                                    <label class="status-option"><input type="checkbox" value="Читаю"> Читаю</label>
+                                    <label class="status-option"><input type="checkbox" value="Отложил"> Отложил</label>
+                                    <label class="status-option"><input type="checkbox" value="Бросил"> Бросил</label>
+                                </div>
+                            </div>
                         </div>
                     <div class="filter-date-row">
                         <div class="filter-group">

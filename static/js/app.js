@@ -366,6 +366,8 @@ document.getElementById('clearBookFilters')?.addEventListener('click', () => {
     const dt = document.getElementById('bookDateTo');
     if (df) df.value = '';
     if (dt) dt.value = '';
+    const sf = document.getElementById('bookStatusFilter');
+    if (sf) clearStatusDropdown();
     booksPage = 1;
     loadBooks();
 });
@@ -839,6 +841,36 @@ function renderSummary(totalAuthors, totalWorks, totalEditions) {
     document.getElementById('authorsTree').before(summary);
 }
 
+function getSelectedStatuses() {
+    var el = document.getElementById('bookStatusFilter');
+    if (!el) return [];
+    var cbs = el.querySelectorAll('.status-option input:checked');
+    return Array.from(cbs).map(function(cb) { return cb.value; });
+}
+
+function updateStatusDropdownLabel() {
+    var el = document.getElementById('bookStatusFilter');
+    if (!el) return;
+    var trigger = el.querySelector('.status-dropdown-trigger');
+    if (!trigger) return;
+    var selected = getSelectedStatuses();
+    if (selected.length === 0) {
+        trigger.textContent = 'Статус';
+        trigger.classList.remove('has-selection');
+    } else {
+        trigger.textContent = selected.join(', ');
+        trigger.classList.add('has-selection');
+    }
+}
+
+function clearStatusDropdown() {
+    var el = document.getElementById('bookStatusFilter');
+    if (!el) return;
+    var cbs = el.querySelectorAll('.status-option input');
+    cbs.forEach(function(cb) { cb.checked = false; });
+    updateStatusDropdownLabel();
+}
+
 async function loadBooks() {
     const container = document.getElementById('booksTableContainer');
     container.innerHTML = '<div class="loading">Загрузка...</div>';
@@ -848,6 +880,8 @@ async function loadBooks() {
     const genre = document.getElementById('bookGenreFilter').value.trim();
     const dateFrom = document.getElementById('bookDateFrom')?.value || '';
     const dateTo = document.getElementById('bookDateTo')?.value || '';
+    const statusSelect = document.getElementById('bookStatusFilter');
+    const selectedStatuses = getSelectedStatuses();
     const limit = 50;
     const offset = (booksPage - 1) * limit;
 
@@ -857,6 +891,7 @@ async function loadBooks() {
     if (genre) url += `&genre=${encodeURIComponent(genre)}`;
     if (dateFrom) url += `&date_from=${encodeURIComponent(dateFrom)}`;
     if (dateTo) url += `&date_to=${encodeURIComponent(dateTo)}`;
+    if (selectedStatuses.length > 0) url += `&status=${encodeURIComponent(selectedStatuses.join(','))}`;
 
     try {
         const response = await apiFetch(url);
@@ -1205,14 +1240,6 @@ function renderBooksTable(data) {
     if (books.length === 0) {
         container.innerHTML = '<div class="empty">Книги не найдены</div>';
         return;
-    }
-
-    // Client-side status filter
-    var statusFilter = document.getElementById('bookStatusFilter')?.value || '';
-    if (statusFilter) {
-        books = books.filter(function(b) {
-            return (getUserBookStatus(b.edition_id).status) === statusFilter;
-        });
     }
 
     // Client-side status sort
@@ -1899,6 +1926,10 @@ function renderExtendedBookForm(data, genres, tags, persons, languages) {
                 <div class="form-group" style="flex: 1;">
                     <label for="upload_date">Дата загрузки:</label>
                     <input type="date" id="upload_date" name="upload_date" value="${editionUploadDate}">
+                </div>
+                <div class="form-group" style="flex: 1;">
+                    <label>Загрузил:</label>
+                    <input type="text" value="${escapeHtml(edition.uploaded_by_username || '')}" readonly style="background:#f5f5f5;cursor:default">
                 </div>
                 <div class="form-group" style="flex: 1;">
                     <label>
@@ -3197,8 +3228,14 @@ async function setReadlistItemStatus(id, status) {
 }
 
 // Event delegation for CSP compliance (no inline onclick/onchange)
+var _statusFilterTimer = null;
 document.addEventListener('change', function(e) {
-    if (e.target.id === 'bookStatusFilter') loadBooks();
+    if (e.target.closest && e.target.closest('#bookStatusFilter')) {
+        updateStatusDropdownLabel();
+        clearTimeout(_statusFilterTimer);
+        _statusFilterTimer = setTimeout(function() { booksPage = 1; loadBooks(); }, 200);
+        return;
+    }
     var rlSelect = e.target.closest('.status-select[data-rlid]');
     if (rlSelect) {
         setReadlistItemStatus(rlSelect.dataset.rlid, rlSelect.value);
@@ -3206,6 +3243,15 @@ document.addEventListener('change', function(e) {
 });
 
 document.addEventListener('click', function(e) {
+    var statusDrop = e.target.closest('.status-dropdown');
+    if (statusDrop) {
+        if (e.target.classList.contains('status-dropdown-trigger')) {
+            statusDrop.classList.toggle('open');
+        }
+        return;
+    }
+    document.querySelectorAll('.status-dropdown.open').forEach(function(d) { d.classList.remove('open'); });
+
     var target = e.target.closest('.close-readlist-btn');
     if (target) { e.preventDefault(); closeReadlistModal(); return; }
     target = e.target.closest('.close-modal-btn');
