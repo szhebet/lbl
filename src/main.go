@@ -998,10 +998,16 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		authorFilter := c.Query("author")
 		bookFilter := c.Query("book")
 		genreFilter := c.Query("genre")
+		statusFilter := c.Query("status")
 		sortBy := c.DefaultQuery("sort_by", "original_title")
 		sortOrder := c.DefaultQuery("sort_order", "asc")
 		limit := c.DefaultQuery("limit", "50")
 		offset := c.DefaultQuery("offset", "0")
+
+		var userID int
+		if uid, exists := c.Get("user_id"); exists {
+			userID = uid.(int)
+		}
 
 		allowedSorts := map[string]string{
 			"original_title":    "original_title",
@@ -1053,6 +1059,37 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", argNum)
 			args = append(args, "%"+genreFilter+"%")
 			argNum++
+		}
+
+		if statusFilter != "" && userID > 0 {
+			statuses := strings.Split(statusFilter, ",")
+			var explicitStatuses []string
+			hasUnset := false
+			for _, s := range statuses {
+				s = strings.TrimSpace(s)
+				if s == "Не заполнено" {
+					hasUnset = true
+				} else if s != "" {
+					explicitStatuses = append(explicitStatuses, s)
+				}
+			}
+			conditions := []string{}
+			if hasUnset {
+				conditions = append(conditions, fmt.Sprintf(`edition_id NOT IN (SELECT edition_id FROM user_books WHERE user_id = %d)`, userID))
+			}
+			if len(explicitStatuses) > 0 {
+				placeholders := []string{}
+				for _, s := range explicitStatuses {
+					placeholders = append(placeholders, fmt.Sprintf("$%d", argNum))
+					args = append(args, s)
+					argNum++
+				}
+				conditions = append(conditions, fmt.Sprintf(`edition_id IN (SELECT edition_id FROM user_books WHERE user_id = %d AND status IN (%s))`,
+					userID, strings.Join(placeholders, ",")))
+			}
+			if len(conditions) > 0 {
+				whereClause += " AND (" + strings.Join(conditions, " OR ") + ")"
+			}
 		}
 
 		dateFrom := c.Query("date_from")
@@ -1994,6 +2031,8 @@ type EditionData struct {
 	IsComplete    bool            `json:"is_complete"`
 	Quality       sql.NullString  `json:"quality"`
 	UploadDate    string          `json:"upload_date"`
+	UploadedBy    *int            `json:"uploaded_by,omitempty"`
+	UploadedByUsername *string     `json:"uploaded_by_username,omitempty"`
 }
 
 // AuthorData represents an author with role
@@ -2160,13 +2199,26 @@ func getBookExtended(db *sql.DB) gin.HandlerFunc {
 
 		// Get edition data
 		var edition EditionData
+		var uploadedBy sql.NullInt64
+		var uploadedByUsername sql.NullString
 		err = db.QueryRow(`
-			SELECT id, title, language, isbn, ean, udc, bbk, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date
-			FROM editions WHERE id = $1
-		`, id).Scan(&edition.ID, &edition.Title, &edition.Language, &edition.ISBN, &edition.EAN, &edition.UDC, &edition.BBK, &edition.Publisher, &edition.Year, &edition.City, &edition.Pages, &edition.Series, &edition.SeriesNumber, &edition.Annotation, &edition.Source, &edition.IsComplete, &edition.Quality, &edition.UploadDate)
+			SELECT e.id, e.title, e.language, e.isbn, e.ean, e.udc, e.bbk, e.publisher, e.year, e.city, e.pages, e.series, e.series_number, e.annotation, e.source, e.is_complete, e.quality, e.upload_date,
+				e.uploaded_by, u.username
+			FROM editions e
+			LEFT JOIN users u ON u.id = e.uploaded_by
+			WHERE e.id = $1
+		`, id).Scan(&edition.ID, &edition.Title, &edition.Language, &edition.ISBN, &edition.EAN, &edition.UDC, &edition.BBK, &edition.Publisher, &edition.Year, &edition.City, &edition.Pages, &edition.Series, &edition.SeriesNumber, &edition.Annotation, &edition.Source, &edition.IsComplete, &edition.Quality, &edition.UploadDate,
+			&uploadedBy, &uploadedByUsername)
 		if err != nil {
 			internalError(c, err)
 			return
+		}
+		if uploadedBy.Valid {
+			v := int(uploadedBy.Int64)
+			edition.UploadedBy = &v
+		}
+		if uploadedByUsername.Valid {
+			edition.UploadedByUsername = &uploadedByUsername.String
 		}
 		bookData.Edition = &edition
 

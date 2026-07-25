@@ -78,7 +78,8 @@ async function tryRefreshToken() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ refresh_token: rt })
             });
-            if (resp.ok) {
+            var ct = resp.headers.get('content-type') || '';
+            if (resp.ok && ct.indexOf('application/json') !== -1) {
                 var data = await resp.json();
                 if (data.token) {
                     authToken = data.token;
@@ -195,6 +196,7 @@ function openLoginModal() {
         '<div id="loginError" class="form-error" style="display:none;margin-bottom:10px"></div>' +
         '<div class="modal-footer" style="padding:0;border:none">' +
         '<button type="submit" class="btn" style="width:100%">Войти</button>' +
+        '<button type="button" class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="closeLoginModal()">Отмена</button>' +
         '</div>' +
         '</form>' +
         '</div>';
@@ -214,6 +216,7 @@ function openLoginModal() {
         }
 
         var fingerprint = getDeviceFingerprint();
+        var deviceName = navigator.userAgent.substring(0, 100);
 
         try {
             var response = await fetch('/api/v1/auth/login', {
@@ -222,11 +225,15 @@ function openLoginModal() {
                 body: JSON.stringify({
                     username: username,
                     password: password,
-                    device_name: navigator.userAgent.substring(0, 100),
+                    device_name: deviceName,
                     device_fingerprint: fingerprint
                 })
             });
 
+            var ct = response.headers.get('content-type') || '';
+            if (ct.indexOf('application/json') === -1) {
+                throw new Error('not-json');
+            }
             var data = await response.json();
 
             if (response.ok && data.token) {
@@ -240,10 +247,14 @@ function openLoginModal() {
                             body: JSON.stringify({
                                 username: username,
                                 password: password,
-                                device_name: navigator.userAgent.substring(0, 100),
+                                device_name: deviceName,
                                 device_fingerprint: fingerprint
                             })
                         });
+                        var regCt = regResponse.headers.get('content-type') || '';
+                        if (regCt.indexOf('application/json') === -1) {
+                            throw new Error('not-json');
+                        }
                         var regData = await regResponse.json();
                         if (regResponse.ok && regData.token) {
                             handleLoginResponse(regData);
@@ -261,8 +272,12 @@ function openLoginModal() {
                 errorEl.style.display = 'block';
             }
         } catch (err) {
-            errorEl.textContent = 'Ошибка соединения: ' + err.message;
-            errorEl.style.display = 'block';
+            if (isAndroidApp() && (err.message === 'not-json' || err.name === 'SyntaxError')) {
+                loginViaBridge(username, password, deviceName, fingerprint, errorEl);
+            } else {
+                errorEl.textContent = 'Ошибка соединения: ' + err.message;
+                errorEl.style.display = 'block';
+            }
         }
     });
 }
@@ -274,3 +289,40 @@ function closeLoginModal() {
         modal.remove();
     }
 }
+
+function loginViaBridge(username, password, deviceName, fingerprint, errorEl) {
+    if (!isAndroidApp()) {
+        errorEl.textContent = 'Ошибка соединения';
+        errorEl.style.display = 'block';
+        return;
+    }
+    errorEl.textContent = 'Подключение через обход SSL...';
+    errorEl.style.display = 'block';
+    window._authBridgeLoginErrorEl = errorEl;
+    try {
+        AndroidTokenBridge.login(username, password, deviceName, fingerprint);
+    } catch (e) {
+        errorEl.textContent = 'Ошибка моста: ' + e.message;
+        errorEl.style.display = 'block';
+    }
+}
+
+window._authBridgeCallback = function(code, body) {
+    var errorEl = window._authBridgeLoginErrorEl;
+    try {
+        var data = JSON.parse(body);
+        if (code >= 200 && code < 300 && data.token) {
+            handleLoginResponse(data);
+        } else {
+            if (errorEl) {
+                errorEl.textContent = data.error || 'Ошибка авторизации';
+                errorEl.style.display = 'block';
+            }
+        }
+    } catch (e) {
+        if (errorEl) {
+            errorEl.textContent = 'Ошибка ответа сервера';
+            errorEl.style.display = 'block';
+        }
+    }
+};

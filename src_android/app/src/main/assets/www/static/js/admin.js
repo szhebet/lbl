@@ -650,7 +650,6 @@ setupFilterInput('bookTitleFilter', function() { booksPage = 1; loadBooks(); });
 setupFilterInput('bookGenreFilter', function() { booksPage = 1; loadBooks(); });
 setupFilterInput('bookDateFrom', function() { booksPage = 1; loadBooks(); });
 setupFilterInput('bookDateTo', function() { booksPage = 1; loadBooks(); });
-setupFilterInput('bookStatusFilter', function() { booksPage = 1; loadBooks(); });
 
 document.getElementById('clearAdminBookFilters')?.addEventListener('click', function() {
     document.getElementById('bookAuthorFilter').value = '';
@@ -660,6 +659,8 @@ document.getElementById('clearAdminBookFilters')?.addEventListener('click', func
     var dt = document.getElementById('bookDateTo');
     if (df) df.value = '';
     if (dt) dt.value = '';
+    var sf = document.getElementById('bookStatusFilter');
+    if (sf) clearStatusDropdown();
     booksPage = 1;
     loadBooks();
 });

@@ -96,6 +96,10 @@ body.android .tabs .load-books-btn,
 body.android .tabs #loginBtn {
     display: none;
 }
+/* Show shelf link for unauthenticated users on mobile */
+body.android .tabs #navShelfLink {
+    display: inline-flex;
+}
 
 body.android .container {
     padding: 12px;
@@ -198,6 +202,16 @@ body.android .filter-group select {
     max-width: 100%;
     min-width: 0;
     box-sizing: border-box;
+}
+
+body.android .status-dropdown {
+    min-width: 0;
+    width: 100%;
+}
+body.android .status-dropdown-trigger {
+    font-size: 12px;
+    padding: 6px 24px 6px 8px;
+    min-height: 32px;
 }
 
 body.android .filter-date-row {
