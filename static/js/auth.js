@@ -272,7 +272,7 @@ function openLoginModal() {
                 errorEl.style.display = 'block';
             }
         } catch (err) {
-            if (isAndroidApp() && (err.message === 'not-json' || err.name === 'SyntaxError')) {
+            if (isAndroidApp()) {
                 loginViaBridge(username, password, deviceName, fingerprint, errorEl);
             } else {
                 errorEl.textContent = 'Ошибка соединения: ' + err.message;
