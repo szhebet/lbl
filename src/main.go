@@ -74,7 +74,13 @@ var embeddedMigration41 string
 //go:embed migration_4.2.sql
 var embeddedMigration42 string
 
-const currentDBVersion = "4.2"
+//go:embed migration_4.3.sql
+var embeddedMigration43 string
+
+//go:embed migration_4.4.sql
+var embeddedMigration44 string
+
+const currentDBVersion = "4.4"
 
 type migration struct {
 	Version     string
@@ -147,6 +153,16 @@ var migrations = []migration{
 		Version:     "4.2",
 		Description: "Add shelf_tokens table for secure shelf downloads",
 		SQL:         stripSchema(embeddedMigration42),
+	},
+	{
+		Version:     "4.3",
+		Description: "Add looking_for field to read_list",
+		SQL:         stripSchema(embeddedMigration43),
+	},
+	{
+		Version:     "4.4",
+		Description: "Add suggestions table for book suggestion feature",
+		SQL:         stripSchema(embeddedMigration44),
 	},
 }
 
@@ -804,6 +820,13 @@ func main() {
 		admin.PUT("/tags/:id", adminUpdateTag(db))
 		admin.DELETE("/tags/:id", adminDeleteTag(db))
 		admin.GET("/genres", adminGetGenres(db))
+
+		// Suggestions management (editor+)
+		admin.GET("/suggestions", adminListSuggestions(db))
+		admin.POST("/suggestions", adminCreateSuggestions(db))
+		admin.GET("/suggestions/readlist/:id", adminGetReadListSuggestions(db))
+		admin.DELETE("/suggestions/:id", adminDeleteSuggestion(db))
+		admin.POST("/suggestions/import", adminImportAndSuggest(db))
 	}
 
 	// Serve static files with cache-busting headers for JS
@@ -1716,23 +1739,31 @@ func deleteBook(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// AuthorWithBooks represents an author with their books and formats
+// AuthorWithBooks represents an author with their works and editions
 type AuthorWithBooks struct {
-	ID         int              `json:"id"`
-	FirstName  string           `json:"first_name"`
-	LastName   string           `json:"last_name"`
-	BooksCount int              `json:"books_count"`
-	Books      []BookWithFormats `json:"books"`
+	ID         int                `json:"id"`
+	FirstName  string             `json:"first_name"`
+	LastName   string             `json:"last_name"`
+	BooksCount int                `json:"books_count"`
+	Works      []WorkWithEditions `json:"works"`
 }
 
-// BookWithFormats represents a book with its formats
-type BookWithFormats struct {
-	ID         int            `json:"id"`
-	Title      string         `json:"title"`
-	Year       *int           `json:"year"`
-	OnShelf    bool           `json:"on_shelf"`
-	UploadDate string         `json:"upload_date"`
-	Formats    []FormatInfo   `json:"formats"`
+// WorkWithEditions represents a work with its editions
+type WorkWithEditions struct {
+	ID            int                 `json:"id"`
+	OriginalTitle string              `json:"original_title"`
+	Year          *int                `json:"year"`
+	Editions      []EditionWithFormats `json:"editions"`
+}
+
+// EditionWithFormats represents an edition with its formats
+type EditionWithFormats struct {
+	ID         int          `json:"id"`
+	Title      string       `json:"title"`
+	Year       *int         `json:"year"`
+	OnShelf    bool         `json:"on_shelf"`
+	UploadDate string       `json:"upload_date"`
+	Formats    []FormatInfo `json:"formats"`
 }
 
 // FormatInfo represents format information
@@ -1859,106 +1890,155 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 				return
 			}
 
-			// Get books for this author
-			booksQuery := `
-				SELECT DISTINCT 
-					e.id,
+			// Get works for this author
+			worksQuery := `
+				SELECT DISTINCT
+					w.id,
 					w.original_title,
-					e.year,
-					e.on_shelf,
-					e.upload_date
+					MIN(e.year) as year
 				FROM works w
 				JOIN work_contributors wc ON wc.work_id = w.id
 				JOIN editions e ON e.work_id = w.id
 				WHERE wc.person_id = $1 AND wc.role = 'author'
 			`
 
-			bookArgs := []interface{}{author.ID}
-			bookArgNum := 2
+			workArgs := []interface{}{author.ID}
+			workArgNum := 2
 
 			if bookFilter != "" {
-				booksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", bookArgNum)
-				bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
+				worksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", workArgNum)
+				workArgs = append(workArgs, "%"+normalizeQuery(bookFilter)+"%")
+				workArgNum++
 			}
 
-			booksQuery += " ORDER BY w.original_title"
+			worksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
 
-			bookRows, err := db.Query(booksQuery, bookArgs...)
+			workRows, err := db.Query(worksQuery, workArgs...)
 			if err != nil {
 				internalError(c, err)
 				return
 			}
 
-			books := make([]BookWithFormats, 0)
-			for bookRows.Next() {
-				var book BookWithFormats
+			works := make([]WorkWithEditions, 0)
+			for workRows.Next() {
+				var work WorkWithEditions
 				var year sql.NullInt64
-				var onShelf bool
-				var uploadDate sql.NullString
-				if err := bookRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
-					bookRows.Close()
+				if err := workRows.Scan(&work.ID, &work.OriginalTitle, &year); err != nil {
+					workRows.Close()
 					internalError(c, err)
 					return
 				}
-			if year.Valid && year.Int64 != 0 {
-				yearInt := int(year.Int64)
-				book.Year = &yearInt
-			}
-				book.OnShelf = onShelf
-				if uploadDate.Valid {
-					book.UploadDate = uploadDate.String
+				if year.Valid && year.Int64 != 0 {
+					yearInt := int(year.Int64)
+					work.Year = &yearInt
 				}
 
-			// Get formats for this book
-			formatQuery := `
-				SELECT 
-					f.name,
-					ef.file_path
-				FROM edition_files ef
-				JOIN formats f ON f.id = ef.format_id
-				WHERE ef.edition_id = $1
-			`
+				// Get editions for this work
+				editionQuery := `
+					SELECT
+						e.id,
+						COALESCE(e.title, w.original_title) as title,
+						e.year,
+						e.on_shelf,
+						e.upload_date
+					FROM editions e
+					JOIN works w ON w.id = e.work_id
+					WHERE e.work_id = $1
+					ORDER BY e.year NULLS LAST, e.title
+				`
 
-			formatRows, err := db.Query(formatQuery, book.ID)
+				editionRows, err := db.Query(editionQuery, work.ID)
 				if err != nil {
-					bookRows.Close()
+					workRows.Close()
 					internalError(c, err)
 					return
 				}
 
-				var formats []FormatInfo
-				for formatRows.Next() {
-					var format FormatInfo
-					if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
-						formatRows.Close()
-						bookRows.Close()
+				editions := make([]EditionWithFormats, 0)
+				for editionRows.Next() {
+					var edition EditionWithFormats
+					var eYear sql.NullInt64
+					var onShelf bool
+					var uploadDate sql.NullString
+					if err := editionRows.Scan(&edition.ID, &edition.Title, &eYear, &onShelf, &uploadDate); err != nil {
+						editionRows.Close()
+						workRows.Close()
 						internalError(c, err)
 						return
 					}
-					formats = append(formats, format)
-				}
-				if err := formatRows.Err(); err != nil {
+					if eYear.Valid && eYear.Int64 != 0 {
+						eYearInt := int(eYear.Int64)
+						edition.Year = &eYearInt
+					}
+					edition.OnShelf = onShelf
+					if uploadDate.Valid {
+						edition.UploadDate = uploadDate.String
+					}
+
+					// Get formats for this edition
+					formatQuery := `
+						SELECT
+							f.name,
+							ef.file_path
+						FROM edition_files ef
+						JOIN formats f ON f.id = ef.format_id
+						WHERE ef.edition_id = $1
+					`
+
+					formatRows, err := db.Query(formatQuery, edition.ID)
+					if err != nil {
+						editionRows.Close()
+						workRows.Close()
+						internalError(c, err)
+						return
+					}
+
+					var formats []FormatInfo
+					for formatRows.Next() {
+						var format FormatInfo
+						if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
+							formatRows.Close()
+							editionRows.Close()
+							workRows.Close()
+							internalError(c, err)
+							return
+						}
+						formats = append(formats, format)
+					}
+					if err := formatRows.Err(); err != nil {
+						formatRows.Close()
+						editionRows.Close()
+						workRows.Close()
+						internalError(c, err)
+						return
+					}
 					formatRows.Close()
-					bookRows.Close()
+
+					edition.Formats = formats
+					editions = append(editions, edition)
+				}
+				if err := editionRows.Err(); err != nil {
+					editionRows.Close()
+					workRows.Close()
 					internalError(c, err)
 					return
 				}
-				formatRows.Close()
+				editionRows.Close()
 
-				book.Formats = formats
-				books = append(books, book)
+				work.Editions = editions
+				works = append(works, work)
 			}
-			if err := bookRows.Err(); err != nil {
-				bookRows.Close()
+			if err := workRows.Err(); err != nil {
+				workRows.Close()
 				internalError(c, err)
 				return
 			}
-			bookRows.Close()
+			workRows.Close()
 
-			if books == nil {
-				books = []BookWithFormats{}
+			if works == nil {
+				works = []WorkWithEditions{}
 			}
-			author.Books = books
+			author.Works = works
 			authors = append(authors, author)
 		}
 
@@ -2695,7 +2775,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 			}
 
 			booksQuery := `
-				SELECT e.id, w.original_title, e.year, e.on_shelf, e.upload_date
+				SELECT DISTINCT w.id, w.original_title, MIN(e.year) as year
 				FROM works w
 				JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
 				JOIN editions e ON e.work_id = w.id
@@ -2710,7 +2790,7 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 				bookArgs = append(bookArgs, "%"+normalizeQuery(bookFilter)+"%")
 			}
 
-			booksQuery += " ORDER BY NULLIF(e.year, 0) DESC NULLS LAST, w.original_title"
+			booksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
 
 			bRows, err := db.Query(booksQuery, bookArgs...)
 			if err != nil {
@@ -2718,61 +2798,103 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 				return
 			}
 
-			var books []BookWithFormats
+			var works []WorkWithEditions
 			for bRows.Next() {
-				var book BookWithFormats
+				var work WorkWithEditions
 				var year sql.NullInt64
-				var onShelf bool
-				var uploadDate sql.NullString
-				if err := bRows.Scan(&book.ID, &book.Title, &year, &onShelf, &uploadDate); err != nil {
+				if err := bRows.Scan(&work.ID, &work.OriginalTitle, &year); err != nil {
 					bRows.Close()
 					internalError(c, err)
 					return
 				}
-				if year.Valid {
+				if year.Valid && year.Int64 != 0 {
 					y := int(year.Int64)
-					book.Year = &y
-				}
-				book.OnShelf = onShelf
-				if uploadDate.Valid {
-					book.UploadDate = uploadDate.String
+					work.Year = &y
 				}
 
-				formatRows, err := db.Query(`
-					SELECT f.name, ef.file_path
-					FROM edition_files ef
-					JOIN formats f ON f.id = ef.format_id
-					WHERE ef.edition_id = $1
-				`, book.ID)
+				edRows, err := db.Query(`
+					SELECT e.id, COALESCE(e.title, w2.original_title) as title, e.year, e.on_shelf, e.upload_date
+					FROM editions e JOIN works w2 ON w2.id = e.work_id
+					WHERE e.work_id = $1
+					ORDER BY e.year NULLS LAST, e.title
+				`, work.ID)
 				if err != nil {
 					bRows.Close()
 					internalError(c, err)
 					return
 				}
-				var formats []FormatInfo
-				for formatRows.Next() {
-					var fi FormatInfo
-					if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
-						formatRows.Close()
+				var editions []EditionWithFormats
+				for edRows.Next() {
+					var ed EditionWithFormats
+					var eYear sql.NullInt64
+					var onShelf bool
+					var uploadDate sql.NullString
+					if err := edRows.Scan(&ed.ID, &ed.Title, &eYear, &onShelf, &uploadDate); err != nil {
+						edRows.Close()
 						bRows.Close()
 						internalError(c, err)
 						return
 					}
-					formats = append(formats, fi)
-				}
-				if err := formatRows.Err(); err != nil {
+					if eYear.Valid && eYear.Int64 != 0 {
+						ey := int(eYear.Int64)
+						ed.Year = &ey
+					}
+					ed.OnShelf = onShelf
+					if uploadDate.Valid {
+						ed.UploadDate = uploadDate.String
+					}
+
+					formatRows, err := db.Query(`
+						SELECT f.name, ef.file_path
+						FROM edition_files ef
+						JOIN formats f ON f.id = ef.format_id
+						WHERE ef.edition_id = $1
+					`, ed.ID)
+					if err != nil {
+						edRows.Close()
+						bRows.Close()
+						internalError(c, err)
+						return
+					}
+					var formats []FormatInfo
+					for formatRows.Next() {
+						var fi FormatInfo
+						if err := formatRows.Scan(&fi.FormatName, &fi.FilePath); err != nil {
+							formatRows.Close()
+							edRows.Close()
+							bRows.Close()
+							internalError(c, err)
+							return
+						}
+						formats = append(formats, fi)
+					}
+					if err := formatRows.Err(); err != nil {
+						formatRows.Close()
+						edRows.Close()
+						bRows.Close()
+						internalError(c, err)
+						return
+					}
 					formatRows.Close()
+					if formats == nil {
+						ed.Formats = []FormatInfo{}
+					} else {
+						ed.Formats = formats
+					}
+					editions = append(editions, ed)
+				}
+				if err := edRows.Err(); err != nil {
+					edRows.Close()
 					bRows.Close()
 					internalError(c, err)
 					return
 				}
-				formatRows.Close()
-				if formats == nil {
-					book.Formats = []FormatInfo{}
-				} else {
-					book.Formats = formats
+				edRows.Close()
+				if editions == nil {
+					editions = []EditionWithFormats{}
 				}
-				books = append(books, book)
+				work.Editions = editions
+				works = append(works, work)
 			}
 			if err := bRows.Err(); err != nil {
 				bRows.Close()
@@ -2781,10 +2903,10 @@ func getGenreAuthors(db *sql.DB) gin.HandlerFunc {
 			}
 			bRows.Close()
 
-			if books == nil {
-				author.Books = []BookWithFormats{}
+			if works == nil {
+				author.Works = []WorkWithEditions{}
 			} else {
-				author.Books = books
+				author.Works = works
 			}
 			authors = append(authors, author)
 		}

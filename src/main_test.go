@@ -3118,3 +3118,242 @@ func TestReadListSyncConflictServerNewer(t *testing.T) {
 	assert.Equal(t, "Читаю", found.Status)
 	assert.Equal(t, serverUpdatedAt, found.UpdatedAt, "GET must return latest updated_at")
 }
+
+// ─── Suggestion API Tests ──────────────────────────────────────
+
+func TestSuggestionsCreateHideAndList(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-sug-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create admin user
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin') RETURNING id
+	`, "sug_admin_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM suggestions WHERE user_id = $1", adminID)
+	defer db.Exec("DELETE FROM read_list WHERE user_id = $1", adminID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+
+	adminToken := generateToken(adminID, "sug_admin", "admin")
+
+	// Create a viewer user (who will have read_list items)
+	var viewerID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'viewer') RETURNING id
+	`, "sug_viewer_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&viewerID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", viewerID)
+
+	// Add a genre name so suggestions work has a genre reference
+	var genreID int
+	_ = db.QueryRow("INSERT INTO genres (name) VALUES ('SuggestionsTest') ON CONFLICT DO NOTHING RETURNING id").Scan(&genreID)
+
+	// Create read_list items with looking_for != 'Нет'
+	rlID1 := mustGenerateUUID()
+	rlID2 := mustGenerateUUID()
+	rlID3 := mustGenerateUUID()
+
+	_, err = db.Exec(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, looking_for, deleted)
+		VALUES ($1::uuid, 'default', 'Test Book One', 'Test Author', 1, $2, '', 'Не заполнено', 'Да, локально', false)
+	`, rlID1, viewerID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, looking_for, deleted)
+		VALUES ($1::uuid, 'default', 'Test Book Two', 'Another Author', 2, $2, '', 'Не заполнено', 'Да, по федерации', false)
+	`, rlID2, viewerID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, looking_for, deleted)
+		VALUES ($1::uuid, 'default', 'Test Book Three', 'Third Author', 3, $2, '', 'Не заполнено', 'Нет', false)
+	`, rlID3, viewerID)
+	require.NoError(t, err)
+
+	defer db.Exec("DELETE FROM read_list WHERE id IN ($1::uuid, $2::uuid, $3::uuid)", rlID1, rlID2, rlID3)
+
+	// Set up router with admin auth middleware + suggestions routes
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	adminGroup := r.Group("/api/v1/admin")
+	adminGroup.Use(func(c *gin.Context) {
+		// Simulate adminAuthMiddleware but without full JWT check for test
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			return
+		}
+		tokenStr := authHeader[7:]
+		claims, err := validateToken(tokenStr)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			return
+		}
+		if uid, ok := claims["user_id"].(float64); ok {
+			c.Set("user_id", int(uid))
+		}
+		if role, ok := claims["role"].(string); ok {
+			c.Set("role", role)
+		}
+		c.Next()
+	})
+	{
+		adminGroup.GET("/suggestions", adminListSuggestions(db))
+		adminGroup.POST("/suggestions", adminCreateSuggestions(db))
+		adminGroup.GET("/suggestions/readlist/:id", adminGetReadListSuggestions(db))
+		adminGroup.DELETE("/suggestions/:id", adminDeleteSuggestion(db))
+	}
+
+	// ── Test 1: List suggestions (hidden=no default) — should show items without admin's suggestion ──
+	req, _ := http.NewRequest("GET", "/api/v1/admin/suggestions", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var listResp struct {
+		Total int              `json:"total"`
+		Items []SuggestionItem  `json:"items"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	// Should see rlID1 and rlID2 (both have looking_for != 'Нет'), but NOT rlID3 (looking_for = 'Нет')
+	found1 := false
+	found2 := false
+	found3 := false
+	for _, item := range listResp.Items {
+		if item.ReadListID == rlID1 { found1 = true }
+		if item.ReadListID == rlID2 { found2 = true }
+		if item.ReadListID == rlID3 { found3 = true }
+	}
+	assert.True(t, found1, "rlID1 should appear (looking_for = 'Да, локально')")
+	assert.True(t, found2, "rlID2 should appear (looking_for = 'Да, по федерации')")
+	assert.False(t, found3, "rlID3 should NOT appear (looking_for = 'Нет')")
+	assert.False(t, listResp.Items[0].HasSuggestion, "items should not have suggestion initially")
+
+	// ── Test 2: Hide rlID1 (create suggestion with hidden=true, no edition) ──
+	hideBody, _ := json.Marshal(CreateSuggestionsRequest{
+		ReadListID: rlID1,
+		Items: []CreateSuggestionsRequestItem{
+			{EditionID: nil, Hidden: true},
+		},
+	})
+	req2, _ := http.NewRequest("POST", "/api/v1/admin/suggestions", bytes.NewReader(hideBody))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+adminToken)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	// Now list with hidden=no — rlID1 should NOT appear (hidden by admin)
+	req3, _ := http.NewRequest("GET", "/api/v1/admin/suggestions?hidden=no", nil)
+	req3.Header.Set("Authorization", "Bearer "+adminToken)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+	require.Equal(t, http.StatusOK, w3.Code)
+
+	err = json.Unmarshal(w3.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	found1 = false
+	found2 = false
+	for _, item := range listResp.Items {
+		if item.ReadListID == rlID1 { found1 = true }
+		if item.ReadListID == rlID2 { found2 = true }
+	}
+	assert.False(t, found1, "rlID1 should NOT appear after hide (hidden=no)")
+	assert.True(t, found2, "rlID2 should still appear")
+
+	// ── Test 3: List with hidden=yes — rlID1 should appear ──
+	req4, _ := http.NewRequest("GET", "/api/v1/admin/suggestions?hidden=yes", nil)
+	req4.Header.Set("Authorization", "Bearer "+adminToken)
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, req4)
+	require.Equal(t, http.StatusOK, w4.Code)
+
+	err = json.Unmarshal(w4.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	found1 = false
+	found2 = false
+	for _, item := range listResp.Items {
+		if item.ReadListID == rlID1 {
+			found1 = true
+			assert.True(t, item.HasSuggestion, "rlID1 should have suggestion")
+			assert.NotNil(t, item.SuggestionID, "rlID1 should have suggestion_id")
+			assert.NotNil(t, item.SuggHidden, "rlID1 should have sugg_hidden")
+			if item.SuggHidden != nil {
+				assert.True(t, *item.SuggHidden, "rlID1 should be hidden")
+			}
+		}
+		if item.ReadListID == rlID2 { found2 = true }
+	}
+	assert.True(t, found1, "rlID1 should appear (hidden=yes)")
+	assert.False(t, found2, "rlID2 should NOT appear (hidden=yes)")
+
+	// ── Test 4: List with hidden=all — both should appear ──
+	req5, _ := http.NewRequest("GET", "/api/v1/admin/suggestions?hidden=all", nil)
+	req5.Header.Set("Authorization", "Bearer "+adminToken)
+	w5 := httptest.NewRecorder()
+	r.ServeHTTP(w5, req5)
+	require.Equal(t, http.StatusOK, w5.Code)
+
+	err = json.Unmarshal(w5.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+
+	found1 = false
+	found2 = false
+	for _, item := range listResp.Items {
+		if item.ReadListID == rlID1 { found1 = true }
+		if item.ReadListID == rlID2 { found2 = true }
+	}
+	assert.True(t, found1, "rlID1 should appear (hidden=all)")
+	assert.True(t, found2, "rlID2 should appear (hidden=all)")
+
+	// ── Test 5: Get existing suggestions for rlID1 ──
+	req6, _ := http.NewRequest("GET", "/api/v1/admin/suggestions/readlist/"+rlID1, nil)
+	req6.Header.Set("Authorization", "Bearer "+adminToken)
+	w6 := httptest.NewRecorder()
+	r.ServeHTTP(w6, req6)
+	require.Equal(t, http.StatusOK, w6.Code)
+
+	var suggestions []struct {
+		ID        int  `json:"id"`
+		EditionID *int `json:"edition_id"`
+		Hidden    bool `json:"hidden"`
+	}
+	err = json.Unmarshal(w6.Body.Bytes(), &suggestions)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(suggestions), 1, "should have at least one suggestion for rlID1")
+	assert.True(t, suggestions[0].Hidden, "suggestion should be hidden")
+	assert.Nil(t, suggestions[0].EditionID, "edition should be null for hide")
+
+	// ── Test 6: Delete the suggestion ──
+	sugID := suggestions[0].ID
+	req7, _ := http.NewRequest("DELETE", "/api/v1/admin/suggestions/"+strconv.Itoa(sugID), nil)
+	req7.Header.Set("Authorization", "Bearer "+adminToken)
+	w7 := httptest.NewRecorder()
+	r.ServeHTTP(w7, req7)
+	require.Equal(t, http.StatusOK, w7.Code)
+
+	// Verify it's gone: hidden=yes should show nothing now
+	req8, _ := http.NewRequest("GET", "/api/v1/admin/suggestions?hidden=yes", nil)
+	req8.Header.Set("Authorization", "Bearer "+adminToken)
+	w8 := httptest.NewRecorder()
+	r.ServeHTTP(w8, req8)
+	require.Equal(t, http.StatusOK, w8.Code)
+
+	err = json.Unmarshal(w8.Body.Bytes(), &listResp)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(listResp.Items), "no hidden items after deleting the only suggestion")
+}

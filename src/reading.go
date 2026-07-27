@@ -317,6 +317,7 @@ type ReadListItem struct {
 	UserID     int    `json:"user_id"`
 	Comment    string `json:"comment"`
 	Status     string `json:"status"`
+	LookingFor string `json:"looking_for"`
 	Deleted    bool   `json:"deleted"`
 	CreatedAt  string `json:"created_at"`
 	UpdatedAt  string `json:"updated_at"`
@@ -327,22 +328,27 @@ type ReadListItem struct {
 }
 
 type CreateReadListRequest struct {
-	ID        string `json:"id"`
-	Listname  string `json:"listname"`
-	Bookname  string `json:"bookname"`
-	Author    string `json:"author"`
-	Priority  int    `json:"priority"`
-	AuthorID  *int   `json:"author_id"`
-	BookID    *int   `json:"book_id"`
-	Comment   string `json:"comment"`
-	Status    string `json:"status"`
-	Deleted   bool   `json:"deleted"`
-	UpdatedAt string `json:"updated_at"`
+	ID         string `json:"id"`
+	Listname   string `json:"listname"`
+	Bookname   string `json:"bookname"`
+	Author     string `json:"author"`
+	Priority   int    `json:"priority"`
+	AuthorID   *int   `json:"author_id"`
+	BookID     *int   `json:"book_id"`
+	Comment    string `json:"comment"`
+	Status     string `json:"status"`
+	LookingFor string `json:"looking_for"`
+	Deleted    bool   `json:"deleted"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 var validReadListStatuses = map[string]bool{
 	"Не заполнено": true, "Прочитано": true, "Читаю": true,
 	"Отложил": true, "Бросил": true,
+}
+
+var validLookingFor = map[string]bool{
+	"Нет": true, "Да, локально": true, "Да, по федерации": true,
 }
 
 func getReadListItems(db *sql.DB) gin.HandlerFunc {
@@ -442,7 +448,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		query := fmt.Sprintf(`
 			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
 				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
-				rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+				rl.looking_for, rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
 				COALESCE(f.name, '') AS format_name,
 				COALESCE(e.on_shelf, false) AS on_shelf,
 				e.id AS edition_id
@@ -470,7 +476,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			var updatedAt, syncedAt sql.NullString
 			if err := rows.Scan(&item.ID, &item.Listname, &item.Bookname, &item.Author,
 				&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
-				&item.Comment, &item.Status, &item.Deleted, &item.CreatedAt,
+				&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,
 				&updatedAt, &syncedAt,
 				&item.FormatName, &item.OnShelf, &editionID); err != nil {
 				internalError(c, err)
@@ -514,6 +520,9 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 	if !validReadListStatuses[req.Status] {
 		req.Status = "Не заполнено"
 	}
+	if !validLookingFor[req.LookingFor] {
+		req.LookingFor = "Нет"
+	}
 
 	// Default priority: max priority of non-deleted, non-finished items + 1
 	if req.Priority <= 0 {
@@ -532,14 +541,14 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 		var editionID sql.NullInt64
 		var updatedAt, syncedAt sql.NullString
 		err := db.QueryRow(`
-			INSERT INTO read_list (id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status, deleted, updated_at)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::user_book_status, $11, NOW())
-			RETURNING id::text, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, deleted, created_at, updated_at, synced_at
+			INSERT INTO read_list (id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status, looking_for, deleted, updated_at)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::user_book_status, $11, $12, NOW())
+			RETURNING id::text, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, looking_for, deleted, created_at, updated_at, synced_at
 		`, itemID, req.Listname, req.Bookname, req.Author, req.Priority, req.AuthorID, req.BookID,
-			uid, req.Comment, req.Status, req.Deleted).Scan(
+			uid, req.Comment, req.Status, req.LookingFor, req.Deleted).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
-			&item.Comment, &item.Status, &item.Deleted, &item.CreatedAt,
+			&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,
 			&updatedAt, &syncedAt)
 
 		if err != nil {
@@ -592,6 +601,9 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		if !validReadListStatuses[req.Status] {
 			req.Status = "Не заполнено"
 		}
+		if !validLookingFor[req.LookingFor] {
+			req.LookingFor = "Нет"
+		}
 
 		// Conflict detection: compare client's updated_at with server's
 		if req.UpdatedAt != "" {
@@ -605,7 +617,7 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 				err := db.QueryRow(`
 					SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
 						rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
-						rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+						rl.looking_for, rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
 						COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
 					FROM read_list rl
 					LEFT JOIN editions e ON e.id = rl.book_id
@@ -615,7 +627,8 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 				`, id, uid).Scan(
 					&conflictItem.ID, &conflictItem.Listname, &conflictItem.Bookname, &conflictItem.Author,
 					&conflictItem.Priority, &conflictItem.AuthorID, &conflictItem.BookID, &conflictItem.UserID,
-					&conflictItem.Comment, &conflictItem.Status, &conflictItem.Deleted, &conflictItem.CreatedAt,
+					&conflictItem.Comment, &conflictItem.Status, &conflictItem.LookingFor,
+					&conflictItem.Deleted, &conflictItem.CreatedAt,
 					&updAt, &syncedAt,
 					&conflictItem.FormatName, &conflictItem.OnShelf, &editionID)
 				if err == nil {
@@ -639,10 +652,11 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 			UPDATE read_list SET
 				listname = $1, bookname = $2, author = $3, priority = $4,
 				author_id = $5, book_id = $6, comment = $7, status = $8::user_book_status,
-				deleted = $9, updated_at = NOW()
-			WHERE id = $10::uuid AND user_id = $11
+				looking_for = $9,
+				deleted = $10, updated_at = NOW()
+			WHERE id = $11::uuid AND user_id = $12
 		`, req.Listname, req.Bookname, req.Author, req.Priority,
-			req.AuthorID, req.BookID, req.Comment, req.Status, req.Deleted, id, uid)
+			req.AuthorID, req.BookID, req.Comment, req.Status, req.LookingFor, req.Deleted, id, uid)
 
 		if err != nil {
 			internalError(c, err)
@@ -661,7 +675,7 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		err = db.QueryRow(`
 			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
 				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
-				rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+				rl.looking_for, rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
 				COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
 			FROM read_list rl
 			LEFT JOIN editions e ON e.id = rl.book_id
@@ -671,7 +685,7 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		`, id, uid).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
-			&item.Comment, &item.Status, &item.Deleted, &item.CreatedAt,
+			&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,
 			&updatedAt, &syncedAt,
 			&item.FormatName, &item.OnShelf, &editionID)
 		if err != nil {
@@ -721,7 +735,7 @@ func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
 		err = db.QueryRow(`
 			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
 				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
-				rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+				rl.looking_for, rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
 				COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
 			FROM read_list rl
 			LEFT JOIN editions e ON e.id = rl.book_id
@@ -731,7 +745,7 @@ func deleteReadListItem(db *sql.DB) gin.HandlerFunc {
 		`, id, uid).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
-			&item.Comment, &item.Status, &item.Deleted, &item.CreatedAt,
+			&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,
 			&updatedAt, &syncedAt,
 			&item.FormatName, &item.OnShelf, &editionID)
 		if updatedAt.Valid {

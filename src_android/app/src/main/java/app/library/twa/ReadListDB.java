@@ -16,7 +16,7 @@ import java.util.List;
 public class ReadListDB extends SQLiteOpenHelper {
     private static final String TAG = "ReadListDB";
     private static final String DB_NAME = "readlist.db";
-    private static final int DB_VERSION = 2;
+    private static final int DB_VERSION = 3;
 
     private static final String TABLE_ITEMS = "readlist_items";
     private static final String TABLE_QUEUE = "offline_queue";
@@ -39,6 +39,7 @@ public class ReadListDB extends SQLiteOpenHelper {
             "user_id INTEGER NOT NULL DEFAULT 0," +
             "comment TEXT NOT NULL DEFAULT ''," +
             "status TEXT NOT NULL DEFAULT 'Не заполнено'," +
+            "looking_for TEXT NOT NULL DEFAULT 'Нет'," +
             "deleted INTEGER NOT NULL DEFAULT 0," +
             "created_at TEXT," +
             "updated_at TEXT," +
@@ -63,6 +64,9 @@ public class ReadListDB extends SQLiteOpenHelper {
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE " + TABLE_ITEMS + " ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE " + TABLE_ITEMS + " ADD COLUMN looking_for TEXT NOT NULL DEFAULT 'Нет'");
         }
     }
 
@@ -238,6 +242,7 @@ public class ReadListDB extends SQLiteOpenHelper {
         cv.put("priority", item.optInt("priority", 0));
         cv.put("comment", item.optString("comment", ""));
         cv.put("status", item.optString("status", "Не заполнено"));
+        cv.put("looking_for", item.optString("looking_for", "Нет"));
         cv.put("deleted", item.optBoolean("deleted", false) ? 1 : 0);
         cv.put("created_at", item.optString("created_at"));
         cv.put("updated_at", item.optString("updated_at"));

@@ -637,6 +637,15 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchConfig();
     setupBooksTableEvents();
     loadUserBookStatuses();
+
+    document.addEventListener('click', (e) => {
+        const downloadLink = e.target.closest('.book-download-link');
+        if (downloadLink) {
+            e.preventDefault();
+            e.stopPropagation();
+            triggerDownload(API_BASE + '/books/' + downloadLink.dataset.id + '/download');
+        }
+    });
 });
 
 async function fetchConfig() {
@@ -1084,105 +1093,137 @@ async function loadGenreAuthors(genreId, container) {
             authorLevel.style.alignItems = 'center';
             authorLevel.style.gap = '8px';
 
-            const hasBooks = author.books && author.books.length > 0;
+            const hasWorks = author.works && author.works.length > 0;
             authorLevel.innerHTML = `
-                <span class="expand-icon">${hasBooks ? '▶' : ''}</span>
+                <span class="expand-icon">${hasWorks ? '▶' : ''}</span>
                 <span>${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
             `;
 
-            const booksContainer = document.createElement('div');
-            booksContainer.style.marginLeft = '40px';
-            booksContainer.style.display = 'none';
+            const worksContainer = document.createElement('div');
+            worksContainer.style.marginLeft = '40px';
+            worksContainer.style.display = 'none';
 
-            if (hasBooks) {
+            if (hasWorks) {
                 authorLevel.addEventListener('click', (e) => {
-                    if (e.target.closest('.edit-btn, .download-btn, .shelf-checkbox, .delete-btn')) return;
+                    if (e.target.closest('.edit-btn, .book-download-link, .shelf-checkbox, .delete-btn')) return;
                     const icon = authorLevel.querySelector('.expand-icon');
-                    const isCollapsed = booksContainer.style.display === 'none';
-                    booksContainer.style.display = isCollapsed ? 'block' : 'none';
+                    const isCollapsed = worksContainer.style.display === 'none';
+                    worksContainer.style.display = isCollapsed ? 'block' : 'none';
                     icon.textContent = isCollapsed ? '▼' : '▶';
                 });
 
-                author.books.forEach(book => {
-                    const bookDiv = document.createElement('div');
-                    bookDiv.className = 'level-3';
-                    const canEditBook = authUser && authUser.role && authUser.role !== 'viewer';
-                    bookDiv.innerHTML = `
-                        <span class="book-title">${escapeHtml(book.title)}</span>
-                        ${book.year ? `<span style="color: #666; font-size: 12px;">(${book.year})</span>` : ''}
-                        <button class="download-btn" data-id="${book.id}" title="Скачать">⬇</button>
-                        <input type="checkbox" class="shelf-checkbox" data-id="${book.id}" ${book.on_shelf ? 'checked' : ''} title="На полке">
-                        ${canEditBook ? `<button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>` : ''}
-                        ${(canEditBook && enableDelete) ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
+                author.works.forEach(work => {
+                    const workDiv = document.createElement('div');
+                    workDiv.style.marginBottom = '4px';
+
+                    const edCount = work.editions ? work.editions.length : 0;
+                    const workHeader = document.createElement('div');
+                    workHeader.className = 'level-2';
+                    workHeader.innerHTML = `
+                        <span class="expand-icon">${edCount > 0 ? '▶' : ''}</span>
+                        <span class="book-title">${escapeHtml(work.original_title)}</span>
+                        ${work.year ? `<span style="color: #666; font-size: 12px;">(${work.year})</span>` : ''}
+                        <span style="color: #999; font-size: 11px;">${edCount === 1 ? '1 изд.' : edCount + ' изд.'}</span>
                     `;
 
-                    bookDiv.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
-                        e.stopPropagation();
-                        const checkbox = e.target;
-                        const editionId = checkbox.dataset.id;
-                        const onShelf = checkbox.checked;
-                        try {
-                            const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ on_shelf: onShelf })
-                            });
-                            if (!response.ok) {
-                                checkbox.checked = !onShelf;
-                            } else {
-                                updateShelfCount();
-                            }
-                        } catch (err) {
-                            checkbox.checked = !onShelf;
-                        }
-                    });
+                    const editionsContainer = document.createElement('div');
+                    editionsContainer.style.marginLeft = '20px';
+                    editionsContainer.style.display = 'none';
 
-                    const editBtn = bookDiv.querySelector('.edit-btn');
-                    if (editBtn) {
-                        editBtn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            const btn = e.target;
-                            openBookModal({
-                                id: btn.dataset.id,
-                                title: btn.dataset.title,
-                                year: btn.dataset.year
-                            });
+                    if (edCount > 0) {
+                        workHeader.addEventListener('click', (e) => {
+                            if (e.target.closest('.edit-btn, .book-download-link, .shelf-checkbox, .delete-btn')) return;
+                            const icon = workHeader.querySelector('.expand-icon');
+                            const isCollapsed = editionsContainer.style.display === 'none';
+                            editionsContainer.style.display = isCollapsed ? 'block' : 'none';
+                            icon.textContent = isCollapsed ? '▼' : '▶';
                         });
-                    }
 
-                    const deleteBtn = bookDiv.querySelector('.delete-btn');
-                    if (deleteBtn) {
-                        deleteBtn.addEventListener('click', async (e) => {
-                            e.stopPropagation();
-                            const btn = e.target;
-                            const editionId = btn.dataset.id;
-                            const title = btn.dataset.title;
-                            if (!confirm(`Удалить книгу "${title}"?`)) return;
-                            try {
-                                const res = await apiFetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
-                                if (!res.ok) {
-                                    const err = await res.json();
-                                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
-                                    return;
+                        work.editions.forEach(edition => {
+                            const edDiv = document.createElement('div');
+                            edDiv.className = 'level-3';
+                            const canEditBook = authUser && authUser.role && authUser.role !== 'viewer';
+                            const formats = edition.formats || [];
+                            const formatLinks = formats.map(f =>
+                                `<a href="#" class="book-download-link" data-id="${edition.id}">${escapeHtml(f.format_name)}</a>`
+                            ).join(' ');
+                            edDiv.innerHTML = `
+                                <span class="book-title" style="font-weight:normal;">${escapeHtml(edition.title)}</span>
+                                ${edition.year ? `<span style="color: #666; font-size: 12px;">(${edition.year})</span>` : ''}
+                                <span class="col-format">${formatLinks}</span>
+                                <input type="checkbox" class="shelf-checkbox" data-id="${edition.id}" ${edition.on_shelf ? 'checked' : ''} title="На полке">
+                                ${canEditBook ? `<button class="edit-btn" data-type="book" data-id="${edition.id}" data-title="${escapeHtml(edition.title || '')}" data-year="${edition.year || ''}">Редактировать</button>` : ''}
+                                ${(canEditBook && enableDelete) ? `<button class="delete-btn" data-id="${edition.id}" data-title="${escapeHtml(edition.title || '')}">Удалить</button>` : ''}
+                            `;
+
+                            edDiv.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
+                                e.stopPropagation();
+                                const checkbox = e.target;
+                                const editionId = checkbox.dataset.id;
+                                const onShelf = checkbox.checked;
+                                try {
+                                    const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ on_shelf: onShelf })
+                                    });
+                                    if (!response.ok) {
+                                        checkbox.checked = !onShelf;
+                                    } else {
+                                        updateShelfCount();
+                                    }
+                                } catch (err) {
+                                    checkbox.checked = !onShelf;
                                 }
-                                loadGenres();
-                            } catch (err) {
-                                alert('Ошибка: ' + err.message);
+                            });
+
+                            const editBtn = edDiv.querySelector('.edit-btn');
+                            if (editBtn) {
+                                editBtn.addEventListener('click', (e) => {
+                                    e.stopPropagation();
+                                    const btn = e.target;
+                                    openBookModal({
+                                        id: btn.dataset.id,
+                                        title: btn.dataset.title,
+                                        year: btn.dataset.year
+                                    });
+                                });
                             }
+
+                            const deleteBtn = edDiv.querySelector('.delete-btn');
+                            if (deleteBtn) {
+                                deleteBtn.addEventListener('click', async (e) => {
+                                    e.stopPropagation();
+                                    const btn = e.target;
+                                    const editionId = btn.dataset.id;
+                                    const title = btn.dataset.title;
+                                    if (!confirm(`Удалить книгу "${title}"?`)) return;
+                                    try {
+                                        const res = await apiFetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
+                                        if (!res.ok) {
+                                            const err = await res.json();
+                                            alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                                            return;
+                                        }
+                                        loadGenres();
+                                    } catch (err) {
+                                        alert('Ошибка: ' + err.message);
+                                    }
+                                });
+                            }
+
+                            editionsContainer.appendChild(edDiv);
                         });
                     }
 
-                    bookDiv.querySelector('.download-btn').addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        triggerDownload(API_BASE + '/books/' + book.id + '/download');
-                    });
-
-                    booksContainer.appendChild(bookDiv);
+                    workDiv.appendChild(workHeader);
+                    workDiv.appendChild(editionsContainer);
+                    worksContainer.appendChild(workDiv);
                 });
             }
 
             authorItem.appendChild(authorLevel);
-            authorItem.appendChild(booksContainer);
+            authorItem.appendChild(worksContainer);
             container.appendChild(authorItem);
         });
     } catch (err) {
@@ -1438,13 +1479,6 @@ function setupBooksTableEvents() {
                 return;
             }
 
-            const downloadLink = e.target.closest('.book-download-link');
-            if (downloadLink) {
-                e.preventDefault();
-                triggerDownload(API_BASE + '/books/' + downloadLink.dataset.id + '/download');
-                return;
-            }
-
             const pageBtn = e.target.closest('.pagination-btn');
             if (pageBtn) {
                 const p = parseInt(pageBtn.dataset.page);
@@ -1475,7 +1509,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
         authorLevel.innerHTML = `
             <span class="expand-icon">${isExpanded ? '▼' : '▶'}</span>
             <span class="author-name">${escapeHtml(author.last_name)} ${escapeHtml(author.first_name || '')}</span>
-            <span style="color: #666; font-size: 12px;">(${author.books_count || 0} книг)</span>
+            <span style="color: #666; font-size: 12px;">(${author.books_count || 0} произв.)</span>
             ${canEdit ? `<button class="edit-btn" data-type="author" data-id="${author.id}" data-first_name="${escapeHtml(author.first_name || '')}" data-last_name="${escapeHtml(author.last_name || '')}">Редактировать</button>` : ''}
         `;
 
@@ -1496,147 +1530,149 @@ function renderAuthorsTree(authors, container, expandedState = null) {
             authorLevel.classList.toggle('collapsed');
             const icon = authorLevel.querySelector('.expand-icon');
             icon.textContent = authorLevel.classList.contains('collapsed') ? '▶' : '▼';
-            const booksContainer = authorLevel.nextElementSibling;
-            if (booksContainer) {
-                booksContainer.style.display = authorLevel.classList.contains('collapsed') ? 'none' : 'block';
+            const worksContainer = authorLevel.nextElementSibling;
+            if (worksContainer) {
+                worksContainer.style.display = authorLevel.classList.contains('collapsed') ? 'none' : 'block';
             }
         });
 
-        const booksContainer = document.createElement('div');
-        booksContainer.className = 'level-2-container';
-        booksContainer.style.display = isExpanded ? 'block' : 'none';
+        const worksContainer = document.createElement('div');
+        worksContainer.className = 'level-2-container';
+        worksContainer.style.display = isExpanded ? 'block' : 'none';
 
-        if (author.books && author.books.length > 0) {
-            author.books.sort(function(a, b) {
+        if (author.works && author.works.length > 0) {
+            author.works.sort(function(a, b) {
                 var yearA = a.year !== undefined && a.year !== null ? a.year : null;
                 var yearB = b.year !== undefined && b.year !== null ? b.year : null;
                 if (yearA === yearB) {
-                    var titleA = (a.title || '').toLowerCase();
-                    var titleB = (b.title || '').toLowerCase();
+                    var titleA = (a.original_title || '').toLowerCase();
+                    var titleB = (b.original_title || '').toLowerCase();
                     return titleA < titleB ? -1 : titleA > titleB ? 1 : 0;
                 }
                 if (yearA === null) return 1;
                 if (yearB === null) return -1;
                 return yearB - yearA;
             });
-            author.books.forEach(book => {
-                const bookItem = document.createElement('div');
-                bookItem.className = 'tree-item';
+            author.works.forEach(work => {
+                const workItem = document.createElement('div');
+                workItem.className = 'tree-item';
 
-                const isBookExpanded = isExpanded && expandedState && expandedState.books.has(String(book.id));
-                const bookLevel = document.createElement('div');
-                bookLevel.className = 'level-2' + (isBookExpanded ? '' : ' collapsed');
-                bookLevel.innerHTML = `
-                    <span class="expand-icon">${isBookExpanded ? '▼' : '▶'}</span>
-                    <span class="book-title">${escapeHtml(book.title)}</span>
-                    ${book.year ? `<span style="color: #666; font-size: 12px;">(${book.year})</span>` : ''}
-                    <button class="download-btn" data-id="${book.id}" title="Скачать">⬇</button>
-                    <input type="checkbox" class="shelf-checkbox" data-id="${book.id}" ${book.on_shelf ? 'checked' : ''} title="На полке">
-                    ${canEdit ? `<button class="edit-btn" data-type="book" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}" data-year="${book.year || ''}">Редактировать</button>` : ''}
-                    ${(canEdit && enableDelete) ? `<button class="delete-btn" data-id="${book.id}" data-title="${escapeHtml(book.title || '')}">Удалить</button>` : ''}
+                const isWorkExpanded = isExpanded && expandedState && expandedState.books.has(String(work.id));
+                const workLevel = document.createElement('div');
+                workLevel.className = 'level-2' + (isWorkExpanded ? '' : ' collapsed');
+                const edCount = work.editions ? work.editions.length : 0;
+                const edLabel = edCount === 1 ? '1 изд.' : edCount < 5 ? edCount + ' изд.' : edCount + ' изд.';
+                workLevel.innerHTML = `
+                    <span class="expand-icon">${isWorkExpanded ? '▼' : '▶'}</span>
+                    <span class="book-title">${escapeHtml(work.original_title)}</span>
+                    ${work.year ? `<span style="color: #666; font-size: 12px;">(${work.year})</span>` : ''}
+                    <span style="color: #999; font-size: 11px;">${edLabel}</span>
                 `;
 
-                bookLevel.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
-                    e.stopPropagation();
-                    const checkbox = e.target;
-                    const editionId = checkbox.dataset.id;
-                    const onShelf = checkbox.checked;
-                    
-                    try {
-                        const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ on_shelf: onShelf })
-                        });
-                        if (!response.ok) {
-                            checkbox.checked = !onShelf;
-                        } else {
-                            updateShelfCount();
-                        }
-                    } catch (err) {
-                        checkbox.checked = !onShelf;
+                workLevel.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('edit-btn') || e.target.classList.contains('shelf-checkbox') || e.target.classList.contains('book-download-link') || e.target.classList.contains('delete-btn')) return;
+                    workLevel.classList.toggle('collapsed');
+                    const icon = workLevel.querySelector('.expand-icon');
+                    icon.textContent = workLevel.classList.contains('collapsed') ? '▶' : '▼';
+                    const editionsContainer = workLevel.nextElementSibling;
+                    if (editionsContainer) {
+                        editionsContainer.style.display = workLevel.classList.contains('collapsed') ? 'none' : 'block';
                     }
                 });
 
-                const editBtn = bookLevel.querySelector('.edit-btn');
-                if (editBtn) {
-                    editBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const btn = e.target;
-                        openBookModal({
-                            id: btn.dataset.id,
-                            title: btn.dataset.title,
-                            year: btn.dataset.year
-                        });
-                    });
-                }
+                const editionsContainer = document.createElement('div');
+                editionsContainer.className = 'level-3-container';
+                editionsContainer.style.display = isWorkExpanded ? 'block' : 'none';
 
-                const deleteBtn = bookLevel.querySelector('.delete-btn');
-                if (deleteBtn) {
-                    deleteBtn.addEventListener('click', async (e) => {
-                        e.stopPropagation();
-                        const btn = e.target;
-                        const editionId = btn.dataset.id;
-                        const title = btn.dataset.title;
-                        if (!confirm(`Удалить книгу "${title}"?`)) return;
-                        try {
-                            const res = await apiFetch(`${API_BASE}/books/${editionId}`, {
-                                method: 'DELETE'
-                            });
-                            if (!res.ok) {
-                                const err = await res.json();
-                                alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
-                                return;
-                            }
-                            loadAuthors();
-                        } catch (err) {
-                            alert('Ошибка: ' + err.message);
-                        }
-                    });
-                }
+                if (work.editions && work.editions.length > 0) {
+                    work.editions.forEach(edition => {
+                        const editionItem = document.createElement('div');
+                        editionItem.className = 'tree-item';
 
-                bookLevel.querySelector('.download-btn').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const btn = e.target;
-                    const editionId = btn.dataset.id;
-                    triggerDownload(API_BASE + '/books/' + editionId + '/download');
-                });
-
-                bookLevel.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('edit-btn') || e.target.classList.contains('shelf-checkbox') || e.target.classList.contains('download-btn') || e.target.classList.contains('delete-btn')) return;
-                    bookLevel.classList.toggle('collapsed');
-                    const icon = bookLevel.querySelector('.expand-icon');
-                    icon.textContent = bookLevel.classList.contains('collapsed') ? '▶' : '▼';
-                    const formatsContainer = bookLevel.nextElementSibling;
-                    if (formatsContainer) {
-                        formatsContainer.style.display = bookLevel.classList.contains('collapsed') ? 'none' : 'block';
-                    }
-                });
-
-                const formatsContainer = document.createElement('div');
-                formatsContainer.className = 'level-3-container';
-                formatsContainer.style.display = isBookExpanded ? 'block' : 'none';
-
-                if (book.formats && book.formats.length > 0) {
-                    book.formats.forEach(format => {
-                        const formatItem = document.createElement('div');
-                        formatItem.className = 'level-3';
-                        formatItem.innerHTML = `
-                            <span class="format-badge">${escapeHtml(format.format_name)}</span>
-                            ${format.file_path ? `<span style="color: #999;">${escapeHtml(format.file_path)}</span>` : ''}
+                        const editionLevel = document.createElement('div');
+                        editionLevel.className = 'level-3';
+                        const formats = edition.formats || [];
+                        const formatLinks = formats.map(f =>
+                            `<a href="#" class="book-download-link" data-id="${edition.id}">${escapeHtml(f.format_name)}</a>`
+                        ).join(' ');
+                        editionLevel.innerHTML = `
+                            <span class="book-title" style="font-weight:normal;">${escapeHtml(edition.title)}</span>
+                            ${edition.year ? `<span style="color: #666; font-size: 12px;">(${edition.year})</span>` : ''}
+                            <span class="col-format">${formatLinks}</span>
+                            <input type="checkbox" class="shelf-checkbox" data-id="${edition.id}" ${edition.on_shelf ? 'checked' : ''} title="На полке">
+                            ${canEdit ? `<button class="edit-btn" data-type="book" data-id="${edition.id}" data-title="${escapeHtml(edition.title || '')}" data-year="${edition.year || ''}">Редактировать</button>` : ''}
+                            ${(canEdit && enableDelete) ? `<button class="delete-btn" data-id="${edition.id}" data-title="${escapeHtml(edition.title || '')}">Удалить</button>` : ''}
                         `;
-                        formatsContainer.appendChild(formatItem);
+
+                        editionLevel.querySelector('.shelf-checkbox').addEventListener('change', async (e) => {
+                            e.stopPropagation();
+                            const checkbox = e.target;
+                            const editionId = checkbox.dataset.id;
+                            const onShelf = checkbox.checked;
+                            try {
+                                const response = await apiFetch(`${API_BASE}/books/${editionId}/shelf`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ on_shelf: onShelf })
+                                });
+                                if (!response.ok) {
+                                    checkbox.checked = !onShelf;
+                                } else {
+                                    updateShelfCount();
+                                }
+                            } catch (err) {
+                                checkbox.checked = !onShelf;
+                            }
+                        });
+
+                        const editBtn = editionLevel.querySelector('.edit-btn');
+                        if (editBtn) {
+                            editBtn.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                const btn = e.target;
+                                openBookModal({
+                                    id: btn.dataset.id,
+                                    title: btn.dataset.title,
+                                    year: btn.dataset.year
+                                });
+                            });
+                        }
+
+                        const deleteBtn = editionLevel.querySelector('.delete-btn');
+                        if (deleteBtn) {
+                            deleteBtn.addEventListener('click', async (e) => {
+                                e.stopPropagation();
+                                const btn = e.target;
+                                const editionId = btn.dataset.id;
+                                const title = btn.dataset.title;
+                                if (!confirm(`Удалить "${title}"?`)) return;
+                                try {
+                                    const res = await apiFetch(`${API_BASE}/books/${editionId}`, { method: 'DELETE' });
+                                    if (!res.ok) {
+                                        const err = await res.json();
+                                        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                                        return;
+                                    }
+                                    loadAuthors();
+                                } catch (err) {
+                                    alert('Ошибка: ' + err.message);
+                                }
+                            });
+                        }
+
+                        editionItem.appendChild(editionLevel);
+                        editionsContainer.appendChild(editionItem);
                     });
                 }
 
-                bookItem.appendChild(bookLevel);
-                bookItem.appendChild(formatsContainer);
-                booksContainer.appendChild(bookItem);
+                workItem.appendChild(workLevel);
+                workItem.appendChild(editionsContainer);
+                worksContainer.appendChild(workItem);
             });
         }
 
         authorItem.appendChild(authorLevel);
-        authorItem.appendChild(booksContainer);
+        authorItem.appendChild(worksContainer);
         container.appendChild(authorItem);
     });
 }
@@ -2593,25 +2629,54 @@ function setupReadlistEvents() {
     var rlBookInput = document.getElementById('rlBookname');
     var rlBookSelect = document.getElementById('rlBookSelect');
     var rlBookSelectedValue = ''; // tracks actual selected book id
+    var rlBookFetchTimer = null;
     if (rlBookInput) {
         rlBookInput.addEventListener('input', function() {
-            var val = this.value.toLowerCase();
-            var opts = rlBookSelect.options;
-            var matched = [];
-            for (var i = 0; i < opts.length; i++) {
-                if (opts[i].value === '') continue;
-                var matches = opts[i].textContent.toLowerCase().indexOf(val) !== -1;
-                opts[i].style.display = matches ? '' : 'none';
-                if (matches) matched.push(opts[i]);
-            }
+            var val = this.value;
             rlBookSelectedValue = '';
             document.getElementById('rlBookId').value = '';
-            rlBookSelect.style.display = (val && matched.length > 0) ? '' : 'none';
+
+            if (val.length < 1) {
+                rlBookSelect.innerHTML = '<option value="">— введите 1+ символ —</option>';
+                rlBookSelect.style.display = 'none';
+                return;
+            }
+
+            if (rlBookFetchTimer) clearTimeout(rlBookFetchTimer);
+            rlBookFetchTimer = setTimeout(function() {
+                apiFetch(API_BASE + '/books?book=' + encodeURIComponent(val) + '&limit=10').then(function(res) {
+                    if (!res.ok) return null;
+                    return res.json();
+                }).then(function(data) {
+                    if (!data || !data.books) {
+                        rlBookSelect.innerHTML = '<option value="">— ничего не найдено —</option>';
+                        rlBookSelect.style.display = 'none';
+                        return;
+                    }
+                    rlBookSelect.innerHTML = '<option value="">— выберите книгу —</option>';
+                    for (var i = 0; i < data.books.length; i++) {
+                        var b = data.books[i];
+                        var title = (b.edition_title || b.original_title || '').trim();
+                        if (!title) continue;
+                        var author = '';
+                        if (typeof b.authors === 'string') author = b.authors;
+                        else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
+                        var firstAuthor = author ? author.split(',')[0].trim() : '';
+                        var opt = document.createElement('option');
+                        opt.value = b.edition_id;
+                        opt.dataset.title = title;
+                        opt.dataset.firstAuthor = firstAuthor;
+                        opt.textContent = title + (author ? ' (' + author + ')' : '');
+                        rlBookSelect.appendChild(opt);
+                    }
+                    rlBookSelect.style.display = rlBookSelect.options.length > 1 ? '' : 'none';
+                }).catch(function() {});
+            }, 300);
         });
         rlBookInput.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 var val = this.value.toLowerCase();
-                if (!val) return;
+                if (val.length < 1) return;
                 var opts = rlBookSelect.options;
                 var matched = [];
                 for (var i = 0; i < opts.length; i++) {
@@ -2628,7 +2693,7 @@ function setupReadlistEvents() {
         });
         rlBookInput.addEventListener('blur', function() {
             var val = this.value.toLowerCase();
-            if (!val) return;
+            if (val.length < 1) return;
             var opts = rlBookSelect.options;
             var matched = [];
             for (var i = 0; i < opts.length; i++) {
@@ -2681,7 +2746,8 @@ function setupReadlistEvents() {
             author_id: authorId,
             book_id: bookId,
             comment: document.getElementById('rlComment').value.trim(),
-            status: document.getElementById('rlStatus').value
+            status: document.getElementById('rlStatus').value,
+            looking_for: document.getElementById('rlLookingFor').value
         };
 
         if (!data.listname) { alert('Укажите название списка'); return; }
@@ -2712,6 +2778,7 @@ function setupReadlistEvents() {
                 book_id: data.book_id,
                 comment: data.comment,
                 status: data.status,
+                looking_for: data.looking_for || 'Нет',
                 created_at: existing ? existing.created_at : now,
                 updated_at: now,
                 synced_at: existing ? existing.synced_at : null,
@@ -2966,35 +3033,7 @@ async function loadAuthorSelect() {
 
 async function loadBookSelect() {
     var select = document.getElementById('rlBookSelect');
-    if (!select) return;
-    try {
-        var res = await apiFetch(API_BASE + '/books?limit=9999');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        var data = await res.json();
-        var books = data.books || [];
-        select.innerHTML = '<option value="">— выберите книгу —</option>';
-        var seen = {};
-        books.forEach(function(b) {
-            var title = (b.edition_title || b.original_title || '').trim();
-            if (!title || seen[title]) return;
-            seen[title] = true;
-            var opt = document.createElement('option');
-            opt.value = b.edition_id;
-            opt.dataset.title = title;
-            var author = '';
-            if (typeof b.authors === 'string') {
-                author = b.authors;
-            } else if (b.authors && typeof b.authors.String === 'string') {
-                author = b.authors.String;
-            }
-            var firstAuthor = author ? author.split(',')[0].trim() : '';
-            opt.dataset.firstAuthor = firstAuthor;
-            opt.textContent = title + (author ? ' (' + author + ')' : '');
-            select.appendChild(opt);
-        });
-    } catch(e) {
-        select.innerHTML = '<option value="">— ошибка загрузки —</option>';
-    }
+    if (select) select.innerHTML = '<option value="">— введите 1+ символ —</option>';
 }
 
 function openCreateReadlistModal() {
@@ -3010,6 +3049,8 @@ function openCreateReadlistModal() {
     document.getElementById('rlPriority').value = '0';
     document.getElementById('rlComment').value = '';
     document.getElementById('rlStatus').value = 'Не заполнено';
+    document.getElementById('rlLookingFor').value = 'Нет';
+    document.getElementById('rlLookingFor').disabled = false;
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
     loadAuthorSelect();
@@ -3154,6 +3195,12 @@ function fillReadlistEditForm(item) {
     document.getElementById('rlPriority').value = item.priority || 0;
     document.getElementById('rlComment').value = item.comment || '';
     document.getElementById('rlStatus').value = item.status || 'Не заполнено';
+    document.getElementById('rlLookingFor').value = item.looking_for || 'Нет';
+    var hasBook = item.book_id != null;
+    document.getElementById('rlLookingFor').disabled = hasBook;
+    if (hasBook) {
+        document.getElementById('rlLookingFor').value = 'Нет';
+    }
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
     loadAuthorSelect().then(function() {

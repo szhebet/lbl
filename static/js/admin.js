@@ -29,6 +29,7 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
         if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
         if (tab.dataset.tab === 'import') { checkImportStatus(); }
+        if (tab.dataset.tab === 'suggestions') { loadSuggestions(); }
     });
 });
 
@@ -496,7 +497,9 @@ function editGenre(id) {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(body)
-                });
+});
+
+
                 if (res.ok) { closeAdminModal(); loadGenres(); }
                 else { var d = await res.json(); alert(d.error || 'Error'); }
             };
@@ -689,6 +692,559 @@ document.addEventListener('click', function(e) {
     }
 });
 
+function setupSuggestionsFilters() {
+    ['filter-sug-user', 'filter-sug-bookname', 'filter-sug-author', 'filter-sug-hidden'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', loadSuggestions);
+        el.addEventListener('keypress', function(e) { if (e.key === 'Enter') loadSuggestions(); });
+    });
+}
+
+async function loadSuggestions() {
+    var container = document.getElementById('suggestionsTableContainer');
+    container.innerHTML = '<div class="loading">Загрузка...</div>';
+
+    var user = document.getElementById('filter-sug-user').value;
+    var bookname = document.getElementById('filter-sug-bookname').value;
+    var author = document.getElementById('filter-sug-author').value;
+    var hidden = document.getElementById('filter-sug-hidden').value;
+
+    var params = new URLSearchParams();
+    if (user) params.set('user', user);
+    if (bookname) params.set('bookname', bookname);
+    if (author) params.set('author', author);
+    params.set('hidden', hidden);
+
+    try {
+        var res = await api(API + '/suggestions?' + params.toString());
+        if (!res.ok) { container.innerHTML = '<div class="error">Ошибка загрузки</div>'; return; }
+        var data = await res.json();
+        renderSuggestions(data.items || [], data.total || 0);
+    } catch(e) {
+        container.innerHTML = '<div class="error">Ошибка: ' + escapeHtml(e.message) + '</div>';
+    }
+}
+
+function renderSuggestions(items, total) {
+    var container = document.getElementById('suggestionsTableContainer');
+    if (!items || items.length === 0) {
+        container.innerHTML = '<p class="no-results">Нет запросов на книги.</p>';
+        return;
+    }
+
+    // Deduplicate by read_list_id (multiple suggestion rows per read_list)
+    var merged = {};
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var rid = item.read_list_id;
+        if (!merged[rid]) {
+            merged[rid] = {
+                read_list_id: rid,
+                bookname: item.bookname,
+                author: item.author,
+                username: item.username,
+                looking_for: item.looking_for,
+                has_suggestion: false,
+                has_edition: false,
+                edition_title: '',
+                sugg_hidden: true
+            };
+        }
+        var m = merged[rid];
+        if (item.has_suggestion) {
+            m.has_suggestion = true;
+            if (item.sugg_edition_id) {
+                m.has_edition = true;
+                if (item.edition_title) m.edition_title = item.edition_title;
+            }
+            if (item.sugg_hidden === false) m.sugg_hidden = false;
+        }
+    }
+
+    // Convert to array preserving order
+    var mergedItems = [];
+    var seen = {};
+    for (var i = 0; i < items.length; i++) {
+        var rid = items[i].read_list_id;
+        if (!seen[rid]) {
+            seen[rid] = true;
+            mergedItems.push(merged[rid]);
+        }
+    }
+
+    var html = '<p>Всего: ' + total + '</p>';
+    html += '<div class="suggestions-list">';
+    for (var i = 0; i < mergedItems.length; i++) {
+        var item = mergedItems[i];
+        var actionBtns = '';
+
+        if (item.has_suggestion) {
+            actionBtns += '<button class="btn btn-small btn-secondary suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
+            if (item.has_edition) {
+                actionBtns += ' <span class="sug-label sug-done">Предложена</span>';
+                if (item.edition_title) {
+                    actionBtns += ' <span class="sug-edition-info">' + escapeHtml(item.edition_title) + '</span>';
+                }
+            }
+            actionBtns += ' <button class="btn btn-small btn-secondary suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
+            if (item.sugg_hidden) {
+                actionBtns += ' <button class="btn btn-small btn-secondary suggest-show" data-id="' + escapeHtml(item.read_list_id) + '">Показать</button>';
+            } else {
+                actionBtns += ' <button class="btn btn-small btn-secondary suggest-hide" data-id="' + escapeHtml(item.read_list_id) + '">Скрыть</button>';
+            }
+        } else {
+            actionBtns += '<button class="btn btn-small suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
+            actionBtns += ' <button class="btn btn-small suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
+            actionBtns += ' <button class="btn btn-small btn-secondary suggest-hide" data-id="' + escapeHtml(item.read_list_id) + '">Скрыть</button>';
+        }
+
+        html += '<div class="suggestion-card">' +
+            '<div class="sug-field"><span class="sug-label">Книга:</span> ' + escapeHtml(item.bookname || '') + '</div>' +
+            '<div class="sug-field"><span class="sug-label">Автор:</span> ' + escapeHtml(item.author || '') + '</div>' +
+            '<div class="sug-field"><span class="sug-label">Пользователь:</span> ' + escapeHtml(item.username || '') + '</div>' +
+            '<div class="sug-field"><span class="sug-label">Ищет:</span> ' + escapeHtml(item.looking_for || '') + '</div>' +
+            '<div class="sug-actions">' + actionBtns + '</div>' +
+            '</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function closeSuggestModal() {
+    document.getElementById('suggestModal').style.display = 'none';
+}
+
+function closeSuggestImportModal() {
+    document.getElementById('suggestImportModal').style.display = 'none';
+    document.getElementById('suggestImportResult').innerHTML = '';
+}
+
+async function openSuggestModal(readListId) {
+    document.getElementById('suggestModalTitle').textContent = 'Предложить книгу';
+
+    // Load existing suggestions only (books are fetched on-demand)
+    var existingSuggestions = [];
+    try {
+        var sugRes = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId)).catch(function() { return {ok: false}; });
+        if (sugRes.ok) existingSuggestions = await sugRes.json();
+    } catch(e) {}
+
+    var html = '<div class="form-group"><label>ID записи (не редактируется):</label>' +
+        '<input type="text" id="sugReadListId" value="' + escapeHtml(readListId) + '" readonly class="readonly-input"></div>';
+    html += '<div id="sugSlotsContainer">';
+    for (var i = 0; i < existingSuggestions.length; i++) {
+        html += buildSuggestionSlot(existingSuggestions[i]);
+    }
+    html += buildSuggestionSlot(null);
+    html += '</div>';
+
+    document.getElementById('suggestModalBody').innerHTML = html;
+
+    attachSuggestionAutocomplete();
+    setupSlotAutoAdd();
+
+    document.getElementById('suggestModal').style.display = 'flex';
+
+    document.getElementById('suggestForm').onsubmit = async function(e) {
+        e.preventDefault();
+        await saveSuggestions(readListId);
+    };
+}
+
+function buildSuggestionSlot(s) {
+    var isExisting = s && s.id;
+    var editionId = s && s.edition_id || '';
+    var editionTitle = s && s.edition_title || '';
+    var hidden = !s || s.hidden;
+    var html = '<div class="sug-slot form-group"' + (isExisting ? ' data-sug-id="' + s.id + '"' : '') + '>' +
+        '<div class="sug-slot-header">' +
+        '<span class="sug-slot-title">' + (isExisting ? 'Предложение #' + s.id : 'Новое предложение') + '</span>' +
+        (isExisting ? '<button type="button" class="btn btn-small btn-secondary sug-slot-delete" data-sug-id="' + s.id + '">Удалить</button>' : '') +
+        '</div>' +
+        '<label>Книга из библиотеки:</label>' +
+        '<div class="sug-book-search">' +
+        '<input type="hidden" class="sug-edition-id" value="' + editionId + '">' +
+        '<input type="text" class="sug-bookname form-input" autocomplete="off" placeholder="Начните вводить название..." value="' + escapeHtml(editionTitle) + '">' +
+        '<select class="sug-book-select form-input" size="5" style="margin-top:5px;display:none">' +
+        '<option value="">— введите 1+ символ —</option>' +
+        '</select>' +
+        '</div>' +
+        '<label><input type="checkbox" class="sug-hidden-chk" ' + (hidden ? 'checked' : '') + '> Скрыть запрос</label>' +
+        '</div>';
+    return html;
+}
+
+function addEmptySlot() {
+    var container = document.getElementById('sugSlotsContainer');
+    if (!container) return;
+    var div = document.createElement('div');
+    div.innerHTML = buildSuggestionSlot(null);
+    var slot = div.firstElementChild;
+    container.appendChild(slot);
+    var group = slot.querySelector('.sug-book-search');
+    if (group) attachGroupAutocomplete(group);
+    setupSlotAutoAdd();
+}
+
+function setupSlotAutoAdd() {
+    var container = document.getElementById('sugSlotsContainer');
+    if (!container) return;
+    container.addEventListener('change', function(e) {
+        if (e.target.classList.contains('sug-book-select') && e.target.value) {
+            scheduleSlotAutoAdd();
+        }
+    });
+}
+
+function scheduleSlotAutoAdd() {
+    setTimeout(function() {
+        var container = document.getElementById('sugSlotsContainer');
+        if (!container) return;
+        var slots = container.querySelectorAll('.sug-slot');
+        var lastSlot = slots[slots.length - 1];
+        if (!lastSlot) return;
+        var lastEdition = lastSlot.querySelector('.sug-edition-id');
+        if (lastEdition && lastEdition.value) {
+            addEmptySlot();
+        }
+    }, 50);
+}
+
+
+
+function attachGroupAutocomplete(group) {
+    var input = group.querySelector('.sug-bookname');
+    var select = group.querySelector('.sug-book-select');
+    var editionInput = group.querySelector('.sug-edition-id');
+    if (!input || !select) return;
+
+    var fetchTimer = null;
+
+    input.addEventListener('input', function() {
+        var val = this.value;
+        editionInput.value = '';
+
+        if (val.length < 1) {
+            select.innerHTML = '<option value="">— введите 1+ символ —</option>';
+            select.style.display = 'none';
+            return;
+        }
+
+        if (fetchTimer) clearTimeout(fetchTimer);
+        fetchTimer = setTimeout(function() {
+            fetch('/api/v1/books?book=' + encodeURIComponent(val) + '&limit=10', {
+                headers: {'Authorization': 'Bearer ' + authToken}
+            }).then(function(res) {
+                if (!res.ok) return null;
+                return res.json();
+            }).then(function(data) {
+                if (!data || !data.books) {
+                    select.innerHTML = '<option value="">— ничего не найдено —</option>';
+                    select.style.display = 'none';
+                    return;
+                }
+                var opts = '<option value="">— выберите книгу —</option>';
+                var seen = {};
+                for (var i = 0; i < data.books.length; i++) {
+                    var b = data.books[i];
+                    var title = (b.edition_title || b.original_title || '').trim();
+                    if (!title || seen[title]) continue;
+                    seen[title] = true;
+                    var author = '';
+                    if (typeof b.authors === 'string') author = b.authors;
+                    else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
+                    var label = title + (author ? ' (' + author + ')' : '');
+                    opts += '<option value="' + b.edition_id + '" data-title="' + escapeAttr(title) + '" data-firstauthor="' + escapeAttr(author) + '">' + escapeHtml(label) + '</option>';
+                }
+                select.innerHTML = opts;
+                select.style.display = select.options.length > 1 ? '' : 'none';
+            }).catch(function() {});
+        }, 300);
+    });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            var val = this.value;
+            if (val.length < 1) return;
+            var opts = select.options;
+            var matched = [];
+            for (var i = 0; i < opts.length; i++) {
+                if (opts[i].value === '') continue;
+                if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
+                    matched.push(opts[i]);
+                }
+            }
+            if (matched.length === 1) {
+                e.preventDefault();
+                fillSuggSelection(input, select, editionInput, matched[0]);
+            }
+        }
+    });
+
+    input.addEventListener('blur', function() {
+        var val = this.value;
+        if (val.length < 1) return;
+        var opts = select.options;
+        var matched = [];
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].value === '') continue;
+            if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
+                matched.push(opts[i]);
+            }
+        }
+        if (matched.length === 1) {
+            fillSuggSelection(input, select, editionInput, matched[0]);
+        }
+    });
+
+    select.addEventListener('change', function() {
+        if (this.value) {
+            fillSuggSelection(input, select, editionInput, this.options[this.selectedIndex]);
+        } else {
+            editionInput.value = '';
+        }
+    });
+}
+
+function attachSuggestionAutocomplete() {
+    document.querySelectorAll('.sug-book-search').forEach(function(group) {
+        attachGroupAutocomplete(group);
+    });
+}
+
+function fillSuggSelection(input, select, editionInput, opt) {
+    opt.selected = true;
+    editionInput.value = opt.value;
+    input.value = opt.dataset.title || opt.textContent;
+    select.style.display = 'none';
+    // Trigger change to detect slot-fill for auto-add
+    var evt = new Event('change', {bubbles: true});
+    select.dispatchEvent(evt);
+}
+
+function escapeAttr(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function saveSuggestions(readListId) {
+    var items = [];
+
+    document.querySelectorAll('#sugSlotsContainer .sug-slot').forEach(function(el) {
+        var sugId = el.dataset.sugId ? parseInt(el.dataset.sugId) : null;
+        var editionInput = el.querySelector('.sug-edition-id');
+        var chk = el.querySelector('.sug-hidden-chk');
+        var editionId = editionInput ? parseInt(editionInput.value) || null : null;
+        // Skip empty new slots
+        if (!sugId && !editionId) return;
+
+        var item = {};
+        if (sugId) item.id = sugId;
+        if (editionId) item.edition_id = editionId;
+        item.hidden = chk ? chk.checked : false;
+        item._delete = false;
+        items.push(item);
+    });
+
+    try {
+        var res = await api(API + '/suggestions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({read_list_id: readListId, items: items})
+        });
+        if (res.ok) {
+            closeSuggestModal();
+            loadSuggestions();
+        } else {
+            var err = await res.json();
+            alert(err.error || 'Ошибка сохранения');
+        }
+    } catch(e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+// Event delegation for suggestion actions
+document.addEventListener('click', function(e) {
+    var target = e.target.closest('button');
+    if (!target) return;
+
+    // Suggest book
+    if (target.classList.contains('suggest-book')) {
+        openSuggestModal(target.dataset.id);
+        return;
+    }
+
+    // Hide suggestion
+    if (target.classList.contains('suggest-hide')) {
+        hideSuggestion(target.dataset.id);
+        return;
+    }
+
+    // Show suggestion (unhide)
+    if (target.classList.contains('suggest-show')) {
+        showSuggestion(target.dataset.id);
+        return;
+    }
+
+    // Import & suggest
+    if (target.classList.contains('suggest-import')) {
+        openSuggestImportModal(target.dataset.id);
+        return;
+    }
+
+    // Delete suggestion slot inside modal
+    if (target.classList.contains('sug-slot-delete')) {
+        var sugId = parseInt(target.dataset.sugId);
+        if (sugId && confirm('Удалить предложение?')) {
+            api(API + '/suggestions/' + sugId, {method: 'DELETE'}).then(function(r) {
+                if (r.ok) {
+                    var slot = target.closest('.sug-slot');
+                    if (slot) slot.remove();
+                } else {
+                    alert('Ошибка удаления');
+                }
+            });
+        }
+        return;
+    }
+
+    // Delete suggestion from edit section (legacy)
+    if (target.classList.contains('sug-edit-delete')) {
+        var sugId = parseInt(target.dataset.sugId);
+        if (!sugId || !confirm('Удалить предложение?')) return;
+        api(API + '/suggestions/' + sugId, {method: 'DELETE'}).then(function(r) {
+            if (r.ok) loadSuggestions();
+        });
+    }
+});
+
+async function hideSuggestion(readListId) {
+    try {
+        var resp = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId));
+        if (!resp.ok) { alert('Ошибка загрузки предложений'); return; }
+        var existing = await resp.json();
+        var items = existing.map(function(s) {
+            var item = {id: s.id, hidden: true};
+            if (s.edition_id) item.edition_id = s.edition_id;
+            return item;
+        });
+        if (items.length === 0) {
+            // No existing suggestions, create new hidden one
+            items = [{edition_id: null, hidden: true}];
+        }
+        var res = await api(API + '/suggestions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                read_list_id: readListId,
+                items: items
+            })
+        });
+        if (res.ok) {
+            loadSuggestions();
+        } else {
+            var err = await res.json();
+            alert(err.error || 'Ошибка');
+        }
+    } catch(e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function showSuggestion(readListId) {
+    try {
+        var resp = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId));
+        if (!resp.ok) { alert('Ошибка загрузки предложений'); return; }
+        var existing = await resp.json();
+        // Build items with hidden=false while preserving edition_id
+        var items = existing.map(function(s) {
+            var item = {id: s.id, hidden: false};
+            if (s.edition_id) item.edition_id = s.edition_id;
+            return item;
+        });
+        if (items.length === 0) { alert('Нет предложений для отображения'); return; }
+        var res = await api(API + '/suggestions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                read_list_id: readListId,
+                items: items
+            })
+        });
+        if (res.ok) {
+            loadSuggestions();
+        } else {
+            var err = await res.json();
+            alert(err.error || 'Ошибка');
+        }
+    } catch(e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function openSuggestImportModal(readListId) {
+    document.getElementById('suggestImportModalTitle').textContent = 'Загрузить книгу';
+    document.getElementById('suggestImportFile').value = '';
+    document.getElementById('suggestImportResult').innerHTML = '';
+    document.getElementById('suggestImportForm').dataset.readListId = readListId;
+    document.getElementById('suggestImportModal').style.display = 'flex';
+    document.getElementById('suggestImportBtn').disabled = false;
+
+    document.getElementById('suggestImportForm').onsubmit = async function(e) {
+        e.preventDefault();
+        await doSuggestImport(readListId);
+    };
+}
+
+async function doSuggestImport(readListId) {
+    var fileInput = document.getElementById('suggestImportFile');
+    var file = fileInput.files[0];
+    if (!file) { alert('Выберите файл'); return; }
+
+    var btn = document.getElementById('suggestImportBtn');
+    btn.disabled = true;
+    btn.textContent = 'Загрузка...';
+    document.getElementById('suggestImportResult').innerHTML = '';
+
+    var formData = new FormData();
+    formData.append('file', file);
+    formData.append('read_list_id', readListId);
+
+    try {
+        var res = await fetch(API + '/suggestions/import', {
+            method: 'POST',
+            headers: {'Authorization': 'Bearer ' + authToken},
+            body: formData
+        });
+        var result = await res.json();
+        if (res.ok || res.status === 201) {
+            document.getElementById('suggestImportResult').innerHTML = '<div class="success">' +
+                escapeHtml(result.message || 'Книга импортирована') + '</div>';
+            setTimeout(function() {
+                closeSuggestImportModal();
+                loadSuggestions();
+            }, 1500);
+        } else if (res.status === 409 && result.duplicate) {
+            document.getElementById('suggestImportResult').innerHTML = '<div class="warning">' +
+                escapeHtml(result.error) + '</div>';
+            btn.disabled = false;
+            btn.textContent = 'Загрузить';
+        } else {
+            document.getElementById('suggestImportResult').innerHTML = '<div class="error">' +
+                escapeHtml(result.error || 'Ошибка импорта') + '</div>';
+            btn.disabled = false;
+            btn.textContent = 'Загрузить';
+        }
+    } catch(e) {
+        document.getElementById('suggestImportResult').innerHTML = '<div class="error">' +
+            escapeHtml(e.message) + '</div>';
+        btn.disabled = false;
+        btn.textContent = 'Загрузить';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     if (!await checkAdminAccess()) return;
 
@@ -703,6 +1259,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         loadBooks();
         loadGenres();
         loadTags();
+        setupSuggestionsFilters();
         return;
     }
 
@@ -714,6 +1271,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     loadAuthors();
     loadGenres();
     loadTags();
+    setupSuggestionsFilters();
     document.getElementById('adminBackLink').addEventListener('click', function(e) {
         e.preventDefault();
         if (window.history.length > 1) {
