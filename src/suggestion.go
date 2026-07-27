@@ -76,11 +76,11 @@ func adminListSuggestions(db *sql.DB) gin.HandlerFunc {
 		}
 
 		if hiddenFilter == "no" {
-			whereClause += fmt.Sprintf(" AND NOT EXISTS (SELECT 1 FROM suggestions s WHERE s.read_list_id = rl.id AND s.user_id = $%d)", argNum)
+			whereClause += fmt.Sprintf(" AND NOT EXISTS (SELECT 1 FROM suggestions s WHERE s.read_list_id = rl.id AND s.user_id = $%d AND s.hidden = TRUE)", argNum)
 			args = append(args, uid)
 			argNum++
 		} else if hiddenFilter == "yes" {
-			whereClause += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM suggestions s WHERE s.read_list_id = rl.id AND s.user_id = $%d)", argNum)
+			whereClause += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM suggestions s WHERE s.read_list_id = rl.id AND s.user_id = $%d AND s.hidden = TRUE)", argNum)
 			args = append(args, uid)
 			argNum++
 		}
