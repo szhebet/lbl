@@ -1,0 +1,1 @@
+ALTER TABLE read_list ADD COLUMN IF NOT EXISTS looking_for TEXT NOT NULL DEFAULT 'Нет';

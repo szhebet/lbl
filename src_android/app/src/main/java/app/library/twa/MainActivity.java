@@ -158,6 +158,36 @@ public class MainActivity extends Activity {
         "});\n" +
         "obs.observe(el,{attributes:true,attributeFilter:['class']});\n" +
         "});\n" +
+        "if(window.AndroidHttpProxy&&typeof window.AndroidHttpProxy.httpRequest==='function'){\n" +
+        "var _origFetch=window.fetch;\n" +
+        "window.fetch=function(url,opts){\n" +
+        "var u=typeof url==='string'?url:url.url;\n" +
+        "if(u&&u.indexOf('/api/')!==-1){\n" +
+        "return new Promise(function(resolve,reject){\n" +
+        "try{\n" +
+        "var m=(opts&&opts.method||'GET').toUpperCase();\n" +
+        "var h=opts&&opts.headers?JSON.stringify(opts.headers):\n" +
+        "JSON.stringify({'Content-Type':'application/json'});\n" +
+        "var b='';\n" +
+        "if(opts&&opts.body){b=typeof opts.body==='string'?opts.body:JSON.stringify(opts.body);}\n" +
+        "var full=u;\n" +
+        "if(u.indexOf('http')!==0){full=location.origin+u;}\n" +
+        "var r=window.AndroidHttpProxy.httpRequest(m,full,h,b);\n" +
+        "var data=JSON.parse(r);\n" +
+        "var resp=new Response(data.body,{\n" +
+        "status:data.status,\n" +
+        "statusText:data.status>=200&&data.status<300?'OK':'Error',\n" +
+        "headers:data.headers||{}\n" +
+        "});\n" +
+        "resolve(resp);\n" +
+        "}catch(e){\n" +
+        "resolve(new Response(JSON.stringify({error:e.message}),{status:502}));\n" +
+        "}\n" +
+        "});\n" +
+        "}\n" +
+        "return _origFetch.apply(this,arguments);\n" +
+        "};\n" +
+        "}\n" +
         "})();\n" +
         "</script>";
 
@@ -489,6 +519,7 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
         webView.addJavascriptInterface(new ReadListBridge(), "AndroidReadListDB");
         webView.addJavascriptInterface(new FileImportBridge(), "AndroidFileImport");
+        webView.addJavascriptInterface(new HttpProxyBridge(), "AndroidHttpProxy");
 
         // Handle file downloads via direct HTTPS connection (trusts self-signed cert)
         webView.setDownloadListener(new DownloadListener() {
@@ -1096,7 +1127,12 @@ public class MainActivity extends Activity {
 
                         String body = "{\"username\":\"" + escapeJson(username) + "\",\"password\":\"" + escapeJson(password)
                                 + "\",\"device_name\":\"" + escapeJson(deviceName) + "\",\"device_fingerprint\":\"" + escapeJson(deviceFingerprint) + "\"}";
-                        conn.getOutputStream().write(body.getBytes("UTF-8"));
+                        byte[] bodyBytes = body.getBytes("UTF-8");
+                        conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+                        conn.getOutputStream().write(bodyBytes);
+                        conn.getOutputStream().flush();
+                        conn.getOutputStream().close();
+                        appendDebug("Bridge login body_len=" + bodyBytes.length);
 
                         int responseCode = conn.getResponseCode();
                         java.io.InputStream is = (responseCode >= 200 && responseCode < 300)
@@ -1218,6 +1254,110 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             appendDebug("Embedded cert SSL factory failed: " + e.getMessage());
             return null;
+        }
+    }
+
+    // ── Generic HTTP proxy via client certificate ──────────────────
+    private class HttpProxyBridge {
+        @JavascriptInterface
+        public String httpRequest(String method, String url, String headersJson, String body) {
+            try {
+                java.net.URL javaUrl = new java.net.URL(url);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) javaUrl.openConnection();
+
+                if (javaUrl.getProtocol().equals("https")) {
+                    javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                    javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                    if (sf != null) {
+                        httpsConn.setSSLSocketFactory(sf);
+                    }
+                    httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                        public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                    });
+                }
+
+                conn.setRequestMethod(method);
+                conn.setInstanceFollowRedirects(true);
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(60000);
+
+                if (headersJson != null && !headersJson.isEmpty()) {
+                    try {
+                        org.json.JSONObject headers = new org.json.JSONObject(headersJson);
+                        java.util.Iterator<String> keys = headers.keys();
+                        while (keys.hasNext()) {
+                            String key = keys.next();
+                            if (!key.equalsIgnoreCase("Host")) {
+                                conn.setRequestProperty(key, headers.getString(key));
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                conn.setRequestProperty("X-Platform", "android");
+
+                if (android.webkit.CookieManager.getInstance() != null) {
+                    String cookies = android.webkit.CookieManager.getInstance().getCookie(url);
+                    if (cookies != null && !cookies.isEmpty()) {
+                        conn.setRequestProperty("Cookie", cookies);
+                    }
+                }
+
+                if (body != null && !body.isEmpty()
+                        && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method) || "DELETE".equals(method))) {
+                    conn.setDoOutput(true);
+                    java.io.OutputStream os = conn.getOutputStream();
+                    os.write(body.getBytes("UTF-8"));
+                    os.flush();
+                    os.close();
+                }
+
+                int status = conn.getResponseCode();
+
+                java.io.InputStream respStream;
+                if (status >= 400) {
+                    respStream = conn.getErrorStream();
+                } else {
+                    respStream = conn.getInputStream();
+                }
+
+                StringBuilder sb = new StringBuilder();
+                if (respStream != null) {
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(respStream, "UTF-8"));
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                }
+
+                String respHeaders = "{";
+                for (java.util.Map.Entry<String, java.util.List<String>> entry : conn.getHeaderFields().entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null && !entry.getValue().isEmpty()) {
+                        respHeaders += "\"" + escapeJson(entry.getKey()) + "\":\"" + escapeJson(entry.getValue().get(0)) + "\",";
+                    }
+                }
+                if (respHeaders.endsWith(",")) respHeaders = respHeaders.substring(0, respHeaders.length() - 1);
+                respHeaders += "}";
+
+                appendDebug("HTTP proxy: " + method + " " + url + " → " + status);
+
+                org.json.JSONObject result = new org.json.JSONObject();
+                result.put("status", status);
+                result.put("body", sb.toString());
+                result.put("headers", new org.json.JSONObject(respHeaders));
+                return result.toString();
+            } catch (Exception e) {
+                appendDebug("HTTP proxy error: " + e.getMessage());
+                try {
+                    org.json.JSONObject err = new org.json.JSONObject();
+                    err.put("status", 0);
+                    err.put("body", "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+                    err.put("headers", new org.json.JSONObject());
+                    return err.toString();
+                } catch (Exception e2) {
+                    return "{\"status\":0,\"body\":\"{}\",\"headers\":{}}";
+                }
+            }
         }
     }
 

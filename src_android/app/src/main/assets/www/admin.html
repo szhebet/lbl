@@ -20,6 +20,7 @@
             <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
             <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
             <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
+            <button class="admin-tab" data-tab="suggestions" data-short="З">Запросы</button>
             <span style="flex:1"></span>
             <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
         </div>
@@ -120,6 +121,20 @@
             </table>
         </div>
 
+        <div id="tab-suggestions" class="admin-content">
+            <div class="admin-toolbar">
+                <input type="text" class="filter-input" id="filter-sug-user" placeholder="Пользователь...">
+                <input type="text" class="filter-input" id="filter-sug-bookname" placeholder="Название...">
+                <input type="text" class="filter-input" id="filter-sug-author" placeholder="Автор...">
+                <select id="filter-sug-hidden" class="filter-input" style="width:120px">
+                    <option value="no">Скрытые: Нет</option>
+                    <option value="yes">Скрытые: Да</option>
+                    <option value="all">Скрытые: Все</option>
+                </select>
+            </div>
+            <div id="suggestionsTableContainer"><div class="loading">Загрузка...</div></div>
+        </div>
+
         <div id="tab-import" class="admin-content">
             <h2>Импорт книг</h2>
             <div class="admin-toolbar">
@@ -187,6 +202,44 @@
                     <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <div id="suggestModal" class="modal">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="suggestModalTitle">Предложить книгу</h2>
+                <button class="modal-close" onclick="closeSuggestModal()">&times;</button>
+            </div>
+            <form id="suggestForm">
+                <div id="suggestModalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSuggestModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="suggestImportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="suggestImportModalTitle">Загрузить книгу</h2>
+                <button class="modal-close" onclick="closeSuggestImportModal()">&times;</button>
+            </div>
+            <form id="suggestImportForm" enctype="multipart/form-data">
+                <div id="suggestImportModalBody" class="modal-body">
+                    <div class="form-group">
+                        <label>Выберите файл (FB2, EPUB, PDF, DOC, DOCX, ZIP):</label>
+                        <input type="file" id="suggestImportFile" accept=".fb2,.fb2.zip,.epub,.pdf,.doc,.docx,.zip" class="file-input" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn" id="suggestImportBtn">Загрузить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSuggestImportModal()">Отмена</button>
+                </div>
+            </form>
+            <div id="suggestImportResult" class="upload-result"></div>
         </div>
     </div>
 
