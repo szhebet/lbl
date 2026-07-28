@@ -29,6 +29,9 @@ src_android/gradlew.bat
 # APK build configuration (contains passwords)
 .apk.conf
 
+# APK deployment directory (generated files)
+apk/
+
 # Sensitive certificate files
 certres/*.key
 certres/*.crt

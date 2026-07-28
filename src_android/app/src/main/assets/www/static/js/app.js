@@ -1109,6 +1109,7 @@ async function loadGenreAuthors(genreId, container) {
                     const icon = authorLevel.querySelector('.expand-icon');
                     const isCollapsed = worksContainer.style.display === 'none';
                     worksContainer.style.display = isCollapsed ? 'block' : 'none';
+                    if (isCollapsed) worksContainer.offsetHeight;
                     icon.textContent = isCollapsed ? '▼' : '▶';
                 });
 
@@ -1136,6 +1137,7 @@ async function loadGenreAuthors(genreId, container) {
                             const icon = workHeader.querySelector('.expand-icon');
                             const isCollapsed = editionsContainer.style.display === 'none';
                             editionsContainer.style.display = isCollapsed ? 'block' : 'none';
+                            if (isCollapsed) editionsContainer.offsetHeight;
                             icon.textContent = isCollapsed ? '▼' : '▶';
                         });
 
@@ -1283,6 +1285,12 @@ function renderBooksTable(data) {
         return;
     }
 
+    // Android: render as cards instead of table
+    if (typeof isAndroidApp === 'function' && isAndroidApp()) {
+        renderBooksCards(books);
+        return;
+    }
+
     // Client-side status sort
     if (booksSortBy === 'status') {
         books.sort(function(a, b) {
@@ -1361,6 +1369,35 @@ function renderBooksTable(data) {
             }
         });
     });
+}
+
+function renderBooksCards(books) {
+    const container = document.getElementById('booksTableContainer');
+    let html = '<div class="books-cards">';
+    books.forEach(function(book) {
+        const editionId = book.edition_id;
+        const title = book.original_title || book.edition_title || '';
+        const authorName = getNullableValue(book, 'authors');
+        const formatName = getNullableValue(book, 'available_formats');
+        const onShelf = book.on_shelf;
+        const shelfIcon = onShelf ? '★' : '☆';
+        const shelfTitle = onShelf ? 'Убрать с полки' : 'Добавить на полку';
+        var st = getUserBookStatus(editionId).status;
+        html += '<div class="book-card" data-id="' + editionId + '">';
+        html += '<div class="bc-author">' + escapeHtml(authorName) + '</div>';
+        html += '<div class="bc-title">' + escapeHtml(title) + '</div>';
+        html += '<div class="bc-bottom">';
+        html += '<a href="#" class="book-download-link bc-download" data-id="' + editionId + '">' + escapeHtml(formatName) + '</a>';
+        html += '<a href="#" class="shelf-toggle bc-shelf" data-id="' + editionId + '" data-on-shelf="' + onShelf + '" title="' + shelfTitle + '">' + shelfIcon + '</a>';
+        html += '<select class="bc-status status-select ' + getStatusClass(st) + '" data-id="' + editionId + '" onchange="setUserBookStatus(' + editionId + ', this.value)">';
+        ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
+            html += '<option value="' + s + '"' + (s === st ? ' selected' : '') + '>' + s + '</option>';
+        });
+        html += '</select>';
+        html += '</div></div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
 }
 
 function getSortIcon(sortBy) {
@@ -1492,6 +1529,26 @@ function setupBooksTableEvents() {
     }
     bindContainer('books');
     bindContainer('tab-books');
+
+    // Double-tap on book card opens edit modal (editor/admin only)
+    var lastCardTap = 0;
+    var lastCardTapId = '';
+    document.addEventListener('click', (e) => {
+        const card = e.target.closest('.book-card');
+        if (!card) return;
+        if (!authUser || !authUser.role || authUser.role === 'viewer') return;
+        const id = card.dataset.id;
+        const now = Date.now();
+        if (id === lastCardTapId && now - lastCardTap < 400) {
+            e.preventDefault();
+            openBookModal({ id: id });
+            lastCardTap = 0;
+            lastCardTapId = '';
+        } else {
+            lastCardTap = now;
+            lastCardTapId = id;
+        }
+    });
 }
 
 
@@ -1533,6 +1590,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
             const worksContainer = authorLevel.nextElementSibling;
             if (worksContainer) {
                 worksContainer.style.display = authorLevel.classList.contains('collapsed') ? 'none' : 'block';
+                if (!authorLevel.classList.contains('collapsed')) worksContainer.offsetHeight;
             }
         });
 
@@ -1577,6 +1635,7 @@ function renderAuthorsTree(authors, container, expandedState = null) {
                     const editionsContainer = workLevel.nextElementSibling;
                     if (editionsContainer) {
                         editionsContainer.style.display = workLevel.classList.contains('collapsed') ? 'none' : 'block';
+                        if (!workLevel.classList.contains('collapsed')) editionsContainer.offsetHeight;
                     }
                 });
 

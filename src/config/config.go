@@ -34,6 +34,7 @@ type DirectoriesConfig struct {
 	Templates string `toml:"templates"`
 	Static    string `toml:"static"`
 	Backup    string `toml:"backup"`
+	ApkDir    string `toml:"apk_dir"`
 }
 
 type DatabaseConfig struct {
@@ -159,6 +160,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LIBAPP_DIR_BACKUP"); v != "" {
 		cfg.Directories.Backup = v
+	}
+	if v := os.Getenv("LIBAPP_DIR_APK"); v != "" {
+		cfg.Directories.ApkDir = v
 	}
 
 	dsn := os.Getenv("LIBAPP_DATABASE_URL")

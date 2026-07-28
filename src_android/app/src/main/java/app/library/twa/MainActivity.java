@@ -1,10 +1,12 @@
 package app.library.twa;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -20,8 +22,11 @@ import android.os.Environment;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import androidx.core.content.FileProvider;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -1057,6 +1062,8 @@ public class MainActivity extends Activity {
     }
 
     private class TokenBridge {
+        private String authToken = "";
+
         @JavascriptInterface
         public void storeRefreshToken(String token) {
             Log.i(TAG, "Storing refresh token via JS bridge");
@@ -1080,6 +1087,218 @@ public class MainActivity extends Activity {
         public void setForceNetworkRefresh(boolean force) {
             Log.i(TAG, "Force network refresh set to: " + force);
             forceNetworkRefresh = force;
+        }
+
+        @JavascriptInterface
+        public void setAuthToken(String token) {
+            Log.i(TAG, "Setting auth token via JS bridge");
+            this.authToken = token;
+        }
+
+        @JavascriptInterface
+        public String getAppVersion() {
+            return Config.APK_VERSION_NAME;
+        }
+
+        @JavascriptInterface
+        public void checkForUpdate() {
+            Log.i(TAG, "Manual checkForUpdate called from JS");
+            checkForUpdateInternal();
+        }
+
+        private void checkForUpdateInternal() {
+            Log.i(TAG, "Checking for APK update in background thread");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String targetUrl = Config.TARGET_URL;
+                        java.net.URL url = new java.net.URL(targetUrl + "api/v1/apk/version");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+
+                        if (url.getProtocol().equals("https")) {
+                            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                            javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                            if (sf != null) {
+                                httpsConn.setSSLSocketFactory(sf);
+                            }
+                            httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                            });
+                        }
+                        conn.setRequestMethod("GET");
+                        conn.setRequestProperty("Authorization", "Bearer " + authToken);
+                        conn.setConnectTimeout(5000);
+                        conn.setReadTimeout(5000);
+
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode != 200) return;
+
+                        java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        reader.close();
+                        conn.disconnect();
+
+                        org.json.JSONObject json = new org.json.JSONObject(sb.toString());
+                        final String serverVersion = json.getString("version");
+                        final String currentVersion = Config.APK_VERSION_NAME;
+
+                        if (compareVersions(serverVersion, currentVersion) > 0) {
+                            // Check if we already prompted for this version (SharedPreferences)
+                            String promptedVersion = getPreferences(MODE_PRIVATE)
+                                .getString("update_prompted_version", "");
+                            if (serverVersion.equals(promptedVersion)) {
+                                Log.i(TAG, "Already prompted for version " + serverVersion + ", skipping");
+                                return;
+                            }
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    String sv = serverVersion;
+                                    new AlertDialog.Builder(MainActivity.this)
+                                        .setTitle("Доступна новая версия")
+                                        .setMessage("Версия " + sv + ". Скачать и установить?")
+                                        .setPositiveButton("Скачать", new DialogInterface.OnClickListener() {
+                                            public void onClick(DialogInterface d, int w) {
+                                                downloadAndInstallApk();
+                                            }
+                                        })
+                                        .setNegativeButton("Позже", new DialogInterface.OnClickListener() {
+                                            public void onClick(DialogInterface d, int w) {
+                                                getPreferences(MODE_PRIVATE).edit()
+                                                    .putString("update_prompted_version", sv).apply();
+                                            }
+                                        })
+                                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                                            public void onCancel(DialogInterface d) {
+                                                getPreferences(MODE_PRIVATE).edit()
+                                                    .putString("update_prompted_version", sv).apply();
+                                            }
+                                        })
+                                        .show();
+                                }
+                            });
+                        }
+                    } catch (Exception e) {
+                        Log.i(TAG, "Update check failed (no retry until next launch): " + e.getMessage());
+                    }
+                }
+
+                private int compareVersions(String a, String b) {
+                    String[] pa = a.split("\\.");
+                    String[] pb = b.split("\\.");
+                    int maxLen = Math.max(pa.length, pb.length);
+                    for (int i = 0; i < maxLen; i++) {
+                        int na = i < pa.length ? Integer.parseInt(pa[i]) : 0;
+                        int nb = i < pb.length ? Integer.parseInt(pb[i]) : 0;
+                        if (na > nb) return 1;
+                        if (na < nb) return -1;
+                    }
+                    return 0;
+                }
+            }).start();
+        }
+
+        private void downloadAndInstallApk() {
+            Log.i(TAG, "Download and install APK requested");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String targetUrl = Config.TARGET_URL;
+                        java.net.URL url = new java.net.URL(targetUrl + "api/v1/apk/download");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+
+                        if (url.getProtocol().equals("https")) {
+                            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                            javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                            if (sf != null) {
+                                httpsConn.setSSLSocketFactory(sf);
+                            }
+                            httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                            });
+                        }
+                        conn.setRequestMethod("GET");
+                        conn.setRequestProperty("Authorization", "Bearer " + authToken);
+                        conn.setConnectTimeout(30000);
+                        conn.setReadTimeout(60000);
+
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode != 200) {
+                            java.io.InputStream es = conn.getErrorStream();
+                            String errMsg = "HTTP " + responseCode;
+                            if (es != null) {
+                                java.io.BufferedReader r = new java.io.BufferedReader(
+                                    new java.io.InputStreamReader(es, "UTF-8"));
+                                StringBuilder sb = new StringBuilder();
+                                String l;
+                                while ((l = r.readLine()) != null) sb.append(l);
+                                r.close();
+                                errMsg = sb.toString();
+                            }
+                            final String finalErr = errMsg;
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Toast.makeText(MainActivity.this,
+                                        "Ошибка скачивания: " + finalErr, Toast.LENGTH_LONG).show();
+                                }
+                            });
+                            return;
+                        }
+
+                        java.io.InputStream is = conn.getInputStream();
+                        File cacheDir = getCacheDir();
+                        File apkFile = new File(cacheDir, "library-update.apk");
+                        FileOutputStream fos = new FileOutputStream(apkFile);
+                        byte[] buf = new byte[8192];
+                        int len;
+                        int total = 0;
+                        while ((len = is.read(buf)) != -1) {
+                            fos.write(buf, 0, len);
+                            total += len;
+                        }
+                        fos.close();
+                        is.close();
+                        conn.disconnect();
+                        Log.i(TAG, "APK downloaded: " + total + " bytes to " + apkFile.getAbsolutePath());
+
+                        final Uri apkUri = FileProvider.getUriForFile(
+                            MainActivity.this,
+                            getPackageName() + ".fileprovider",
+                            apkFile);
+
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Intent intent = new Intent(Intent.ACTION_VIEW);
+                                intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                try {
+                                    startActivity(intent);
+                                } catch (ActivityNotFoundException e) {
+                                    Toast.makeText(MainActivity.this,
+                                        "Не удалось запустить установщик APK", Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        });
+                    } catch (final Exception e) {
+                        Log.e(TAG, "APK download/install error: " + e.getMessage());
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this,
+                                    "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+                }
+            }).start();
         }
 
         @JavascriptInterface

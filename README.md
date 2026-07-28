@@ -120,6 +120,7 @@ go build -o library_app ./src/
 | `LIBAPP_DIR_LOGS` | directories.logs | Директория логов |
 | `LIBAPP_DIR_TEMPLATES` | directories.templates | Шаблоны |
 | `LIBAPP_DIR_STATIC` | directories.static | Статика |
+| `LIBAPP_DIR_APK` | directories.apk_dir | Директория с APK (автообновление) |
 | `LIBAPP_DATABASE_URL` / `DATABASE_URL` | — | DSN или postgres:// URL |
 | `LIBAPP_DB_HOST` | database.host | Хост БД |
 | `LIBAPP_DB_PORT` | database.port | Порт БД |
@@ -413,6 +414,56 @@ APK будут в `android-apk/`:
 ```bash
 adb install -r android-apk/app-debug.apk
 ```
+
+### Автообновление APK
+
+APK-приложение автоматически проверяет наличие новой версии на сервере при запуске. Если версия новее — пользователю предлагается скачать и установить обновление.
+
+#### Серверная часть
+
+1. Создать директорию `apk/` в корне проекта (или настроить свой путь через `config.toml`).
+2. Положить в неё файлы:
+
+```
+apk/
+├── library.apk        # signed release APK
+├── version.txt        # версия, например "1.2"
+```
+
+3. Добавить в `config.toml`:
+
+```toml
+[directories]
+apk_dir = "apk"
+```
+
+**Эндпоинты** (требуют аутентификации):
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/apk/version` | Возвращает `{"version":"1.2","apk_url":"/api/v1/apk/download"}` |
+| GET | `/api/v1/apk/download` | Отдаёт `library.apk` с `Content-Type: application/vnd.android.package-archive` |
+
+Если `apk_dir` не задан или файлы отсутствуют — оба эндпоинта возвращают 404, клиент работает без изменений.
+
+#### Клиентская часть (Android)
+
+- При старте (через 2 секунды после загрузки страницы) JavaScript делает запрос к `/api/v1/apk/version`, сравнивает версию с `APK_VERSION_NAME` из `.apk.conf` (вшивается в `Config.java` при сборке).
+- Если версия новее — показывается диалог `confirm()`: «Доступна новая версия (X.X). Скачать и установить?»
+- При согласии APK скачивается через Java `HttpsURLConnection` (с поддержкой mTLS — используется `createEmbeddedCertSSLSocketFactory()`) и сохраняется в `getCacheDir()`.
+- Установка запускается через `FileProvider` + `Intent.ACTION_VIEW`.
+- Разрешение `REQUEST_INSTALL_PACKAGES` добавлено в манифест (install-time permission, не требует диалога пользователю). На Android 11+ может потребоваться однократно разрешить «Установка из неизвестных источников» в настройках приложения.
+
+#### Версионирование
+
+Версия приложения задаётся в файле `.apk.conf`:
+
+```ini
+APK_VERSION_NAME="1.0"
+APK_VERSION_CODE=1
+```
+
+`APK_VERSION_NAME` вшивается в `Config.java` при сборке и должен совпадать со строкой в `version.txt` на сервере. Формат версии —任意ная последовательность чисел, разделённых точками (например `1.2.3`, `2.0`).
 
 ### Настройка mTLS
 
