@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
     private boolean hasError = false;
     private boolean offlineMode = false;
     private boolean forceNetworkRefresh = false;
+    private TokenBridge tokenBridge;
     private Handler startupTimeoutHandler = new Handler();
     private Runnable startupTimeoutRunnable = new Runnable() {
         @Override
@@ -225,20 +226,33 @@ public class MainActivity extends Activity {
         setupWebView();
         setupDebug();
 
-        Log.i(TAG, "Loading URL: " + TARGET_URL);
+        Log.i(TAG, "Loading main page from assets (no network needed)");
 
-        // Send X-Platform header (API 21+) so server can serve mobile-optimized layout
-        // Server also falls back to User-Agent detection for older API levels
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("X-Platform", "android");
-            webView.loadUrl(TARGET_URL, headers);
-        } else {
-            webView.loadUrl(TARGET_URL);
-        }
+        // Set window background to match app theme (prevents white flash while WebView loads)
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+            android.graphics.Color.parseColor("#f5f5f5")));
+
+        // Load main page directly from assets — no network request at all
+        loadMainPageFromAssets();
 
         // Start 5-second startup timeout — if page doesn't start loading, switch to offline
-        startupTimeoutHandler.postDelayed(startupTimeoutRunnable, 5000);
+        startupTimeoutHandler.postDelayed(startupTimeoutRunnable, 3000);
+
+        // Schedule APK update check in background with delay (no WebView bridge contention)
+        // Runs once, short timeout, no retry on failure
+        startupTimeoutHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (tokenBridge != null) {
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            tokenBridge.triggerUpdateCheck();
+                        }
+                    }).start();
+                }
+            }
+        }, 8000);
     }
 
     private LinearLayout createDebugPanel() {
@@ -521,7 +535,8 @@ public class MainActivity extends Activity {
 
         });
 
-        webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
+        tokenBridge = new TokenBridge();
+        webView.addJavascriptInterface(tokenBridge, "AndroidTokenBridge");
         webView.addJavascriptInterface(new ReadListBridge(), "AndroidReadListDB");
         webView.addJavascriptInterface(new FileImportBridge(), "AndroidFileImport");
         webView.addJavascriptInterface(new HttpProxyBridge(), "AndroidHttpProxy");
@@ -1100,6 +1115,11 @@ public class MainActivity extends Activity {
             return Config.APK_VERSION_NAME;
         }
 
+        public void triggerUpdateCheck() {
+            Log.i(TAG, "Triggered update check from Java (background, no WebView bridge)");
+            checkForUpdateInternal();
+        }
+
         @JavascriptInterface
         public void checkForUpdate() {
             Log.i(TAG, "Manual checkForUpdate called from JS");
@@ -1128,8 +1148,8 @@ public class MainActivity extends Activity {
                         }
                         conn.setRequestMethod("GET");
                         conn.setRequestProperty("Authorization", "Bearer " + authToken);
-                        conn.setConnectTimeout(5000);
-                        conn.setReadTimeout(5000);
+                        conn.setConnectTimeout(2000);
+                        conn.setReadTimeout(3000);
 
                         int responseCode = conn.getResponseCode();
                         if (responseCode != 200) return;
@@ -1648,6 +1668,26 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             appendDebug("Failed to serve admin from assets: " + e.getMessage());
             return null;
+        }
+    }
+
+    private void loadMainPageFromAssets() {
+        try {
+            String html = readAssetToString("www/index.html");
+            html = html.replace("</head>", MOBILE_CSS_TAG + "\n</head>");
+            html = html.replace("<body>", ANDROID_BODY + "\n    " + MOBILE_TOP_BAR_INDEX);
+            html = html.replace("</body>", ANDROID_JS + "\n</body>");
+            webView.loadDataWithBaseURL(TARGET_URL, html, "text/html", "UTF-8", null);
+            appendDebug("Main page loaded from assets (no network)");
+        } catch (IOException e) {
+            appendDebug("Failed to load main page from assets, falling back to network: " + e.getMessage());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                Map<String, String> headers = new HashMap<>();
+                headers.put("X-Platform", "android");
+                webView.loadUrl(TARGET_URL, headers);
+            } else {
+                webView.loadUrl(TARGET_URL);
+            }
         }
     }
 

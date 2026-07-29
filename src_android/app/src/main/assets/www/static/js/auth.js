@@ -153,10 +153,6 @@ document.addEventListener('DOMContentLoaded', function() {
         document.cookie = 'session_token=' + encodeURIComponent(authToken) + ';path=/';
         if (typeof AndroidTokenBridge !== 'undefined') {
             try { AndroidTokenBridge.setAuthToken(authToken); } catch(e) {}
-            // Schedule update check with delay (avoids WebView bridge contention on startup)
-            setTimeout(function() {
-                try { AndroidTokenBridge.checkForUpdate(); } catch(e) {}
-            }, 3000);
         }
     }
 
