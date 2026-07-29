@@ -220,17 +220,13 @@
                     <label for="rlBookname">Название книги:</label>
                     <input type="hidden" id="rlBookId" value="">
                     <input type="text" id="rlBookname" class="form-input" autocomplete="off" placeholder="Начните вводить название...">
-                    <select id="rlBookSelect" class="form-input" size="5" style="margin-top:5px;display:none">
-                        <option value="">— книги не загружены —</option>
-                    </select>
+                    <div id="rlBookSelect" class="search-results" style="display:none"></div>
                 </div>
                 <div class="form-group">
                     <label for="rlAuthor">Автор:</label>
                     <input type="hidden" id="rlAuthorId" value="">
                     <input type="text" id="rlAuthor" class="form-input" autocomplete="off" placeholder="Начните вводить автора...">
-                    <select id="rlAuthorSelect" class="form-input" size="5" style="margin-top:5px;display:none">
-                        <option value="">— авторы не загружены —</option>
-                    </select>
+                    <div id="rlAuthorSelect" class="search-results" style="display:none"></div>
                 </div>
                 <div class="form-group">
                     <label for="rlPriority">Приоритет:</label>
@@ -248,14 +244,6 @@
                         <option value="Читаю">Читаю</option>
                         <option value="Отложил">Отложил</option>
                         <option value="Бросил">Бросил</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="rlLookingFor">Ищу книгу:</label>
-                    <select id="rlLookingFor" class="filter-select">
-                        <option value="Нет">Нет</option>
-                        <option value="Да, локально">Да, локально</option>
-                        <option value="Да, по федерации">Да, по федерации</option>
                     </select>
                 </div>
                 <div class="modal-footer" style="padding:0;border:none;margin-top:15px">
@@ -360,20 +348,6 @@
             }
         }, true);
     }
-    </script>
-    <div id="app-version" style="text-align:center;padding:8px 16px;font-size:11px;color:#999;border-top:1px solid #eee;margin-top:16px"></div>
-    <script>
-    (function() {
-        var el = document.getElementById('app-version');
-        if (typeof AndroidTokenBridge !== 'undefined') {
-            try {
-                var v = AndroidTokenBridge.getAppVersion();
-                if (v) { el.textContent = 'v' + v; }
-            } catch(e) {}
-        } else if (window.appVersion) {
-            el.textContent = 'v' + window.appVersion;
-        }
-    })();
     </script>
 </body>
 </html>
