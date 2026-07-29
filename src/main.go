@@ -758,6 +758,8 @@ func main() {
 		api.GET("/import/status", getImportStatus())
 		api.GET("/export/json", exportBooksJSON(db))
 		api.GET("/export/csv", exportBooksCSV(db))
+		api.GET("/apk/version", getApkVersion(db))
+		api.GET("/apk/download", downloadApk(db))
 	}
 
 	// Write API routes (require auth)
@@ -4022,6 +4024,47 @@ func sanitizeFilename(name string) string {
 		"?", "_", "\"", "_", "<", "_", ">", "_", "|", "_",
 	)
 	return strings.TrimSpace(repl.Replace(name))
+}
+
+func getApkVersion(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		apkDir := cfg.Directories.ApkDir
+		if apkDir == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "APK directory not configured"})
+			return
+		}
+		versionFile := filepath.Join(apkDir, "version.txt")
+		data, err := os.ReadFile(versionFile)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Version file not found"})
+			return
+		}
+		version := strings.TrimSpace(string(data))
+		c.JSON(http.StatusOK, gin.H{
+			"version": version,
+			"apk_url": "/api/v1/apk/download",
+		})
+	}
+}
+
+func downloadApk(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		apkDir := cfg.Directories.ApkDir
+		if apkDir == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "APK directory not configured"})
+			return
+		}
+		apkPath := filepath.Join(apkDir, "library.apk")
+		if _, err := os.Stat(apkPath); os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "APK file not found"})
+			return
+		}
+		c.Header("Content-Type", "application/vnd.android.package-archive")
+		c.Header("Content-Disposition", "attachment; filename=\"library.apk\"")
+		c.File(apkPath)
+	}
 }
 
 type UpdateShelfRequest struct {

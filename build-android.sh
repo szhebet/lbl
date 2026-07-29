@@ -47,6 +47,7 @@ package app.library.twa;
 public final class Config {
     public static final String TARGET_URL = "${APK_TARGET_URL}";
     public static final String CLIENT_CERT_PASSWORD = "${APK_CLIENT_CERT_PASSWORD}";
+    public static final String APK_VERSION_NAME = "${APK_VERSION_NAME}";
     private Config() {}
 }
 JAVA

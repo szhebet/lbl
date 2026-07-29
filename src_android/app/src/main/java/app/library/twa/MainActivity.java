@@ -1,10 +1,12 @@
 package app.library.twa;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
@@ -20,8 +22,11 @@ import android.os.Environment;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import androidx.core.content.FileProvider;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -67,6 +72,7 @@ public class MainActivity extends Activity {
     private boolean hasError = false;
     private boolean offlineMode = false;
     private boolean forceNetworkRefresh = false;
+    private TokenBridge tokenBridge;
     private Handler startupTimeoutHandler = new Handler();
     private Runnable startupTimeoutRunnable = new Runnable() {
         @Override
@@ -220,20 +226,33 @@ public class MainActivity extends Activity {
         setupWebView();
         setupDebug();
 
-        Log.i(TAG, "Loading URL: " + TARGET_URL);
+        Log.i(TAG, "Loading main page from assets (no network needed)");
 
-        // Send X-Platform header (API 21+) so server can serve mobile-optimized layout
-        // Server also falls back to User-Agent detection for older API levels
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("X-Platform", "android");
-            webView.loadUrl(TARGET_URL, headers);
-        } else {
-            webView.loadUrl(TARGET_URL);
-        }
+        // Set window background to match app theme (prevents white flash while WebView loads)
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+            android.graphics.Color.parseColor("#f5f5f5")));
+
+        // Load main page directly from assets — no network request at all
+        loadMainPageFromAssets();
 
         // Start 5-second startup timeout — if page doesn't start loading, switch to offline
-        startupTimeoutHandler.postDelayed(startupTimeoutRunnable, 5000);
+        startupTimeoutHandler.postDelayed(startupTimeoutRunnable, 3000);
+
+        // Schedule APK update check in background with delay (no WebView bridge contention)
+        // Runs once, short timeout, no retry on failure
+        startupTimeoutHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (tokenBridge != null) {
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            tokenBridge.triggerUpdateCheck();
+                        }
+                    }).start();
+                }
+            }
+        }, 8000);
     }
 
     private LinearLayout createDebugPanel() {
@@ -516,7 +535,8 @@ public class MainActivity extends Activity {
 
         });
 
-        webView.addJavascriptInterface(new TokenBridge(), "AndroidTokenBridge");
+        tokenBridge = new TokenBridge();
+        webView.addJavascriptInterface(tokenBridge, "AndroidTokenBridge");
         webView.addJavascriptInterface(new ReadListBridge(), "AndroidReadListDB");
         webView.addJavascriptInterface(new FileImportBridge(), "AndroidFileImport");
         webView.addJavascriptInterface(new HttpProxyBridge(), "AndroidHttpProxy");
@@ -1057,6 +1077,8 @@ public class MainActivity extends Activity {
     }
 
     private class TokenBridge {
+        private String authToken = "";
+
         @JavascriptInterface
         public void storeRefreshToken(String token) {
             Log.i(TAG, "Storing refresh token via JS bridge");
@@ -1080,6 +1102,223 @@ public class MainActivity extends Activity {
         public void setForceNetworkRefresh(boolean force) {
             Log.i(TAG, "Force network refresh set to: " + force);
             forceNetworkRefresh = force;
+        }
+
+        @JavascriptInterface
+        public void setAuthToken(String token) {
+            Log.i(TAG, "Setting auth token via JS bridge");
+            this.authToken = token;
+        }
+
+        @JavascriptInterface
+        public String getAppVersion() {
+            return Config.APK_VERSION_NAME;
+        }
+
+        public void triggerUpdateCheck() {
+            Log.i(TAG, "Triggered update check from Java (background, no WebView bridge)");
+            checkForUpdateInternal();
+        }
+
+        @JavascriptInterface
+        public void checkForUpdate() {
+            Log.i(TAG, "Manual checkForUpdate called from JS");
+            checkForUpdateInternal();
+        }
+
+        private void checkForUpdateInternal() {
+            Log.i(TAG, "Checking for APK update in background thread");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String targetUrl = Config.TARGET_URL;
+                        java.net.URL url = new java.net.URL(targetUrl + "api/v1/apk/version");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+
+                        if (url.getProtocol().equals("https")) {
+                            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                            javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                            if (sf != null) {
+                                httpsConn.setSSLSocketFactory(sf);
+                            }
+                            httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                            });
+                        }
+                        conn.setRequestMethod("GET");
+                        conn.setRequestProperty("Authorization", "Bearer " + authToken);
+                        conn.setConnectTimeout(2000);
+                        conn.setReadTimeout(3000);
+
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode != 200) return;
+
+                        java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        reader.close();
+                        conn.disconnect();
+
+                        org.json.JSONObject json = new org.json.JSONObject(sb.toString());
+                        final String serverVersion = json.getString("version");
+                        final String currentVersion = Config.APK_VERSION_NAME;
+
+                        if (compareVersions(serverVersion, currentVersion) > 0) {
+                            // Check if we already prompted for this version (SharedPreferences)
+                            String promptedVersion = getPreferences(MODE_PRIVATE)
+                                .getString("update_prompted_version", "");
+                            if (serverVersion.equals(promptedVersion)) {
+                                Log.i(TAG, "Already prompted for version " + serverVersion + ", skipping");
+                                return;
+                            }
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    String sv = serverVersion;
+                                    new AlertDialog.Builder(MainActivity.this)
+                                        .setTitle("Доступна новая версия")
+                                        .setMessage("Версия " + sv + ". Скачать и установить?")
+                                        .setPositiveButton("Скачать", new DialogInterface.OnClickListener() {
+                                            public void onClick(DialogInterface d, int w) {
+                                                downloadAndInstallApk();
+                                            }
+                                        })
+                                        .setNegativeButton("Позже", new DialogInterface.OnClickListener() {
+                                            public void onClick(DialogInterface d, int w) {
+                                                getPreferences(MODE_PRIVATE).edit()
+                                                    .putString("update_prompted_version", sv).apply();
+                                            }
+                                        })
+                                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                                            public void onCancel(DialogInterface d) {
+                                                getPreferences(MODE_PRIVATE).edit()
+                                                    .putString("update_prompted_version", sv).apply();
+                                            }
+                                        })
+                                        .show();
+                                }
+                            });
+                        }
+                    } catch (Exception e) {
+                        Log.i(TAG, "Update check failed (no retry until next launch): " + e.getMessage());
+                    }
+                }
+
+                private int compareVersions(String a, String b) {
+                    String[] pa = a.split("\\.");
+                    String[] pb = b.split("\\.");
+                    int maxLen = Math.max(pa.length, pb.length);
+                    for (int i = 0; i < maxLen; i++) {
+                        int na = i < pa.length ? Integer.parseInt(pa[i]) : 0;
+                        int nb = i < pb.length ? Integer.parseInt(pb[i]) : 0;
+                        if (na > nb) return 1;
+                        if (na < nb) return -1;
+                    }
+                    return 0;
+                }
+            }).start();
+        }
+
+        private void downloadAndInstallApk() {
+            Log.i(TAG, "Download and install APK requested");
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String targetUrl = Config.TARGET_URL;
+                        java.net.URL url = new java.net.URL(targetUrl + "api/v1/apk/download");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+
+                        if (url.getProtocol().equals("https")) {
+                            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+                            javax.net.ssl.SSLSocketFactory sf = createEmbeddedCertSSLSocketFactory();
+                            if (sf != null) {
+                                httpsConn.setSSLSocketFactory(sf);
+                            }
+                            httpsConn.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                                public boolean verify(String hostname, javax.net.ssl.SSLSession session) { return true; }
+                            });
+                        }
+                        conn.setRequestMethod("GET");
+                        conn.setRequestProperty("Authorization", "Bearer " + authToken);
+                        conn.setConnectTimeout(30000);
+                        conn.setReadTimeout(60000);
+
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode != 200) {
+                            java.io.InputStream es = conn.getErrorStream();
+                            String errMsg = "HTTP " + responseCode;
+                            if (es != null) {
+                                java.io.BufferedReader r = new java.io.BufferedReader(
+                                    new java.io.InputStreamReader(es, "UTF-8"));
+                                StringBuilder sb = new StringBuilder();
+                                String l;
+                                while ((l = r.readLine()) != null) sb.append(l);
+                                r.close();
+                                errMsg = sb.toString();
+                            }
+                            final String finalErr = errMsg;
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Toast.makeText(MainActivity.this,
+                                        "Ошибка скачивания: " + finalErr, Toast.LENGTH_LONG).show();
+                                }
+                            });
+                            return;
+                        }
+
+                        java.io.InputStream is = conn.getInputStream();
+                        File cacheDir = getCacheDir();
+                        File apkFile = new File(cacheDir, "library-update.apk");
+                        FileOutputStream fos = new FileOutputStream(apkFile);
+                        byte[] buf = new byte[8192];
+                        int len;
+                        int total = 0;
+                        while ((len = is.read(buf)) != -1) {
+                            fos.write(buf, 0, len);
+                            total += len;
+                        }
+                        fos.close();
+                        is.close();
+                        conn.disconnect();
+                        Log.i(TAG, "APK downloaded: " + total + " bytes to " + apkFile.getAbsolutePath());
+
+                        final Uri apkUri = FileProvider.getUriForFile(
+                            MainActivity.this,
+                            getPackageName() + ".fileprovider",
+                            apkFile);
+
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Intent intent = new Intent(Intent.ACTION_VIEW);
+                                intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                try {
+                                    startActivity(intent);
+                                } catch (ActivityNotFoundException e) {
+                                    Toast.makeText(MainActivity.this,
+                                        "Не удалось запустить установщик APK", Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        });
+                    } catch (final Exception e) {
+                        Log.e(TAG, "APK download/install error: " + e.getMessage());
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this,
+                                    "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+                }
+            }).start();
         }
 
         @JavascriptInterface
@@ -1429,6 +1668,26 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             appendDebug("Failed to serve admin from assets: " + e.getMessage());
             return null;
+        }
+    }
+
+    private void loadMainPageFromAssets() {
+        try {
+            String html = readAssetToString("www/index.html");
+            html = html.replace("</head>", MOBILE_CSS_TAG + "\n</head>");
+            html = html.replace("<body>", ANDROID_BODY + "\n    " + MOBILE_TOP_BAR_INDEX);
+            html = html.replace("</body>", ANDROID_JS + "\n</body>");
+            webView.loadDataWithBaseURL(TARGET_URL, html, "text/html", "UTF-8", null);
+            appendDebug("Main page loaded from assets (no network)");
+        } catch (IOException e) {
+            appendDebug("Failed to load main page from assets, falling back to network: " + e.getMessage());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                Map<String, String> headers = new HashMap<>();
+                headers.put("X-Platform", "android");
+                webView.loadUrl(TARGET_URL, headers);
+            } else {
+                webView.loadUrl(TARGET_URL);
+            }
         }
     }
 

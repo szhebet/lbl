@@ -84,6 +84,10 @@ async function tryRefreshToken() {
                 if (data.token) {
                     authToken = data.token;
                     localStorage.setItem('auth_token', authToken);
+                    document.cookie = 'session_token=' + encodeURIComponent(authToken) + ';path=/';
+                    if (typeof AndroidTokenBridge !== 'undefined') {
+                        try { AndroidTokenBridge.setAuthToken(authToken); } catch(e) {}
+                    }
                     return true;
                 }
             }
@@ -110,6 +114,7 @@ function handleLoginResponse(data) {
         authUser = data.user;
         localStorage.setItem('auth_token', authToken);
         localStorage.setItem('auth_user', JSON.stringify(authUser));
+        document.cookie = 'session_token=' + encodeURIComponent(authToken) + ';path=/';
         if (data.refresh_token) {
             storeRefreshToken(data.refresh_token);
         }
@@ -126,9 +131,10 @@ function handleLoginResponse(data) {
                 if (typeof refreshCurrentView === 'function') refreshCurrentView();
             });
         }
-        // Android: force refresh static files from server (bypass asset cache)
+        // Android: pass auth token to native bridge
         if (isAndroidApp()) {
             try {
+                AndroidTokenBridge.setAuthToken(authToken);
                 AndroidTokenBridge.setForceNetworkRefresh(true);
             } catch(e) {}
             // Reload to get fresh static files from server
@@ -144,6 +150,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (isAuthenticated() && authUser) {
         loginBtn.textContent = authUser.username;
         loginBtn.classList.add('logged-in');
+        document.cookie = 'session_token=' + encodeURIComponent(authToken) + ';path=/';
+        if (typeof AndroidTokenBridge !== 'undefined') {
+            try { AndroidTokenBridge.setAuthToken(authToken); } catch(e) {}
+        }
     }
 
     loginBtn.addEventListener('click', function() {
@@ -163,6 +173,7 @@ function doLogout() {
     authUser = null;
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
+    document.cookie = 'session_token=;path=/;max-age=0';
     clearRefreshToken();
     var btn = document.getElementById('loginBtn');
     if (btn) {
@@ -326,3 +337,5 @@ window._authBridgeCallback = function(code, body) {
         }
     }
 };
+
+

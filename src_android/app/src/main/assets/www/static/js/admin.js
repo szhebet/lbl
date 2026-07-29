@@ -780,14 +780,14 @@ function renderSuggestions(items, total) {
         var actionBtns = '';
 
         if (item.has_suggestion) {
-            actionBtns += '<button class="btn btn-small suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
+            actionBtns += '<button class="btn btn-small btn-secondary suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
             if (item.has_edition) {
                 actionBtns += ' <span class="sug-label sug-done">Предложена</span>';
                 if (item.edition_title) {
                     actionBtns += ' <span class="sug-edition-info">' + escapeHtml(item.edition_title) + '</span>';
                 }
             }
-            actionBtns += ' <button class="btn btn-small suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
+            actionBtns += ' <button class="btn btn-small btn-secondary suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
             if (item.sugg_hidden) {
                 actionBtns += ' <button class="btn btn-small btn-secondary suggest-show" data-id="' + escapeHtml(item.read_list_id) + '">Показать</button>';
             } else {
@@ -795,7 +795,7 @@ function renderSuggestions(items, total) {
             }
         } else {
             actionBtns += '<button class="btn btn-small suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
-            actionBtns += ' <button class="btn btn-small btn-secondary suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
+            actionBtns += ' <button class="btn btn-small suggest-import" data-id="' + escapeHtml(item.read_list_id) + '">Загрузить</button>';
             actionBtns += ' <button class="btn btn-small btn-secondary suggest-hide" data-id="' + escapeHtml(item.read_list_id) + '">Скрыть</button>';
         }
 
@@ -823,49 +823,23 @@ function closeSuggestImportModal() {
 async function openSuggestModal(readListId) {
     document.getElementById('suggestModalTitle').textContent = 'Предложить книгу';
 
-    // Load books and existing suggestions in parallel
+    // Load existing suggestions only (books are fetched on-demand)
     var existingSuggestions = [];
     try {
-        var [sugRes] = await Promise.all([
-            api(API + '/suggestions/readlist/' + encodeURIComponent(readListId)).catch(function() { return {ok: false}; }),
-            loadSuggestionBookSelects()
-        ]);
+        var sugRes = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId)).catch(function() { return {ok: false}; });
         if (sugRes.ok) existingSuggestions = await sugRes.json();
     } catch(e) {}
 
     var html = '<div class="form-group"><label>ID записи (не редактируется):</label>' +
         '<input type="text" id="sugReadListId" value="' + escapeHtml(readListId) + '" readonly class="readonly-input"></div>';
     html += '<div id="sugSlotsContainer">';
-    // Existing suggestion slots
     for (var i = 0; i < existingSuggestions.length; i++) {
         html += buildSuggestionSlot(existingSuggestions[i]);
     }
-    // Always one empty slot at the end
     html += buildSuggestionSlot(null);
     html += '</div>';
 
     document.getElementById('suggestModalBody').innerHTML = html;
-
-    // Populate the book selects
-    document.querySelectorAll('.sug-book-select').forEach(function(sel) {
-        sel.innerHTML = _sugBookOptions;
-    });
-
-    // Match existing edition values
-    document.querySelectorAll('.sug-slot[data-sug-id]').forEach(function(el) {
-        var editionIdInput = el.querySelector('.sug-edition-id');
-        var booknameInput = el.querySelector('.sug-bookname');
-        var select = el.querySelector('.sug-book-select');
-        if (editionIdInput && editionIdInput.value) {
-            for (var j = 0; j < select.options.length; j++) {
-                if (select.options[j].value == editionIdInput.value) {
-                    booknameInput.value = select.options[j].dataset.title || select.options[j].textContent;
-                    select.value = editionIdInput.value;
-                    break;
-                }
-            }
-        }
-    });
 
     attachSuggestionAutocomplete();
     setupSlotAutoAdd();
@@ -882,7 +856,7 @@ function buildSuggestionSlot(s) {
     var isExisting = s && s.id;
     var editionId = s && s.edition_id || '';
     var editionTitle = s && s.edition_title || '';
-    var hidden = s && s.hidden || false;
+    var hidden = !s || s.hidden;
     var html = '<div class="sug-slot form-group"' + (isExisting ? ' data-sug-id="' + s.id + '"' : '') + '>' +
         '<div class="sug-slot-header">' +
         '<span class="sug-slot-title">' + (isExisting ? 'Предложение #' + s.id : 'Новое предложение') + '</span>' +
@@ -893,7 +867,7 @@ function buildSuggestionSlot(s) {
         '<input type="hidden" class="sug-edition-id" value="' + editionId + '">' +
         '<input type="text" class="sug-bookname form-input" autocomplete="off" placeholder="Начните вводить название..." value="' + escapeHtml(editionTitle) + '">' +
         '<select class="sug-book-select form-input" size="5" style="margin-top:5px;display:none">' +
-        '<option value="">— выберите книгу —</option>' +
+        '<option value="">— введите 1+ символ —</option>' +
         '</select>' +
         '</div>' +
         '<label><input type="checkbox" class="sug-hidden-chk" ' + (hidden ? 'checked' : '') + '> Скрыть запрос</label>' +
@@ -908,10 +882,9 @@ function addEmptySlot() {
     div.innerHTML = buildSuggestionSlot(null);
     var slot = div.firstElementChild;
     container.appendChild(slot);
-    var sel = slot.querySelector('.sug-book-select');
-    if (sel) sel.innerHTML = _sugBookOptions;
     var group = slot.querySelector('.sug-book-search');
     if (group) attachGroupAutocomplete(group);
+    setupSlotAutoAdd();
 }
 
 function setupSlotAutoAdd() {
@@ -938,34 +911,7 @@ function scheduleSlotAutoAdd() {
     }, 50);
 }
 
-var _sugBookOptions = '<option value="">— книги не загружены —</option>';
 
-async function loadSuggestionBookSelects() {
-    try {
-        var res = await fetch('/api/v1/books?limit=9999', {
-            headers: {'Authorization': 'Bearer ' + authToken}
-        });
-        if (!res.ok) { _sugBookOptions = '<option value="">— ошибка загрузки —</option>'; return; }
-        var data = await res.json();
-        var books = data.books || [];
-        var opts = '<option value="">— выберите книгу —</option>';
-        var seen = {};
-        for (var i = 0; i < books.length; i++) {
-            var b = books[i];
-            var title = (b.edition_title || b.original_title || '').trim();
-            if (!title || seen[title]) continue;
-            seen[title] = true;
-            var author = '';
-            if (typeof b.authors === 'string') author = b.authors;
-            else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
-            var label = title + (author ? ' (' + author + ')' : '');
-            opts += '<option value="' + b.edition_id + '" data-title="' + escapeAttr(title) + '" data-firstauthor="' + escapeAttr(author) + '">' + escapeHtml(label) + '</option>';
-        }
-        _sugBookOptions = opts;
-    } catch(e) {
-        _sugBookOptions = '<option value="">— ошибка загрузки —</option>';
-    }
-}
 
 function attachGroupAutocomplete(group) {
     var input = group.querySelector('.sug-bookname');
@@ -973,29 +919,59 @@ function attachGroupAutocomplete(group) {
     var editionInput = group.querySelector('.sug-edition-id');
     if (!input || !select) return;
 
+    var fetchTimer = null;
+
     input.addEventListener('input', function() {
-        var val = this.value.toLowerCase();
-        var opts = select.options;
-        var matched = [];
-        for (var i = 0; i < opts.length; i++) {
-            if (opts[i].value === '') continue;
-            var matches = opts[i].textContent.toLowerCase().indexOf(val) !== -1;
-            opts[i].style.display = matches ? '' : 'none';
-            if (matches) matched.push(opts[i]);
-        }
+        var val = this.value;
         editionInput.value = '';
-        select.style.display = (val && matched.length > 0) ? '' : 'none';
+
+        if (val.length < 1) {
+            select.innerHTML = '<option value="">— введите 1+ символ —</option>';
+            select.style.display = 'none';
+            return;
+        }
+
+        if (fetchTimer) clearTimeout(fetchTimer);
+        fetchTimer = setTimeout(function() {
+            fetch('/api/v1/books?book=' + encodeURIComponent(val) + '&limit=10', {
+                headers: {'Authorization': 'Bearer ' + authToken}
+            }).then(function(res) {
+                if (!res.ok) return null;
+                return res.json();
+            }).then(function(data) {
+                if (!data || !data.books) {
+                    select.innerHTML = '<option value="">— ничего не найдено —</option>';
+                    select.style.display = 'none';
+                    return;
+                }
+                var opts = '<option value="">— выберите книгу —</option>';
+                var seen = {};
+                for (var i = 0; i < data.books.length; i++) {
+                    var b = data.books[i];
+                    var title = (b.edition_title || b.original_title || '').trim();
+                    if (!title || seen[title]) continue;
+                    seen[title] = true;
+                    var author = '';
+                    if (typeof b.authors === 'string') author = b.authors;
+                    else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
+                    var label = title + (author ? ' (' + author + ')' : '');
+                    opts += '<option value="' + b.edition_id + '" data-title="' + escapeAttr(title) + '" data-firstauthor="' + escapeAttr(author) + '">' + escapeHtml(label) + '</option>';
+                }
+                select.innerHTML = opts;
+                select.style.display = select.options.length > 1 ? '' : 'none';
+            }).catch(function() {});
+        }, 300);
     });
 
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
-            var val = this.value.toLowerCase();
-            if (!val) return;
+            var val = this.value;
+            if (val.length < 1) return;
             var opts = select.options;
             var matched = [];
             for (var i = 0; i < opts.length; i++) {
                 if (opts[i].value === '') continue;
-                if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+                if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
                     matched.push(opts[i]);
                 }
             }
@@ -1007,13 +983,13 @@ function attachGroupAutocomplete(group) {
     });
 
     input.addEventListener('blur', function() {
-        var val = this.value.toLowerCase();
-        if (!val) return;
+        var val = this.value;
+        if (val.length < 1) return;
         var opts = select.options;
         var matched = [];
         for (var i = 0; i < opts.length; i++) {
             if (opts[i].value === '') continue;
-            if (opts[i].textContent.toLowerCase().indexOf(val) !== -1) {
+            if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
                 matched.push(opts[i]);
             }
         }

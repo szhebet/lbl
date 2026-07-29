@@ -14,6 +14,7 @@ temp = "tempfld"
 logs = "logs"
 templates = "templates"
 static = "static"
+#apk_dir = "apk"               # APK files for auto-update (library.apk + version.txt)
 #backup = "/var/backups/library"  # Must be set for DB migrations to work
 
 [database]
