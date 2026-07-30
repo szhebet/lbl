@@ -65,6 +65,10 @@ var storeAuthors = [];
 var storeGenres = [];
 var storeTags = [];
 var sortState = {};
+const PAGE_SIZE = 50;
+var usersPage = 1;
+var genresPage = 1;
+var tagsPage = 1;
 
 function getSortKey(tableId) { return sortState[tableId] ? sortState[tableId].key : 'id'; }
 function getSortDir(tableId) { return sortState[tableId] ? sortState[tableId].dir : 'asc'; }
@@ -129,7 +133,27 @@ function renderTable(tbody, rows, rowFn) {
     tbody.innerHTML = rows.map(rowFn).join('');
 }
 
+function renderPagination(total, page, totalPages, tabName) {
+    if (totalPages <= 1) return '<span class="page-info">' + total + ' записей</span>';
+    var html = '<span class="page-info">' + total + ' записей, стр. ' + page + ' из ' + totalPages + '</span>';
+    if (page > 1) {
+        html += '<button class="pagination-btn" data-tab="' + tabName + '" data-page="1">«</button>';
+        html += '<button class="pagination-btn" data-tab="' + tabName + '" data-page="' + (page - 1) + '">‹</button>';
+    }
+    var start = Math.max(1, page - 2);
+    var end = Math.min(totalPages, page + 2);
+    for (var i = start; i <= end; i++) {
+        html += '<button class="pagination-btn' + (i === page ? ' active' : '') + '" data-tab="' + tabName + '" data-page="' + i + '">' + i + '</button>';
+    }
+    if (page < totalPages) {
+        html += '<button class="pagination-btn" data-tab="' + tabName + '" data-page="' + (page + 1) + '">›</button>';
+        html += '<button class="pagination-btn" data-tab="' + tabName + '" data-page="' + totalPages + '">»</button>';
+    }
+    return html;
+}
+
 function loadUsers() {
+    usersPage = 1;
     api(API + '/users').then(r => r.json()).then(users => {
         storeUsers = users;
         applyFilters();
@@ -138,10 +162,16 @@ function loadUsers() {
 
 function renderUsers() {
     var tbody = document.getElementById('usersTableBody');
+    var pagEl = document.getElementById('usersPagination');
     var filterText = document.getElementById('filter-users').value;
     var filtered = filterData(storeUsers, filterText, ['username', 'email', 'role']);
     var sorted = sortData(filtered, getSortKey('table-users'), getSortDir('table-users'));
-    renderTable(tbody, sorted, function(u) {
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (usersPage > totalPages) usersPage = totalPages;
+    var start = (usersPage - 1) * PAGE_SIZE;
+    var pageItems = sorted.slice(start, start + PAGE_SIZE);
+    renderTable(tbody, pageItems, function(u) {
         return '<tr>' +
             '<td>' + u.id + '</td>' +
             '<td>' + escapeHtml(u.username) + '</td>' +
@@ -153,108 +183,14 @@ function renderUsers() {
             '<button class="btn btn-small btn-secondary delete-user" data-id="' + u.id + '">Удалить</button>' +
             '</td></tr>';
     });
+    var pagHtml = renderPagination(total, usersPage, totalPages, 'users');
+    if (pagEl) pagEl.innerHTML = pagHtml;
+    var pagTop = document.getElementById('usersPaginationTop');
+    if (pagTop) pagTop.innerHTML = pagHtml;
 }
-
-function editUser(id) {
-    api(API + '/users/' + id).then(r => r.json()).then(u => {
-        openAdminModal('Редактировать пользователя #' + id, `
-            <div class="form-group">
-                <label>Имя пользователя:</label>
-                <input type="text" id="f_username" value="${escapeHtml(u.username || '')}">
-            </div>
-            <div class="form-group">
-                <label>Новый пароль (оставьте пустым, чтобы не менять):</label>
-                <input type="password" id="f_password">
-            </div>
-            <div class="form-group">
-                <label>Email:</label>
-                <input type="email" id="f_email" value="${escapeHtml(u.email || '')}">
-            </div>
-            <div class="form-group">
-                <label>Роль:</label>
-                <select id="f_role">
-                    <option value="">— не менять —</option>
-                    <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
-                    <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor</option>
-                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
-            </select>
-            <button id="clearAdminBookFilters" class="btn btn-secondary btn-clear" title="Очистить фильтры">🗑</button>
-        </div>
-        `);
-        document.getElementById('adminForm').onsubmit = async function(e) {
-            e.preventDefault();
-            var body = {};
-            var us = document.getElementById('f_username').value;
-            var p = document.getElementById('f_password').value;
-            var em = document.getElementById('f_email').value;
-            var r = document.getElementById('f_role').value;
-            if (us) body.username = us;
-            if (p) body.password = p;
-            if (em) body.email = em;
-            if (r) body.role = r;
-            var res = await api(API + '/users/' + id, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body)
-            });
-            if (res.ok) { closeAdminModal(); loadUsers(); }
-            else { var d = await res.json(); alert(d.error || 'Error'); }
-        };
-    });
-}
-
-function deleteUser(id) {
-    if (!confirm('Удалить пользователя #' + id + '?')) return;
-    api(API + '/users/' + id, {method: 'DELETE'}).then(r => {
-        if (r.ok || r.status === 204) loadUsers();
-        else r.json().then(d => alert(d.error || 'Error'));
-    });
-}
-
-document.getElementById('addUserBtn').addEventListener('click', function() {
-    openAdminModal('Создать пользователя', `
-        <div class="form-group">
-            <label>Имя пользователя:</label>
-            <input type="text" id="f_username" required>
-        </div>
-        <div class="form-group">
-            <label>Пароль:</label>
-            <input type="password" id="f_password" required>
-        </div>
-        <div class="form-group">
-            <label>Email:</label>
-            <input type="email" id="f_email">
-        </div>
-        <div class="form-group">
-            <label>Роль:</label>
-            <select id="f_role">
-                <option value="viewer">viewer</option>
-                <option value="editor">editor</option>
-                <option value="admin">admin</option>
-            </select>
-        </div>
-    `);
-    document.getElementById('adminForm').onsubmit = async function(e) {
-        e.preventDefault();
-        var body = {
-            username: document.getElementById('f_username').value,
-            password: document.getElementById('f_password').value
-        };
-        var email = document.getElementById('f_email').value;
-        var role = document.getElementById('f_role').value;
-        if (email) body.email = email;
-        if (role) body.role = role;
-        var res = await api(API + '/users', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
-        if (res.ok) { closeAdminModal(); loadUsers(); }
-        else { var d = await res.json(); alert(d.error || 'Error'); }
-    };
-});
 
 function loadAuthors() {
+    authorsPage = 1;
     api(API + '/persons').then(r => r.json()).then(persons => {
         storeAuthors = persons;
         applyFilters();
@@ -263,10 +199,16 @@ function loadAuthors() {
 
 function renderAuthors() {
     var tbody = document.getElementById('authorsTableBody');
+    var pagEl = document.getElementById('authorsPagination');
     var filterText = document.getElementById('filter-authors').value;
     var filtered = filterData(storeAuthors, filterText, ['first_name', 'last_name', 'middle_name', 'pseudonym']);
     var sorted = sortData(filtered, getSortKey('table-authors'), getSortDir('table-authors'));
-    renderTable(tbody, sorted, function(p) {
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (authorsPage > totalPages) authorsPage = totalPages;
+    var start = (authorsPage - 1) * PAGE_SIZE;
+    var pageItems = sorted.slice(start, start + PAGE_SIZE);
+    renderTable(tbody, pageItems, function(p) {
         return '<tr>' +
             '<td>' + p.id + '</td>' +
             '<td>' + escapeHtml(p.last_name) + '</td>' +
@@ -279,132 +221,14 @@ function renderAuthors() {
             '<button class="btn btn-small btn-secondary delete-author" data-id="' + p.id + '">Удалить</button>' +
             '</td></tr>';
     });
-}
-
-document.getElementById('addAuthorBtn').addEventListener('click', function() {
-    openAdminModal('Создать автора', `
-        <div class="form-group">
-            <label>Фамилия:</label>
-            <input type="text" id="f_last_name" required>
-        </div>
-        <div class="form-group">
-            <label>Имя:</label>
-            <input type="text" id="f_first_name">
-        </div>
-        <div class="form-group">
-            <label>Отчество:</label>
-            <input type="text" id="f_middle_name">
-        </div>
-        <div class="form-group">
-            <label>Псевдоним:</label>
-            <input type="text" id="f_pseudonym">
-        </div>
-        <div class="form-group">
-            <label>Дата рождения (ГГГГ-ММ-ДД):</label>
-            <input type="date" id="f_birth_date">
-        </div>
-        <div class="form-group">
-            <label>Дата смерти (ГГГГ-ММ-ДД):</label>
-            <input type="date" id="f_death_date">
-        </div>
-        <div class="form-group">
-            <label>Биография:</label>
-            <textarea id="f_biography" rows="3"></textarea>
-        </div>
-    `);
-    document.getElementById('adminForm').onsubmit = async function(e) {
-        e.preventDefault();
-        var body = {
-            last_name: document.getElementById('f_last_name').value,
-            first_name: document.getElementById('f_first_name').value,
-            middle_name: document.getElementById('f_middle_name').value
-        };
-        var p = document.getElementById('f_pseudonym').value;
-        var bd = document.getElementById('f_birth_date').value;
-        var dd = document.getElementById('f_death_date').value;
-        var bg = document.getElementById('f_biography').value;
-        if (p) body.pseudonym = p;
-        if (bd) body.birth_date = bd;
-        if (dd) body.death_date = dd;
-        if (bg) body.biography = bg;
-        var res = await api(API + '/persons', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
-        if (res.ok) { closeAdminModal(); loadAuthors(); }
-        else { var d = await res.json(); alert(d.error || 'Error'); }
-    };
-});
-
-function editAuthor(id) {
-    api(API + '/persons').then(r => r.json()).then(all => {
-        var p = all.find(a => a.id === id) || {};
-        openAdminModal('Редактировать автора #' + id, `
-            <div class="form-group">
-                <label>Фамилия:</label>
-                <input type="text" id="f_last_name" value="${escapeHtml(p.last_name || '')}" required>
-            </div>
-            <div class="form-group">
-                <label>Имя:</label>
-                <input type="text" id="f_first_name" value="${escapeHtml(p.first_name || '')}">
-            </div>
-            <div class="form-group">
-                <label>Отчество:</label>
-                <input type="text" id="f_middle_name" value="${escapeHtml(p.middle_name || '')}">
-            </div>
-            <div class="form-group">
-                <label>Псевдоним:</label>
-                <input type="text" id="f_pseudonym" value="${escapeHtml(p.pseudonym || '')}">
-            </div>
-            <div class="form-group">
-                <label>Дата рождения (ГГГГ-ММ-ДД):</label>
-                <input type="date" id="f_birth_date" value="${p.birth_date || ''}">
-            </div>
-            <div class="form-group">
-                <label>Дата смерти (ГГГГ-ММ-ДД):</label>
-                <input type="date" id="f_death_date" value="${p.death_date || ''}">
-            </div>
-            <div class="form-group">
-                <label>Биография:</label>
-                <textarea id="f_biography" rows="3">${escapeHtml(p.biography || '')}</textarea>
-            </div>
-        `);
-        document.getElementById('adminForm').onsubmit = async function(e) {
-            e.preventDefault();
-            var body = {
-                last_name: document.getElementById('f_last_name').value,
-                first_name: document.getElementById('f_first_name').value,
-                middle_name: document.getElementById('f_middle_name').value
-            };
-            var ps = document.getElementById('f_pseudonym').value;
-            var bd = document.getElementById('f_birth_date').value;
-            var dd = document.getElementById('f_death_date').value;
-            var bg = document.getElementById('f_biography').value;
-            if (ps) body.pseudonym = ps; else body.pseudonym = null;
-            if (bd) body.birth_date = bd; else body.birth_date = null;
-            if (dd) body.death_date = dd; else body.death_date = null;
-            if (bg) body.biography = bg; else body.biography = null;
-            var res = await api(API + '/persons/' + id, {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body)
-            });
-            if (res.ok) { closeAdminModal(); loadAuthors(); }
-            else { var d = await res.json(); alert(d.error || 'Error'); }
-        };
-    });
-}
-
-function deleteAuthor(id) {
-    if (!confirm('Удалить автора #' + id + '?')) return;
-    api(API + '/persons/' + id, {method: 'DELETE'}).then(r => {
-        if (r.ok || r.status === 204) loadAuthors();
-        else r.json().then(d => alert(d.error || 'Error'));
-    });
+    var pagHtml = renderPagination(total, authorsPage, totalPages, 'authors');
+    if (pagEl) pagEl.innerHTML = pagHtml;
+    var pagTop = document.getElementById('authorsPaginationTop');
+    if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
 function loadGenres() {
+    genresPage = 1;
     api(API + '/genres').then(r => r.json()).then(genres => {
         storeGenres = genres;
         applyFilters();
@@ -413,10 +237,16 @@ function loadGenres() {
 
 function renderGenres() {
     var tbody = document.getElementById('genresTableBody');
+    var pagEl = document.getElementById('genresPagination');
     var filterText = document.getElementById('filter-genres').value;
     var filtered = filterData(storeGenres, filterText, ['name', 'parent_name', 'description']);
     var sorted = sortData(filtered, getSortKey('table-genres'), getSortDir('table-genres'));
-    renderTable(tbody, sorted, function(g) {
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (genresPage > totalPages) genresPage = totalPages;
+    var start = (genresPage - 1) * PAGE_SIZE;
+    var pageItems = sorted.slice(start, start + PAGE_SIZE);
+    renderTable(tbody, pageItems, function(g) {
         return '<tr>' +
             '<td>' + g.id + '</td>' +
             '<td>' + escapeHtml(g.name) + '</td>' +
@@ -428,94 +258,14 @@ function renderGenres() {
             '<button class="btn btn-small btn-secondary delete-genre" data-id="' + g.id + '">Удалить</button>' +
             '</td></tr>';
     });
-}
-
-document.getElementById('addGenreBtn').addEventListener('click', function() {
-    api(API + '/genres').then(r => r.json()).then(allGenres => {
-        var options = '<option value="">Нет родителя</option>' +
-            allGenres.map(g => '<option value="' + g.id + '">' + escapeHtml(g.name) + '</option>').join('');
-        openAdminModal('Создать жанр', `
-            <div class="form-group">
-                <label>Название:</label>
-                <input type="text" id="f_name" required>
-            </div>
-            <div class="form-group">
-                <label>Родительский жанр:</label>
-                <select id="f_parent_id">${options}</select>
-            </div>
-            <div class="form-group">
-                <label>Описание:</label>
-                <textarea id="f_description" rows="3"></textarea>
-            </div>
-        `);
-        document.getElementById('adminForm').onsubmit = async function(e) {
-            e.preventDefault();
-            var body = {name: document.getElementById('f_name').value};
-            var pid = document.getElementById('f_parent_id').value;
-            var desc = document.getElementById('f_description').value;
-            if (pid) body.parent_id = parseInt(pid);
-            if (desc) body.description = desc;
-            var res = await api('/api/v1/genres', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(body)
-            });
-            if (res.ok) { closeAdminModal(); loadGenres(); }
-            else { var d = await res.json(); alert(d.error || 'Error'); }
-        };
-    });
-});
-
-function editGenre(id) {
-    api(API + '/genres').then(r => r.json()).then(all => {
-        var g = all.find(ge => ge.id === id) || {};
-        api(API + '/genres').then(r2 => r2.json()).then(allGenres => {
-            var options = '<option value="">Нет родителя</option>' +
-                allGenres.filter(ge => ge.id !== id).map(ge => '<option value="' + ge.id + '" ' + (g.parent_id === ge.id ? 'selected' : '') + '>' + escapeHtml(ge.name) + '</option>').join('');
-            openAdminModal('Редактировать жанр #' + id, `
-                <div class="form-group">
-                    <label>Название:</label>
-                    <input type="text" id="f_name" value="${escapeHtml(g.name || '')}" required>
-                </div>
-                <div class="form-group">
-                    <label>Родительский жанр:</label>
-                    <select id="f_parent_id">${options}</select>
-                </div>
-                <div class="form-group">
-                    <label>Описание:</label>
-                    <textarea id="f_description" rows="3">${escapeHtml(g.description || '')}</textarea>
-                </div>
-            `);
-            document.getElementById('adminForm').onsubmit = async function(e) {
-                e.preventDefault();
-                var body = {name: document.getElementById('f_name').value};
-                var pid = document.getElementById('f_parent_id').value;
-                var desc = document.getElementById('f_description').value;
-                if (pid) body.parent_id = parseInt(pid); else body.parent_id = null;
-                if (desc) body.description = desc; else body.description = null;
-                var res = await api('/api/v1/genres/' + id, {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(body)
-});
-
-
-                if (res.ok) { closeAdminModal(); loadGenres(); }
-                else { var d = await res.json(); alert(d.error || 'Error'); }
-            };
-        });
-    });
-}
-
-function deleteGenre(id) {
-    if (!confirm('Удалить жанр #' + id + '?')) return;
-    api('/api/v1/genres/' + id, {method: 'DELETE'}).then(r => {
-        if (r.ok || r.status === 204) loadGenres();
-        else r.json().then(d => alert(d.error || 'Error'));
-    });
+    var pagHtml = renderPagination(total, genresPage, totalPages, 'genres');
+    if (pagEl) pagEl.innerHTML = pagHtml;
+    var pagTop = document.getElementById('genresPaginationTop');
+    if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
 function loadTags() {
+    tagsPage = 1;
     api(API + '/tags').then(r => r.json()).then(tags => {
         storeTags = tags;
         applyFilters();
@@ -529,10 +279,16 @@ function renderTableWithPostProcess(tbody, rows, rowFn, postFn) {
 
 function renderTags() {
     var tbody = document.getElementById('tagsTableBody');
+    var pagEl = document.getElementById('tagsPagination');
     var filterText = document.getElementById('filter-tags').value;
     var filtered = filterData(storeTags, filterText, ['name', 'description', 'color']);
     var sorted = sortData(filtered, getSortKey('table-tags'), getSortDir('table-tags'));
-    renderTable(tbody, sorted, function(t) {
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (tagsPage > totalPages) tagsPage = totalPages;
+    var start = (tagsPage - 1) * PAGE_SIZE;
+    var pageItems = sorted.slice(start, start + PAGE_SIZE);
+    renderTable(tbody, pageItems, function(t) {
         return '<tr>' +
             '<td>' + t.id + '</td>' +
             '<td>' + escapeHtml(t.name) + '</td>' +
@@ -547,6 +303,10 @@ function renderTags() {
     tbody.querySelectorAll('.color-swatch').forEach(function(el) {
         el.style.cssText = 'display:inline-block;width:16px;height:16px;background:' + el.dataset.color + ';border-radius:3px;vertical-align:middle;margin-right:4px';
     });
+    var pagHtml = renderPagination(total, tagsPage, totalPages, 'tags');
+    if (pagEl) pagEl.innerHTML = pagHtml;
+    var pagTop = document.getElementById('tagsPaginationTop');
+    if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
 document.getElementById('addTagBtn').addEventListener('click', function() {
@@ -643,10 +403,10 @@ function setupFilterInput(id, fn) {
     }
 }
 
-setupFilterInput('filter-users', applyFilters);
-setupFilterInput('filter-authors', applyFilters);
-setupFilterInput('filter-genres', applyFilters);
-setupFilterInput('filter-tags', applyFilters);
+setupFilterInput('filter-users', function() { usersPage = 1; applyFilters(); });
+setupFilterInput('filter-authors', function() { authorsPage = 1; applyFilters(); });
+setupFilterInput('filter-genres', function() { genresPage = 1; applyFilters(); });
+setupFilterInput('filter-tags', function() { tagsPage = 1; applyFilters(); });
 
 setupFilterInput('bookAuthorFilter', function() { booksPage = 1; loadBooks(); });
 setupFilterInput('bookTitleFilter', function() { booksPage = 1; loadBooks(); });
@@ -668,10 +428,22 @@ document.getElementById('clearAdminBookFilters')?.addEventListener('click', func
     loadBooks();
 });
 
-// Event delegation for admin table action buttons
+// Event delegation for admin table action buttons + pagination
 document.addEventListener('click', function(e) {
     var target = e.target.closest('button');
     if (!target) return;
+
+    // Pagination
+    if (target.classList.contains('pagination-btn')) {
+        var tab = target.dataset.tab;
+        var page = parseInt(target.dataset.page);
+        if (!tab || !page) return;
+        if (tab === 'users') { usersPage = page; renderUsers(); }
+        else if (tab === 'authors') { authorsPage = page; renderAuthors(); }
+        else if (tab === 'genres') { genresPage = page; renderGenres(); }
+        else if (tab === 'tags') { tagsPage = page; renderTags(); }
+        return;
+    }
 
     if (target.classList.contains('edit-user')) {
         editUser(parseInt(target.dataset.id));

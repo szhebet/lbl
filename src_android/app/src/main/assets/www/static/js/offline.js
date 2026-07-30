@@ -82,18 +82,22 @@
         _loadFromBridge() {
             this._cache = [];
             var bridge = getBridge();
-            if (!bridge) return;
+            if (!bridge) { debug('_loadFromBridge: bridge not available'); return; }
             try {
                 var raw = bridge.queryAll('', '', '', '');
                 var allItems = JSON.parse(raw);
-                // Filter by current user only
                 var uid = getCurrentUserId();
+                debug('_loadFromBridge: ' + allItems.length + ' total items from SQLite, user=' + uid);
                 if (uid !== null) {
-                    this._cache = allItems.filter(function(i) { return i.user_id === uid; });
+                    this._cache = allItems.filter(function(i) {
+                        if (i.user_id !== uid) return false;
+                        debug('_loadFromBridge: loaded item id=' + i.id + ' user_id=' + i.user_id + ' deleted=' + i.deleted + ' synced_at=' + i.synced_at);
+                        return true;
+                    });
                 } else {
                     this._cache = allItems;
                 }
-                debug('loaded ' + this._cache.length + ' items from SQLite (user=' + uid + ')');
+                debug('_loadFromBridge: ' + this._cache.length + ' items for user ' + uid);
             } catch(e) {
                 debug('SQLite load failed: ' + e.message);
             }
@@ -307,16 +311,22 @@
 
                 var applyServerItem = function(serverItem) {
                     if (!serverItem) return;
-                    var localItem = ReadListStore.getById(serverItem.id);
+                    var localItem = ReadListStore.getById(serverItem.id) || ReadListStore.getById(item.id);
                     if (localItem) {
+                        var serverId = localItem.id;
                         for (var k in serverItem) {
                             if (serverItem.hasOwnProperty(k) && k !== 'user_id') {
                                 localItem[k] = serverItem[k];
                             }
                         }
                         localItem.user_id = uid;
+                        localItem.id = serverId;
                         ReadListStore._syncOne(localItem);
-                        ReadListStore.markSynced(serverItem.id, serverItem.updated_at);
+                        ReadListStore.markSynced(localItem.id, serverItem.updated_at || localItem.updated_at);
+                    } else {
+                        // Last resort: mark the original item as synced so we don't keep retrying
+                        ReadListStore.markSynced(item.id, item.updated_at);
+                        debug('applyServerItem: no local item found for ' + serverItem.id + ' or ' + item.id + ', marked synced');
                     }
                 };
 
@@ -369,23 +379,26 @@
                 }
             }
 
-            // Step 2: Pull all server items for current user
+            // Step 2: Pull all server items for current user (paginated)
             debug('pull: fetching server items for user ' + uid);
             try {
-                var pullResp = await fetch('/api/v1/user/readlist?limit=9999', {
-                    headers: getAuthHeaders()
-                });
+                var serverIds = {};
+                var localIds = {};
+                var localItems = ReadListStore.getAll();
+                for (var li = 0; li < localItems.length; li++) {
+                    localIds[localItems[li].id] = localItems[li];
+                }
 
-                if (pullResp.ok) {
+                var pullPage = 0;
+                var pullLimit = 100;
+                while (true) {
+                    var pullResp = await fetch('/api/v1/user/readlist?limit=' + pullLimit + '&offset=' + (pullPage * pullLimit), {
+                        headers: getAuthHeaders()
+                    });
+                    if (!pullResp.ok) break;
                     var data = await pullResp.json();
                     var serverItems = data.items || [];
-                    var serverIds = {};
-                    var localIds = {};
-
-                    var localItems = ReadListStore.getAll();
-                    for (var li = 0; li < localItems.length; li++) {
-                        localIds[localItems[li].id] = localItems[li];
-                    }
+                    if (serverItems.length === 0) break;
 
                     for (var si = 0; si < serverItems.length; si++) {
                         var sItem = serverItems[si];
@@ -415,26 +428,26 @@
                         }
                     }
 
-                    for (var li2 = 0; li2 < localItems.length; li2++) {
-                        var lItem2 = localItems[li2];
-                        if (lItem2.user_id !== uid) continue;
-                        if (!serverIds[lItem2.id]) {
-                            var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
-                            if (isDirty) {
-                                debug('pull: local dirty item missing on server: ' + lItem2.id);
-                            } else if (lItem2.synced_at) {
-                                ReadListStore.remove(lItem2.id);
-                                debug('pull removed local: ' + lItem2.id);
-                            } else {
-                                debug('pull: local item never synced, keeping: ' + lItem2.id);
-                            }
+                    pullPage++;
+                }
+
+                for (var li2 = 0; li2 < localItems.length; li2++) {
+                    var lItem2 = localItems[li2];
+                    if (lItem2.user_id !== uid) continue;
+                    if (!serverIds[lItem2.id]) {
+                        var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
+                        if (isDirty) {
+                            debug('pull: local dirty item missing on server: ' + lItem2.id);
+                        } else if (lItem2.synced_at) {
+                            ReadListStore.remove(lItem2.id);
+                            debug('pull removed local: ' + lItem2.id);
+                        } else {
+                            debug('pull: local item never synced, keeping: ' + lItem2.id);
                         }
                     }
-
-                    debug('pull complete: ' + serverItems.length + ' server items for user ' + uid);
-                } else {
-                    anyError = true;
                 }
+
+                debug('pull complete for user ' + uid);
             } catch(e) {
                 anyError = true;
                 debug('pull network error: ' + e.message);

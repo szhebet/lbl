@@ -379,23 +379,26 @@
                 }
             }
 
-            // Step 2: Pull all server items for current user
+            // Step 2: Pull all server items for current user (paginated)
             debug('pull: fetching server items for user ' + uid);
             try {
-                var pullResp = await fetch('/api/v1/user/readlist?limit=9999', {
-                    headers: getAuthHeaders()
-                });
+                var serverIds = {};
+                var localIds = {};
+                var localItems = ReadListStore.getAll();
+                for (var li = 0; li < localItems.length; li++) {
+                    localIds[localItems[li].id] = localItems[li];
+                }
 
-                if (pullResp.ok) {
+                var pullPage = 0;
+                var pullLimit = 100;
+                while (true) {
+                    var pullResp = await fetch('/api/v1/user/readlist?limit=' + pullLimit + '&offset=' + (pullPage * pullLimit), {
+                        headers: getAuthHeaders()
+                    });
+                    if (!pullResp.ok) break;
                     var data = await pullResp.json();
                     var serverItems = data.items || [];
-                    var serverIds = {};
-                    var localIds = {};
-
-                    var localItems = ReadListStore.getAll();
-                    for (var li = 0; li < localItems.length; li++) {
-                        localIds[localItems[li].id] = localItems[li];
-                    }
+                    if (serverItems.length === 0) break;
 
                     for (var si = 0; si < serverItems.length; si++) {
                         var sItem = serverItems[si];
@@ -425,26 +428,26 @@
                         }
                     }
 
-                    for (var li2 = 0; li2 < localItems.length; li2++) {
-                        var lItem2 = localItems[li2];
-                        if (lItem2.user_id !== uid) continue;
-                        if (!serverIds[lItem2.id]) {
-                            var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
-                            if (isDirty) {
-                                debug('pull: local dirty item missing on server: ' + lItem2.id);
-                            } else if (lItem2.synced_at) {
-                                ReadListStore.remove(lItem2.id);
-                                debug('pull removed local: ' + lItem2.id);
-                            } else {
-                                debug('pull: local item never synced, keeping: ' + lItem2.id);
-                            }
+                    pullPage++;
+                }
+
+                for (var li2 = 0; li2 < localItems.length; li2++) {
+                    var lItem2 = localItems[li2];
+                    if (lItem2.user_id !== uid) continue;
+                    if (!serverIds[lItem2.id]) {
+                        var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
+                        if (isDirty) {
+                            debug('pull: local dirty item missing on server: ' + lItem2.id);
+                        } else if (lItem2.synced_at) {
+                            ReadListStore.remove(lItem2.id);
+                            debug('pull removed local: ' + lItem2.id);
+                        } else {
+                            debug('pull: local item never synced, keeping: ' + lItem2.id);
                         }
                     }
-
-                    debug('pull complete: ' + serverItems.length + ' server items for user ' + uid);
-                } else {
-                    anyError = true;
                 }
+
+                debug('pull complete for user ' + uid);
             } catch(e) {
                 anyError = true;
                 debug('pull network error: ' + e.message);

@@ -96,7 +96,7 @@ func TestGetBooks(t *testing.T) {
 
 	var response struct {
 		Total  int            `json:"total"`
-		Limit  string         `json:"limit"`
+		Limit  int         `json:"limit"`
 		Offset string         `json:"offset"`
 		Books  []BookDetails  `json:"books"`
 	}
@@ -134,7 +134,7 @@ func TestGetBook(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  string        `json:"limit"`
+		Limit  int        `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
@@ -1010,13 +1010,13 @@ func TestSearchBooks(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  string        `json:"limit"`
+		Limit  int        `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
-	assert.Equal(t, "20", response.Limit)
+	assert.Equal(t, 20, response.Limit)
 	assert.Equal(t, "0", response.Offset)
 }
 
@@ -1036,13 +1036,13 @@ func TestSearchBooksWithFilters(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  string        `json:"limit"`
+		Limit  int        `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
-	assert.Equal(t, "10", response.Limit)
+	assert.Equal(t, 10, response.Limit)
 }
 
 func TestUploadCoverNoFile(t *testing.T) {
