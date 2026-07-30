@@ -617,24 +617,56 @@ timeout = 60    # Seconds
 - nginx is the recommended HTTPS reverse proxy for production; the Docker override (`docker-compose-nginx.yml`) adds it without modifying the base compose file.
 - Session cookie Secure flag is hardcoded to `false` — acceptable for local/RPi deployment, but should be made dynamic for production.
 
-### APK Asset Duplication
+### APK Offline Algorithm
 
-The offline fallback page `src_android/app/src/main/assets/www/offline.html` is a **self-contained copy of the SPA with inlined CSS/JS**. It is used only as a last resort when the server is unreachable AND the Service Worker has no cached page (first visit).
+**All static files** (`static/css/`, `static/js/`, `templates/`, `service-worker.js`, `favicon.*`) are bundled into the APK assets at build time by `build-android.sh`. The SPA loads entirely from assets — no network needed for the UI.
 
-**All static files (`static/css/`, `static/js/`, `templates/`, `service-worker.js`, `favicon.*`) are now bundled into the APK assets** at build time by `build-android.sh`. The `shouldInterceptRequest` in `MainActivity.java` serves them directly from the APK — no network needed. On login, `forceNetworkRefresh` flag causes one fresh load from server, then falls back to assets for subsequent pages.
+#### Startup Flow
 
-**When changing static files, rebuild the APK** — changes won't be visible until a new APK is installed OR the user logs in (which trigger a server-side refresh):
+1. `loadUrl(TARGET_URL)` — WebView navigates to server URL
+2. `shouldInterceptRequest(WebResourceRequest)` intercepts the request:
+   - `/` → `serveIndexFromAssets()` — reads `www/index.html` from APK, injects mobile CSS/JS, returns as `WebResourceResponse`
+   - `/admin` → `serveAdminFromAssets()` — same with admin template
+   - `/static/*` → `serveFromAssets()` — reads from `www/static/`
+   - `/service-worker.js`, `/favicon.*` → served from assets
+   - All other paths → `null` (let network handle)
+3. When `forceNetworkRefresh` is `true` (set after login via `AndroidTokenBridge.setForceNetworkRefresh`), `shouldInterceptRequest` returns `null` for ALL requests — forces fresh load from server
+4. `onPageFinished` fires after asset-served page loads → evaluates JS to check for content selectors (`.container`, `.tabs`, etc.). If content found, hides debug panel
+5. **5-second watchdog** (`startupTimeoutRunnable`): if no content detected by JS, calls `loadOfflinePage()` as last resort
+6. `loadOfflinePage()` reads `www/offline.html` from assets, displays via `loadDataWithBaseURL`
 
-| What changed | Need to update offline.html? |
+#### API Calls (Offline Behavior)
+
+- **No `AndroidHttpProxy`** — fetch API is native (async, WebView-managed)
+- The SPA calls `/api/v1/*` via standard `fetch()` → WebView sends HTTP request natively
+- Self-signed certificates: `onReceivedSslError` → `handler.proceed()` (trust all)
+- `X-Platform: android` header is added by the SPA's JS (via `fetch` interceptor in `auth.js`)
+- If server is unreachable, native fetch rejects with a network error → SPA handles it (shows error state, no blocking)
+
+#### Why No AndroidHttpProxy
+
+The `0f723fe94` commit introduced `AndroidHttpProxy` — a synchronous `@JavascriptInterface` bridge that routed all `/api/` fetch calls through Java `HttpURLConnection`. This caused:
+
+- JS thread blocked during every API call (synchronous bridge)
+- 30s+ UI freeze when server unreachable (connect timeout)
+- No concurrent requests possible
+
+The fix: removed `AndroidHttpProxy` entirely. WebView's native fetch is fully async and handles timeouts, retries, and concurrency correctly.
+
+#### `offline.html`
+
+A static fallback page at `src_android/app/src/main/assets/www/offline.html`. Self-contained (inlined CSS/JS). Used only when:
+- Server unreachable AND Service Worker has no cached page (first visit)
+- Startup watchdog (5s) detects no content after asset load
+
+When changing the SPA UI, `offline.html` must be manually kept in sync (same structure/bridges). See the table below: | What changed | Need to update offline.html? |
 |---|---|
-| CSS styling (colors, layout, card design) | **Yes** — inline styles in `offline.html` should match |
-| Readlist card structure | **Yes** — HTML structure in `offline.html` is hardcoded |
-| JS bridge API (`AndroidReadListDB.*`) | **Yes** — `offline.html` calls `bridge.queryAll()` directly |
-| Go template changes (e.g., `index.html`) | Only if it affects mobile readlist tab layout |
-| New API endpoints | No — offline page doesn't call API |
+| CSS styling | **Yes** — inline styles |
+| Readlist card structure | **Yes** — hardcoded HTML |
+| JS bridge API (`AndroidReadListDB.*`) | **Yes** — direct calls |
+| Template structure (`index.html`) | If mobile layout changes |
+| New API endpoints | No |
 | Backend logic | No |
-
-To update, edit `src_android/app/src/main/assets/www/offline.html` to match the new UI, then rebuild the APK via `./build-android.sh`.
 
 ### DB Migration + Backup Policy
 

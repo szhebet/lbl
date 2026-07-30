@@ -82,18 +82,22 @@
         _loadFromBridge() {
             this._cache = [];
             var bridge = getBridge();
-            if (!bridge) return;
+            if (!bridge) { debug('_loadFromBridge: bridge not available'); return; }
             try {
                 var raw = bridge.queryAll('', '', '', '');
                 var allItems = JSON.parse(raw);
-                // Filter by current user only
                 var uid = getCurrentUserId();
+                debug('_loadFromBridge: ' + allItems.length + ' total items from SQLite, user=' + uid);
                 if (uid !== null) {
-                    this._cache = allItems.filter(function(i) { return i.user_id === uid; });
+                    this._cache = allItems.filter(function(i) {
+                        if (i.user_id !== uid) return false;
+                        debug('_loadFromBridge: loaded item id=' + i.id + ' user_id=' + i.user_id + ' deleted=' + i.deleted + ' synced_at=' + i.synced_at);
+                        return true;
+                    });
                 } else {
                     this._cache = allItems;
                 }
-                debug('loaded ' + this._cache.length + ' items from SQLite (user=' + uid + ')');
+                debug('_loadFromBridge: ' + this._cache.length + ' items for user ' + uid);
             } catch(e) {
                 debug('SQLite load failed: ' + e.message);
             }
@@ -307,16 +311,22 @@
 
                 var applyServerItem = function(serverItem) {
                     if (!serverItem) return;
-                    var localItem = ReadListStore.getById(serverItem.id);
+                    var localItem = ReadListStore.getById(serverItem.id) || ReadListStore.getById(item.id);
                     if (localItem) {
+                        var serverId = localItem.id;
                         for (var k in serverItem) {
                             if (serverItem.hasOwnProperty(k) && k !== 'user_id') {
                                 localItem[k] = serverItem[k];
                             }
                         }
                         localItem.user_id = uid;
+                        localItem.id = serverId;
                         ReadListStore._syncOne(localItem);
-                        ReadListStore.markSynced(serverItem.id, serverItem.updated_at);
+                        ReadListStore.markSynced(localItem.id, serverItem.updated_at || localItem.updated_at);
+                    } else {
+                        // Last resort: mark the original item as synced so we don't keep retrying
+                        ReadListStore.markSynced(item.id, item.updated_at);
+                        debug('applyServerItem: no local item found for ' + serverItem.id + ' or ' + item.id + ', marked synced');
                     }
                 };
 
