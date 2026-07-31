@@ -547,6 +547,17 @@ func internalError(c *gin.Context, err error) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Внутренняя ошибка сервера"})
 }
 
+func parseLimit(limitStr string, defaultLimit int) int {
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		return defaultLimit
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
+}
+
 func normalizeYear(year sql.NullInt64) sql.NullInt64 {
 	if year.Valid && year.Int64 == 0 {
 		return sql.NullInt64{Valid: false}
@@ -747,6 +758,7 @@ func main() {
 		api.GET("/books/:id/extended", getBookExtended(db))
 		api.GET("/books/:id/download", downloadBook(db))
 		api.GET("/authors", getAuthors(db))
+		api.GET("/authors/:id/works", getAuthorWorks(db))
 		api.GET("/genres", getGenres(db))
 		api.GET("/genres/tree", getGenreTree(db))
 		api.GET("/genres/:id/authors", getGenreAuthors(db))
@@ -796,6 +808,7 @@ func main() {
 		write.GET("/user/readlist", getReadListItems(db))
 		write.POST("/user/readlist", createReadListItem(db))
 		write.GET("/user/readlist/names", getReadListNames(db))
+		write.GET("/user/readlist/:id", getReadListItem(db))
 		write.PUT("/user/readlist/:id", updateReadListItem(db))
 		write.DELETE("/user/readlist/:id", deleteReadListItem(db))
 	}
@@ -1026,7 +1039,7 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		statusFilter := c.Query("status")
 		sortBy := c.DefaultQuery("sort_by", "original_title")
 		sortOrder := c.DefaultQuery("sort_order", "asc")
-		limit := c.DefaultQuery("limit", "50")
+		limit := parseLimit(c.DefaultQuery("limit", "50"), 50)
 		offset := c.DefaultQuery("offset", "0")
 
 		var userID int
@@ -1200,7 +1213,7 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 		language := c.Query("language")
 		yearFrom := c.Query("year_from")
 		yearTo := c.Query("year_to")
-		limit := c.DefaultQuery("limit", "20")
+		limit := parseLimit(c.DefaultQuery("limit", "20"), 20)
 		offset := c.DefaultQuery("offset", "0")
 
 		// Build WHERE clause once for both count and data queries
@@ -1784,13 +1797,11 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 
 		// Pagination
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit := parseLimit(c.DefaultQuery("limit", "20"), 20)
 		if page < 1 {
 			page = 1
 		}
-		if limit < 1 {
-			limit = 50
-		}
+		lazyMode := c.DefaultQuery("lazy", "false") == "true"
 
 		// Common WHERE clause
 		whereClause := " WHERE wc.role = 'author'"
@@ -1885,15 +1896,26 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		defer rows.Close()
 
 		var authors []AuthorWithBooks
-		for rows.Next() {
-			var author AuthorWithBooks
-			if err := rows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
-				internalError(c, err)
-				return
+		if lazyMode {
+			for rows.Next() {
+				var author AuthorWithBooks
+				if err := rows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
+					internalError(c, err)
+					return
+				}
+				author.Works = []WorkWithEditions{}
+				authors = append(authors, author)
 			}
+		} else {
+			for rows.Next() {
+				var author AuthorWithBooks
+				if err := rows.Scan(&author.ID, &author.FirstName, &author.LastName, &author.BooksCount); err != nil {
+					internalError(c, err)
+					return
+				}
 
-			// Get works for this author
-			worksQuery := `
+				// Get works for this author
+				worksQuery := `
 				SELECT DISTINCT
 					w.id,
 					w.original_title,
@@ -2043,6 +2065,7 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			author.Works = works
 			authors = append(authors, author)
 		}
+		}
 
 		if err = rows.Err(); err != nil {
 			internalError(c, err)
@@ -2057,6 +2080,133 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 			"total_works":   totalWorks,
 			"total_editions": totalEditions,
 		})
+	}
+}
+
+// getAuthorWorks returns works+editions for a single author (lazy loading)
+func getAuthorWorks(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authorID := c.Param("id")
+		bookFilter := c.Query("book")
+		genreFilter := c.Query("genre")
+
+		worksQuery := `
+			SELECT DISTINCT
+				w.id,
+				w.original_title,
+				MIN(e.year) as year
+			FROM works w
+			JOIN work_contributors wc ON wc.work_id = w.id
+			JOIN editions e ON e.work_id = w.id
+			WHERE wc.person_id = $1 AND wc.role = 'author'
+		`
+		workArgs := []interface{}{authorID}
+		workArgNum := 2
+
+		if bookFilter != "" {
+			worksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", workArgNum)
+			workArgs = append(workArgs, "%"+normalizeQuery(bookFilter)+"%")
+			workArgNum++
+		}
+		if genreFilter != "" {
+			worksQuery += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d)", workArgNum)
+			workArgs = append(workArgs, "%"+strings.ToLower(genreFilter)+"%")
+			workArgNum++
+		}
+
+		worksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
+
+		workRows, err := db.Query(worksQuery, workArgs...)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		defer workRows.Close()
+
+		works := make([]WorkWithEditions, 0)
+		for workRows.Next() {
+			var work WorkWithEditions
+			var year sql.NullInt64
+			if err := workRows.Scan(&work.ID, &work.OriginalTitle, &year); err != nil {
+				internalError(c, err)
+				return
+			}
+			if year.Valid && year.Int64 != 0 {
+				yearInt := int(year.Int64)
+				work.Year = &yearInt
+			}
+
+			editionRows, err := db.Query(`
+				SELECT e.id, COALESCE(e.title, w.original_title) as title, e.year, e.on_shelf, e.upload_date
+				FROM editions e
+				JOIN works w ON w.id = e.work_id
+				WHERE e.work_id = $1
+				ORDER BY e.year NULLS LAST, e.title
+			`, work.ID)
+			if err != nil {
+				internalError(c, err)
+				return
+			}
+
+			editions := make([]EditionWithFormats, 0)
+			for editionRows.Next() {
+				var edition EditionWithFormats
+				var eYear sql.NullInt64
+				var onShelf bool
+				var uploadDate sql.NullString
+				if err := editionRows.Scan(&edition.ID, &edition.Title, &eYear, &onShelf, &uploadDate); err != nil {
+					editionRows.Close()
+					internalError(c, err)
+					return
+				}
+				if eYear.Valid && eYear.Int64 != 0 {
+					eYearInt := int(eYear.Int64)
+					edition.Year = &eYearInt
+				}
+				edition.OnShelf = onShelf
+				if uploadDate.Valid {
+					edition.UploadDate = uploadDate.String
+				}
+
+				formatRows, err := db.Query(`
+					SELECT f.name, ef.file_path
+					FROM edition_files ef
+					JOIN formats f ON f.id = ef.format_id
+					WHERE ef.edition_id = $1
+				`, edition.ID)
+				if err != nil {
+					editionRows.Close()
+					internalError(c, err)
+					return
+				}
+
+				var formats []FormatInfo
+				for formatRows.Next() {
+					var format FormatInfo
+					if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
+						formatRows.Close()
+						editionRows.Close()
+						internalError(c, err)
+						return
+					}
+					formats = append(formats, format)
+				}
+				formatRows.Close()
+
+				edition.Formats = formats
+				editions = append(editions, edition)
+			}
+			editionRows.Close()
+
+			work.Editions = editions
+			works = append(works, work)
+		}
+
+		if works == nil {
+			works = []WorkWithEditions{}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"works": works})
 	}
 }
 

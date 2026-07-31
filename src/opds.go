@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,7 +94,7 @@ func opdsLatest(db *sql.DB) gin.HandlerFunc {
 		c.Header("Content-Type", "application/atom+xml; charset=utf-8")
 		c.Header("Access-Control-Allow-Origin", "*")
 
-		limit := c.DefaultQuery("limit", "50")
+		limit := strconv.Itoa(parseLimit(c.DefaultQuery("limit", "50"), 50))
 		offset := c.DefaultQuery("offset", "0")
 
 		baseURL := getBaseURL(c)

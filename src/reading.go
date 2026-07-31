@@ -252,6 +252,12 @@ func setUserBook(db *sql.DB) gin.HandlerFunc {
 			internalError(c, err)
 			return
 		}
+
+		// Sync status to read_list if a matching entry exists
+		db.Exec(`UPDATE read_list SET status = $1::user_book_status, updated_at = NOW()
+			WHERE user_id = $2 AND book_id = $3 AND deleted = false
+			AND status::text != $1`, req.Status, uid, editionID)
+
 		var ub UserBook
 		err = db.QueryRow(`
 			SELECT id, user_id, edition_id, status::text, COALESCE(review,''),
@@ -366,7 +372,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 		comment := c.Query("comment")
 		sortBy := c.DefaultQuery("sort_by", "priority")
 		sortOrder := c.DefaultQuery("sort_order", "desc")
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+		limit := parseLimit(c.DefaultQuery("limit", "50"), 50)
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
 		allowedSorts := map[string]string{
@@ -575,9 +581,68 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 				eid := int(editionID.Int64)
 				item.EditionID = &eid
 			}
+			// Sync status to user_books
+			if req.Status != "Не заполнено" {
+				db.Exec(`INSERT INTO user_books (user_id, edition_id, status)
+					VALUES ($1, $2, $3::user_book_status)
+					ON CONFLICT (user_id, edition_id) DO UPDATE SET
+						status = $3::user_book_status, updated_at = CURRENT_TIMESTAMP
+					WHERE user_books.status::text != $3`, uid, *item.BookID, req.Status)
+			}
 		}
 
 		c.JSON(http.StatusCreated, item)
+	}
+}
+
+func getReadListItem(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+		id := c.Param("id")
+
+		var item ReadListItem
+		var editionID sql.NullInt64
+		var updatedAt, syncedAt sql.NullString
+		err := db.QueryRow(`
+			SELECT rl.id::text, rl.listname, rl.bookname, rl.author, rl.priority,
+				rl.author_id, rl.book_id, rl.user_id, rl.comment, rl.status::text,
+				rl.looking_for, rl.deleted, rl.created_at, rl.updated_at, rl.synced_at,
+				COALESCE(f.name, ''), COALESCE(e.on_shelf, false), e.id
+			FROM read_list rl
+			LEFT JOIN editions e ON e.id = rl.book_id
+			LEFT JOIN edition_files ef ON ef.edition_id = e.id AND ef.is_primary = true
+			LEFT JOIN formats f ON f.id = ef.format_id
+			WHERE rl.id = $1::uuid AND rl.user_id = $2
+		`, id, uid).Scan(
+			&item.ID, &item.Listname, &item.Bookname, &item.Author,
+			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
+			&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,
+			&updatedAt, &syncedAt,
+			&item.FormatName, &item.OnShelf, &editionID)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
+			return
+		}
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		if updatedAt.Valid {
+			item.UpdatedAt = updatedAt.String
+		}
+		if syncedAt.Valid {
+			item.SyncedAt = syncedAt.String
+		}
+		if editionID.Valid {
+			eid := int(editionID.Int64)
+			item.EditionID = &eid
+		}
+		c.JSON(http.StatusOK, item)
 	}
 }
 
@@ -667,6 +732,15 @@ func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 		if rows == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
 			return
+		}
+
+		// Sync status to user_books if this read_list item has a book_id
+		if req.BookID != nil && *req.BookID > 0 {
+			db.Exec(`INSERT INTO user_books (user_id, edition_id, status)
+				VALUES ($1, $2, $3::user_book_status)
+				ON CONFLICT (user_id, edition_id) DO UPDATE SET
+					status = $3::user_book_status, updated_at = CURRENT_TIMESTAMP
+				WHERE user_books.status::text != $3`, uid, *req.BookID, req.Status)
 		}
 
 		var item ReadListItem

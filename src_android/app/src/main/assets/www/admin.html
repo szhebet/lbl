@@ -30,6 +30,7 @@
                 <button id="addUserBtn" class="btn">+ Создать пользователя</button>
                 <input type="text" class="filter-input" id="filter-users" placeholder="Фильтр: имя, email, роль...">
             </div>
+            <div class="pagination" id="usersPaginationTop"></div>
             <table class="admin-table" id="table-users">
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
@@ -41,6 +42,7 @@
                 </tr></thead>
                 <tbody id="usersTableBody"></tbody>
             </table>
+            <div class="pagination" id="usersPagination"></div>
         </div>
 
         <div id="tab-authors" class="admin-content">
@@ -48,6 +50,7 @@
                 <button id="addAuthorBtn" class="btn">+ Создать автора</button>
                 <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним...">
             </div>
+            <div class="pagination" id="authorsPaginationTop"></div>
             <table class="admin-table" id="table-authors">
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
@@ -60,6 +63,7 @@
                 </tr></thead>
                 <tbody id="authorsTableBody"></tbody>
             </table>
+            <div class="pagination" id="authorsPagination"></div>
         </div>
 
         <div id="tab-books" class="admin-content">
@@ -90,6 +94,7 @@
                 <button id="addGenreBtn" class="btn">+ Создать жанр</button>
                 <input type="text" class="filter-input" id="filter-genres" placeholder="Фильтр: название, родитель...">
             </div>
+            <div class="pagination" id="genresPaginationTop"></div>
             <table class="admin-table" id="table-genres">
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
@@ -101,6 +106,7 @@
                 </tr></thead>
                 <tbody id="genresTableBody"></tbody>
             </table>
+            <div class="pagination" id="genresPagination"></div>
         </div>
 
         <div id="tab-tags" class="admin-content">
@@ -108,6 +114,7 @@
                 <button id="addTagBtn" class="btn">+ Создать тег</button>
                 <input type="text" class="filter-input" id="filter-tags" placeholder="Фильтр: название...">
             </div>
+            <div class="pagination" id="tagsPaginationTop"></div>
             <table class="admin-table" id="table-tags">
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
@@ -119,6 +126,7 @@
                 </tr></thead>
                 <tbody id="tagsTableBody"></tbody>
             </table>
+            <div class="pagination" id="tagsPagination"></div>
         </div>
 
         <div id="tab-suggestions" class="admin-content">

@@ -1,6 +1,6 @@
 # Домашняя библиотека
 
-Веб-приложение для управления домашней коллекцией книг с REST API, OPDS-каталогом (для читалок) и SPA-интерфейсом.
+Веб-приложение для управления домашней коллекцией книг с REST API, OPDS-каталогом (для читалок), SPA-интерфейсом и Android-приложением (WebView) с офлайн-режимом для списка чтения.
 
 ## Возможности
 
@@ -10,14 +10,19 @@
 - **LLM-распознавание** — автоматическое определение названия и автора по тексту первых страниц (PDF, DOC, DOCX) через Ollama / OpenAI-совместимый API
 - **Проверка дубликатов** — SHA-256 хеш контента; если книга уже есть, импорт пропускается
 - **Полка (избранное)** — быстрый доступ к отмеченным книгам (общая для всех пользователей)
-- **Список чтения** — персональные списки книг для каждого пользователя (планирование чтения с приоритетами)
+- **Список чтения** — персональные списки книг для каждого пользователя (планирование чтения с приоритетами, статусы «Читаю», «Прочитано», «Отложил», «Бросил»)
+- **Запросы книг** — пользователь отмечает, что ищет книгу (локально / по федерации); администратор видит заявки, подбирает книгу из каталога или импортирует файл как предложение
+- **Офлайн-синхронизация списка чтения** (Android) — локальная SQLite-копия, очередь изменений, фоновая синхронизация с разрешением конфликтов (last-write-wins)
 - **Статус чтения** — отслеживание прогресса: не начато, читаю, прочитано (ведется для каждого пользователя)
 - **Поиск** — по автору, названию, жанру, дате; ё→е, регистронезависимый, GIN trgm индексы
 - **Ролевая модель** — viewer (просмотр), editor (каталог + админка без пользователей), admin (полный доступ)
 - **OPDS-каталог** — доступ к библиотеке с электронных читалок через OPDS 1.2
-- **SPA-интерфейс** — три вкладки (Авторы, Книги, Жанры) + Импорт
-- **Админ-панель** — управление пользователями, каталогом, настройками LLM
-- **Android WebView** — мобильное приложение (WebView), HTTPS через nginx
+- **SPA-интерфейс** — четыре вкладки (Авторы, Книги, Жанры, Список чтения)
+- **Общая полка** — отдельная страница `/shelf/` со всеми книгами на полке и безопасными токен-ссылками на скачивание
+- **Админ-панель** — управление пользователями, каталогом, тегами, запросами книг, настройками LLM
+- **Бэкап БД перед миграциями** — автоматический `pg_dump` в `backup_dir` перед применением миграций
+- **Автообновление APK** — приложение проверяет версию на сервере и предлагает установить новую
+- **Android WebView** — мобильное приложение (WebView) с офлайн-запасной страницей и HTTPS через nginx
 
 ### Поддерживаемые форматы
 
@@ -121,6 +126,7 @@ go build -o library_app ./src/
 | `LIBAPP_DIR_TEMPLATES` | directories.templates | Шаблоны |
 | `LIBAPP_DIR_STATIC` | directories.static | Статика |
 | `LIBAPP_DIR_APK` | directories.apk_dir | Директория с APK (автообновление) |
+| `LIBAPP_DIR_BACKUP` | directories.backup | Директория бэкапов БД |
 | `LIBAPP_DATABASE_URL` / `DATABASE_URL` | — | DSN или postgres:// URL |
 | `LIBAPP_DB_HOST` | database.host | Хост БД |
 | `LIBAPP_DB_PORT` | database.port | Порт БД |
@@ -218,11 +224,12 @@ go build -o library_app ./src/
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/user/readlist` | Список чтения текущего пользователя |
-| POST | `/api/v1/user/readlist` | Создать запись в списке чтения |
+| GET | `/api/v1/user/readlist` | Список чтения текущего пользователя (сортировка по приоритету) |
+| POST | `/api/v1/user/readlist` | Создать запись (UUID id, created_at/updated_at, looking_for, deleted) |
 | GET | `/api/v1/user/readlist/names` | Названия списков |
-| PUT | `/api/v1/user/readlist/:id` | Обновить запись списка чтения |
-| DELETE | `/api/v1/user/readlist/:id` | Удалить запись из списка чтения |
+| GET | `/api/v1/user/readlist/:id` | Конкретная запись |
+| PUT | `/api/v1/user/readlist/:id` | Обновить запись (конфликт → 409 с `server_item`) |
+| DELETE | `/api/v1/user/readlist/:id` | Удалить запись (мягкое удаление, `deleted=true`) |
 
 ### Администрирование (admin only)
 
@@ -236,18 +243,40 @@ go build -o library_app ./src/
 | PUT | `/api/v1/admin/settings` | Обновление настроек |
 | GET | `/api/v1/admin/refresh` | Перераспознать все книги через LLM |
 
+### Запросы книг (editor+)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/admin/suggestions` | Список заявок (?user=, ?bookname=, ?author=, ?hidden=) |
+| POST | `/api/v1/admin/suggestions` | Создать/обновить предложения для заявки |
+| GET | `/api/v1/admin/suggestions/readlist/:id` | Предложения конкретной заявки |
+| DELETE | `/api/v1/admin/suggestions/:id` | Удалить предложение |
+| POST | `/api/v1/admin/suggestions/import` | Импортировать файл и привязать к заявке (multipart) |
+
 ### Полка
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/api/v1/shelf/count` | Количество книг на полке |
 | PUT | `/api/v1/shelf/clear` | Очистить полку |
+| GET | `/api/v1/shelf/download/:token` | Скачать книгу по токену (без авторизации) |
+
+### Экспорт
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/export/json` | Экспорт каталога в JSON |
+| GET | `/api/v1/export/csv` | Экспорт каталога в CSV |
+| POST | `/api/v1/import/json` | Импорт каталога из JSON |
 
 ### Прочее
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/api/v1/config` | Конфигурация (enable_delete) |
+| GET | `/api/v1/apk/version` | Версия APK на сервере (`{"version":"...","apk_url":"..."}`) |
+| GET | `/api/v1/apk/download` | Скачивание `library.apk` |
+| GET | `/shelf/` | Страница «Общая полка» (HTML, без авторизации) |
 | GET | `/debug/goroutines` | Дамп горутин (admin+editor) |
 
 ### OPDS
@@ -283,6 +312,8 @@ go test -count=1 ./src/
 ```
 lbl/
 ├── bookarch/                  # Хранилище книг (ZIP-архивы)
+├── apk/                       # Собранный APK + version.txt (автообновление)
+├── backup/                    # Бэкапы БД перед миграциями
 ├── certres/                   # SSL-сертификаты и скрипты генерации
 │   ├── generate-certs.sh      # CA + серверные сертификаты
 │   ├── generate-keystore.sh   # Keystore для подписи APK
@@ -294,19 +325,14 @@ lbl/
 │   ├── main.go                # Точка входа + все основные хендлеры
 │   ├── auth.go                # Логин, регистрация, refresh
 │   ├── admin.go               # Админ-хендлеры (пользователи, персоны, теги)
-│   ├── reading.go             # Статус чтения + middleware проверки ролей
+│   ├── reading.go             # Список чтения + статус чтения
+│   ├── suggestion.go          # Запросы книг (suggestions)
 │   ├── jwt.go                 # Генерация и валидация JWT + refresh-токены
 │   ├── opds.go                # OPDS XML-каталог
 │   ├── export.go              # Экспорт/импорт хендлеры
 │   ├── main_test.go           # Тесты
 │   ├── schema.sql             # Встраиваемая схема БД (go:embed)
-│   ├── migration_1.1.sql      # Миграция 1.1
-│   ├── migration_2.0.sql      # Миграция 2.0
-│   ├── migration_2.1.sql      # Миграция 2.1 (user_devices)
-│   ├── migration_2.2.sql      # Миграция 2.2 (user_books)
-│   ├── migration_2.3.sql      # Миграция 2.3 (read_list)
-│   ├── migration_2.4.sql      # Миграция 2.4 (триггеры sync)
-│   ├── migration_2.5.sql      # Миграция 2.5 (refresh_tokens)
+│   ├── migration_*.sql        # Миграции (текущая версия: 4.4)
 │   ├── config/
 │   │   └── config.go          # Структура конфига, Load(), DefaultConfig()
 │   └── utils/
@@ -324,22 +350,34 @@ lbl/
 │   │   ├── style.css          # Основные стили (десктоп + @media mobile)
 │   │   └── mobile.css         # Android-only стили (body.android)
 │   ├── js/
-│   │   ├── app.js             # SPA: вкладки Авторы, Книги, Жанры
-│   │   └── import.js          # Асинхронный импорт с polling прогресса
-│   └── favicon.ico
+│   │   ├── app.js             # SPA: вкладки Авторы, Книги, Жанры, Список чтения
+│   │   ├── admin.js           # Админ-панель SPA (включая Запросы)
+│   │   ├── auth.js            # Авторизация + Android-мост
+│   │   ├── import.js          # Асинхронный импорт с polling прогресса
+│   │   └── offline.js         # Офлайн-слой списка чтения (SQLite-мост)
+│   └── service-worker.js      # Кэш статики для офлайн-режима
 ├── templates/
 │   ├── index.html             # SPA главная страница (4 вкладки)
-│   └── admin.html             # Админ-панель SPA
+│   └── admin.html             # Админ-панель SPA (7 вкладок)
 ├── tempfld/                   # Директория загрузки/распаковки файлов
 ├── testdata/                  # Тестовые книги
+├── src_android/               # Android WebView приложение
+│   └── app/src/main/
+│       ├── AndroidManifest.xml
+│       ├── java/app/library/twa/   # MainActivity, ReadListDB (SQLite), TokenBridge
+│       └── assets/www/             # Статика, встраиваемая в APK, offline.html
 ├── config.toml.example        # Пример конфига
 ├── env.example                # Пример .env для Docker
+├── .apk.conf.example          # Шаблон конфигурации сборки APK
 ├── nginx.conf                 # Конфигурация nginx (HTTPS + прокси)
 ├── docker-compose.yml         # Docker Compose (БД + приложение)
 ├── docker-compose-nginx.yml   # Override: добавляет nginx (HTTPS)
 ├── Dockerfile                 # Многоступенчатая сборка Go
 ├── Dockerfile.all-in-one      # Всё в одном (БД + приложение)
+├── Dockerfile.android         # Сборка APK
+├── Dockerfile.android.sdk     # Образ SDK для сборки APK
 ├── startup.sh                 # Точка входа контейнера
+├── build-android.sh           # Сборка APK (читает .apk.conf)
 ├── go.mod / go.sum
 ├── AGENTS.md                  # Инструкции для ассистентов AI
 ├── README.md
@@ -392,21 +430,17 @@ server {
 }
 ```
 
-## TWA Android App
+## Android WebView App
 
-TWA (Trusted Web Activity) упаковывает веб-приложение в Android APK через Chrome Custom Tabs. Для работы требуется HTTPS и Digital Asset Links.
+Мобильное приложение представляет собой Android WebView-обёртку SPA. Статика (CSS, JS, шаблоны) встраивается в APK при сборке, поэтому интерфейс загружается без сети; при недоступности сервера показывается офлайн-страница.
 
 ### Сборка APK
 
+Конфигурация сборки — в файле `.apk.conf` (см. `.apk.conf.example`): целевой URL, пути к сертификатам, keystore, версия приложения.
+
 ```bash
-# Полная сборка (debug + release)
+# Сборка (debug + release)
 ./build-android.sh
-
-# Только debug
-./build-apk-debug.sh
-
-# Только release
-./build-apk-release.sh
 ```
 
 APK будут в `android-apk/`:
@@ -414,6 +448,13 @@ APK будут в `android-apk/`:
 ```bash
 adb install -r android-apk/app-debug.apk
 ```
+
+### Офлайн-режим
+
+- Все статические файлы (`static/css/`, `static/js/`, `templates/`, `service-worker.js`, `offline.html`) копируются в `src_android/app/src/main/assets/www/` при сборке.
+- `shouldInterceptRequest()` отдаёт страницы из ассетов без обращения к сети; после логина принудительно загружает свежие файлы с сервера.
+- Список чтения хранится локально в SQLite (`ReadListDB.java`) и синхронизируется с сервером в фоне.
+- Офлайн-страница `offline.html` показывается, если сервер недоступен.
 
 ### Автообновление APK
 
@@ -463,7 +504,7 @@ APK_VERSION_NAME="1.0"
 APK_VERSION_CODE=1
 ```
 
-`APK_VERSION_NAME` вшивается в `Config.java` при сборке и должен совпадать со строкой в `version.txt` на сервере. Формат версии —任意ная последовательность чисел, разделённых точками (например `1.2.3`, `2.0`).
+`APK_VERSION_NAME` вшивается в `Config.java` при сборке и должен совпадать со строкой в `version.txt` на сервере. Формат версии — произвольная последовательность чисел, разделённых точками (например `1.2.3`, `2.0`).
 
 ### Настройка mTLS
 
@@ -475,7 +516,6 @@ APK_VERSION_CODE=1
 cd certres
 ./generate-certs.sh           # CA + сертификат сервера
 ./generate-keystore.sh        # Keystore для подписи APK
-./generate-assetlinks.sh      # Digital Asset Links
 ./generate-client-cert.sh     # Клиентский сертификат (для APK)
 ```
 
@@ -523,16 +563,32 @@ server {
 ```
 src_android/
 ├── app/
-│   ├── build.gradle           # Копирование сертификатов в ресурсы
+│   ├── build.gradle           # Версия, подпись из build-extras.gradle
 │   └── src/main/
 │       ├── AndroidManifest.xml
 │       ├── res/raw/
 │       │   ├── ca_cert.crt    # Сертификат CA (из certres/)
 │       │   └── client_cert.p12 # Клиентский сертификат (из certres/)
+│       ├── assets/www/        # Статика, встраиваемая в APK (копируется при сборке)
+│       │   ├── index.html, admin.html
+│       │   ├── static/        # CSS, JS (включая offline.js)
+│       │   ├── offline.html   # Офлайн-страница-запас
+│       │   └── service-worker.js
 │       └── java/app/library/twa/
 │           ├── Application.java
-│           └── MainActivity.java  # Отправка клиентского сертификата
+│           ├── MainActivity.java  # WebView, мост к SQLite, mTLS, автообновление
+│           └── ReadListDB.java    # SQLite-хранилище списка чтения
 ```
+
+### Офлайн-синхронизация списка чтения
+
+Список чтения доступен в Android-приложении без сети:
+
+- Локальная копия хранится в SQLite (`readlist_items`), синхронизируется с таблицей `read_list` на сервере.
+- Все изменения (создание, правка, удаление, смена статуса) сначала пишутся локально и попадают в очередь.
+- Фоновая синхронизация: **push** (отправка локальных изменений с `updated_at > synced_at`) → **pull** (загрузка изменений с сервера). Запускается после каждой мутации и при старте приложения.
+- Записи привязаны к текущему пользователю; при смене учётной записи чужие данные очищаются.
+- Конфликты разрешаются по принципу last-write-wins: если серверная версия новее, клиент применяет серверную (`409` + `server_item`).
 
 ## Примечания
 
@@ -542,9 +598,12 @@ src_android/
 - **Список чтения** отличается от полки: полка — общая для всех, список чтения — персональный для каждого пользователя.
 - **Сортировка по году**: книги без года (включая year=0) всегда в конце списка (`NULLIF(year, 0) + NULLS LAST`).
 - **Первый вход** создаёт администратора, если в БД нет пользователей.
-- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS.
+- **Маршруты без аутентификации**: `GET /`, `GET /static/*`, `GET /favicon.ico`, `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `POST /api/v1/auth/refresh`, OPDS, `GET /api/v1/shelf/count`, `GET /api/v1/shelf/download/:token`, `GET /shelf/`.
 - **Мобильная версия**: сервер определяет Android по заголовку `X-Platform` или User-Agent и добавляет `body class="android"` + `mobile.css`.
 - **Полка при скачивании**: ZIP-архив распаковывается в `tempfld/shelf/{edition_id}/`, сервируется оригинальный файл; при убирании с полки — очищается.
+- **Бэкап БД**: перед каждой миграцией создаётся `pg_dump` в `backup_dir` (`[directories] backup`). Если миграции ожидают применения, а `backup_dir` не задан — приложение отказывается запускаться. Файл бэкапа: `library_{current}_before_{target}.sql`, сохраняется после успешной миграции.
+- **Список чтения**: UUID-идентификаторы, мягкое удаление (`deleted`), отметки времени `created_at`/`updated_at`/`synced_at` для офлайн-синхронизации, поле `looking_for` («ищу книгу»: локально / по федерации).
+- **Автообновление APK**: сервер отдаёт версию из `apk/version.txt`; приложение сравнивает её со своей версией (`.apk.conf` → `Config.java`) и предлагает установить новую версию.
 
 ## Лицензия
 

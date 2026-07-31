@@ -88,6 +88,12 @@
                 var allItems = JSON.parse(raw);
                 var uid = getCurrentUserId();
                 debug('_loadFromBridge: ' + allItems.length + ' total items from SQLite, user=' + uid);
+                // Normalize legacy rows where JSON null was stored as the literal string "null"
+                for (var n = 0; n < allItems.length; n++) {
+                    if (allItems[n].synced_at === 'null') allItems[n].synced_at = '';
+                    if (allItems[n].updated_at === 'null') allItems[n].updated_at = '';
+                    if (allItems[n].created_at === 'null') allItems[n].created_at = '';
+                }
                 if (uid !== null) {
                     this._cache = allItems.filter(function(i) {
                         if (i.user_id !== uid) return false;
@@ -364,8 +370,21 @@
                             catch(e) { ReadListStore.markSynced(item.id, item.updated_at); }
                             debug('push CREATE ok: ' + item.id);
                         } else if (postResp.status === 500) {
-                            ReadListStore.markSynced(item.id, item.updated_at);
-                            debug('push: exists on server (dup), marked synced: ' + item.id);
+                            // Try to GET the item — if it exists on server (dup UUID), adopt server state
+                            try {
+                                var getResp = await fetch('/api/v1/user/readlist/' + item.id, { headers: getAuthHeaders() });
+                                if (getResp.ok) {
+                                    var getBody = await getResp.json();
+                                    applyServerItem(getBody);
+                                    debug('push: exists on server (dup), adopted: ' + item.id);
+                                } else {
+                                    anyError = true;
+                                    debug('push CREATE 500, item not on server, keeping dirty: ' + item.id);
+                                }
+                            } catch(e2) {
+                                anyError = true;
+                                debug('push CREATE 500, get failed, keeping dirty: ' + item.id);
+                            }
                         } else {
                             debug('push CREATE failed: ' + item.id + ' status=' + postResp.status);
                         }
@@ -379,23 +398,27 @@
                 }
             }
 
-            // Step 2: Pull all server items for current user
+            // Step 2: Pull all server items for current user (paginated)
             debug('pull: fetching server items for user ' + uid);
             try {
-                var pullResp = await fetch('/api/v1/user/readlist?limit=9999', {
-                    headers: getAuthHeaders()
-                });
+                var serverIds = {};
+                var localIds = {};
+                var localItems = ReadListStore.getAll();
+                for (var li = 0; li < localItems.length; li++) {
+                    localIds[localItems[li].id] = localItems[li];
+                }
 
-                if (pullResp.ok) {
+                var pullPage = 0;
+                var pullLimit = 100;
+                var pullOk = true;
+                while (true) {
+                    var pullResp = await fetch('/api/v1/user/readlist?limit=' + pullLimit + '&offset=' + (pullPage * pullLimit), {
+                        headers: getAuthHeaders()
+                    });
+                    if (!pullResp.ok) { pullOk = false; break; }
                     var data = await pullResp.json();
                     var serverItems = data.items || [];
-                    var serverIds = {};
-                    var localIds = {};
-
-                    var localItems = ReadListStore.getAll();
-                    for (var li = 0; li < localItems.length; li++) {
-                        localIds[localItems[li].id] = localItems[li];
-                    }
+                    if (serverItems.length === 0) break;
 
                     for (var si = 0; si < serverItems.length; si++) {
                         var sItem = serverItems[si];
@@ -425,6 +448,12 @@
                         }
                     }
 
+                    pullPage++;
+                }
+
+                // Cleanup only runs when the whole pull succeeded — a failed pull must
+                // never delete local items (serverIds would be incomplete/empty).
+                if (pullOk) {
                     for (var li2 = 0; li2 < localItems.length; li2++) {
                         var lItem2 = localItems[li2];
                         if (lItem2.user_id !== uid) continue;
@@ -440,11 +469,12 @@
                             }
                         }
                     }
-
-                    debug('pull complete: ' + serverItems.length + ' server items for user ' + uid);
                 } else {
                     anyError = true;
+                    debug('pull: request failed, local items kept');
                 }
+
+                debug('pull complete for user ' + uid);
             } catch(e) {
                 anyError = true;
                 debug('pull network error: ' + e.message);
