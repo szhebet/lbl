@@ -244,9 +244,9 @@ public class ReadListDB extends SQLiteOpenHelper {
         cv.put("status", item.optString("status", "Не заполнено"));
         cv.put("looking_for", item.optString("looking_for", "Нет"));
         cv.put("deleted", item.optBoolean("deleted", false) ? 1 : 0);
-        cv.put("created_at", item.optString("created_at"));
-        cv.put("updated_at", item.optString("updated_at"));
-        cv.put("synced_at", item.optString("synced_at"));
+        cv.put("created_at", item.isNull("created_at") ? "" : item.optString("created_at"));
+        cv.put("updated_at", item.isNull("updated_at") ? "" : item.optString("updated_at"));
+        cv.put("synced_at", item.isNull("synced_at") ? "" : item.optString("synced_at"));
         cv.put("format_name", item.optString("format_name", ""));
         cv.put("user_id", item.optInt("user_id", 0));
         if (item.has("author_id") && !item.isNull("author_id"))

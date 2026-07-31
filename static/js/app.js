@@ -1284,6 +1284,12 @@ function renderBooksTable(data) {
         return;
     }
 
+    // Android: render as cards instead of table
+    if (typeof isAndroidApp === 'function' && isAndroidApp()) {
+        renderBooksCards(books);
+        return;
+    }
+
     // Client-side status sort
     if (booksSortBy === 'status') {
         books.sort(function(a, b) {
@@ -1362,6 +1368,35 @@ function renderBooksTable(data) {
             }
         });
     });
+}
+
+function renderBooksCards(books) {
+    const container = document.getElementById('booksTableContainer');
+    let html = '<div class="books-cards">';
+    books.forEach(function(book) {
+        const editionId = book.edition_id;
+        const title = book.original_title || book.edition_title || '';
+        const authorName = getNullableValue(book, 'authors');
+        const formatName = getNullableValue(book, 'available_formats');
+        const onShelf = book.on_shelf;
+        const shelfIcon = onShelf ? '★' : '☆';
+        const shelfTitle = onShelf ? 'Убрать с полки' : 'Добавить на полку';
+        var st = getUserBookStatus(editionId).status;
+        html += '<div class="book-card" data-id="' + editionId + '">';
+        html += '<div class="bc-author">' + escapeHtml(authorName) + '</div>';
+        html += '<div class="bc-title">' + escapeHtml(title) + '</div>';
+        html += '<div class="bc-bottom">';
+        html += '<a href="#" class="book-download-link bc-download" data-id="' + editionId + '">' + escapeHtml(formatName) + '</a>';
+        html += '<a href="#" class="shelf-toggle bc-shelf" data-id="' + editionId + '" data-on-shelf="' + onShelf + '" title="' + shelfTitle + '">' + shelfIcon + '</a>';
+        html += '<select class="bc-status status-select ' + getStatusClass(st) + '" data-id="' + editionId + '" onchange="setUserBookStatus(' + editionId + ', this.value)">';
+        ['Не заполнено','Прочитано','Читаю','Отложил','Бросил'].forEach(function(s) {
+            html += '<option value="' + s + '"' + (s === st ? ' selected' : '') + '>' + s + '</option>';
+        });
+        html += '</select>';
+        html += '</div></div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
 }
 
 function getSortIcon(sortBy) {
@@ -1500,6 +1535,26 @@ function setupBooksTableEvents() {
     }
     bindContainer('books');
     bindContainer('tab-books');
+
+    // Double-tap on book card opens edit modal (editor/admin only)
+    var lastCardTap = 0;
+    var lastCardTapId = '';
+    document.addEventListener('click', (e) => {
+        const card = e.target.closest('.book-card');
+        if (!card) return;
+        if (!authUser || !authUser.role || authUser.role === 'viewer') return;
+        const id = card.dataset.id;
+        const now = Date.now();
+        if (id === lastCardTapId && now - lastCardTap < 400) {
+            e.preventDefault();
+            openBookModal({ id: id });
+            lastCardTap = 0;
+            lastCardTapId = '';
+        } else {
+            lastCardTap = now;
+            lastCardTapId = id;
+        }
+    });
 }
 
 
@@ -2737,7 +2792,8 @@ function setupReadlistEvents() {
             author_id: authorId,
             book_id: bookId,
             comment: document.getElementById('rlComment').value.trim(),
-            status: document.getElementById('rlStatus').value
+            status: document.getElementById('rlStatus').value,
+            looking_for: document.getElementById('rlLookingFor').value
         };
 
         if (!data.listname) { alert('Укажите название списка'); return; }
@@ -2768,9 +2824,10 @@ function setupReadlistEvents() {
                 book_id: data.book_id,
                 comment: data.comment,
                 status: data.status,
+                looking_for: data.looking_for || 'Нет',
                 created_at: existing ? existing.created_at : now,
                 updated_at: now,
-                synced_at: existing ? existing.synced_at : null,
+                synced_at: existing ? existing.synced_at : '',
                 format_name: existing ? (existing.format_name||'') : '',
                 on_shelf: existing ? (existing.on_shelf||false) : false,
                 user_id: (existing && existing.user_id) ? existing.user_id : (function(){try{var s=localStorage.getItem('auth_user');if(s){var u=JSON.parse(s);return u&&u.id?u.id:0}}catch(e){}return window.authUser&&window.authUser.id?window.authUser.id:0})(),
@@ -3039,6 +3096,8 @@ function openCreateReadlistModal() {
     document.getElementById('rlPriority').value = '0';
     document.getElementById('rlComment').value = '';
     document.getElementById('rlStatus').value = 'Не заполнено';
+    document.getElementById('rlLookingFor').value = 'Нет';
+    document.getElementById('rlLookingFor').disabled = false;
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
     loadAuthorSelect();
@@ -3177,6 +3236,12 @@ function fillReadlistEditForm(item) {
     document.getElementById('rlPriority').value = item.priority || 0;
     document.getElementById('rlComment').value = item.comment || '';
     document.getElementById('rlStatus').value = item.status || 'Не заполнено';
+    document.getElementById('rlLookingFor').value = item.looking_for || 'Нет';
+    var hasBook = item.book_id != null;
+    document.getElementById('rlLookingFor').disabled = hasBook;
+    if (hasBook) {
+        document.getElementById('rlLookingFor').value = 'Нет';
+    }
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
     loadAuthorSelect().then(function() {

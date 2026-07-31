@@ -88,6 +88,12 @@
                 var allItems = JSON.parse(raw);
                 var uid = getCurrentUserId();
                 debug('_loadFromBridge: ' + allItems.length + ' total items from SQLite, user=' + uid);
+                // Normalize legacy rows where JSON null was stored as the literal string "null"
+                for (var n = 0; n < allItems.length; n++) {
+                    if (allItems[n].synced_at === 'null') allItems[n].synced_at = '';
+                    if (allItems[n].updated_at === 'null') allItems[n].updated_at = '';
+                    if (allItems[n].created_at === 'null') allItems[n].created_at = '';
+                }
                 if (uid !== null) {
                     this._cache = allItems.filter(function(i) {
                         if (i.user_id !== uid) return false;
@@ -364,8 +370,21 @@
                             catch(e) { ReadListStore.markSynced(item.id, item.updated_at); }
                             debug('push CREATE ok: ' + item.id);
                         } else if (postResp.status === 500) {
-                            ReadListStore.markSynced(item.id, item.updated_at);
-                            debug('push: exists on server (dup), marked synced: ' + item.id);
+                            // Try to GET the item — if it exists on server (dup UUID), adopt server state
+                            try {
+                                var getResp = await fetch('/api/v1/user/readlist/' + item.id, { headers: getAuthHeaders() });
+                                if (getResp.ok) {
+                                    var getBody = await getResp.json();
+                                    applyServerItem(getBody);
+                                    debug('push: exists on server (dup), adopted: ' + item.id);
+                                } else {
+                                    anyError = true;
+                                    debug('push CREATE 500, item not on server, keeping dirty: ' + item.id);
+                                }
+                            } catch(e2) {
+                                anyError = true;
+                                debug('push CREATE 500, get failed, keeping dirty: ' + item.id);
+                            }
                         } else {
                             debug('push CREATE failed: ' + item.id + ' status=' + postResp.status);
                         }
@@ -391,11 +410,12 @@
 
                 var pullPage = 0;
                 var pullLimit = 100;
+                var pullOk = true;
                 while (true) {
                     var pullResp = await fetch('/api/v1/user/readlist?limit=' + pullLimit + '&offset=' + (pullPage * pullLimit), {
                         headers: getAuthHeaders()
                     });
-                    if (!pullResp.ok) break;
+                    if (!pullResp.ok) { pullOk = false; break; }
                     var data = await pullResp.json();
                     var serverItems = data.items || [];
                     if (serverItems.length === 0) break;
@@ -431,20 +451,27 @@
                     pullPage++;
                 }
 
-                for (var li2 = 0; li2 < localItems.length; li2++) {
-                    var lItem2 = localItems[li2];
-                    if (lItem2.user_id !== uid) continue;
-                    if (!serverIds[lItem2.id]) {
-                        var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
-                        if (isDirty) {
-                            debug('pull: local dirty item missing on server: ' + lItem2.id);
-                        } else if (lItem2.synced_at) {
-                            ReadListStore.remove(lItem2.id);
-                            debug('pull removed local: ' + lItem2.id);
-                        } else {
-                            debug('pull: local item never synced, keeping: ' + lItem2.id);
+                // Cleanup only runs when the whole pull succeeded — a failed pull must
+                // never delete local items (serverIds would be incomplete/empty).
+                if (pullOk) {
+                    for (var li2 = 0; li2 < localItems.length; li2++) {
+                        var lItem2 = localItems[li2];
+                        if (lItem2.user_id !== uid) continue;
+                        if (!serverIds[lItem2.id]) {
+                            var isDirty = lItem2.updated_at && (!lItem2.synced_at || lItem2.updated_at > lItem2.synced_at);
+                            if (isDirty) {
+                                debug('pull: local dirty item missing on server: ' + lItem2.id);
+                            } else if (lItem2.synced_at) {
+                                ReadListStore.remove(lItem2.id);
+                                debug('pull removed local: ' + lItem2.id);
+                            } else {
+                                debug('pull: local item never synced, keeping: ' + lItem2.id);
+                            }
                         }
                     }
+                } else {
+                    anyError = true;
+                    debug('pull: request failed, local items kept');
                 }
 
                 debug('pull complete for user ' + uid);
