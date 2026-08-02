@@ -4,7 +4,7 @@
     }
 
     function debug(msg) {
-        if (window.appDebug) appDebug('[offline] ' + msg);
+        if (window.appDebug) window.appDebug('[offline] ' + msg);
     }
 
     function isAndroid() {
