@@ -607,6 +607,11 @@ timeout = 60    # Seconds
 ### In Progress
 - *(none)*
 
+### Done (latest)
+- **Восстановлено управление пользователями/авторами/жанрами в `static/js/admin.js`**: рефакторинг в коммите `19d1ad8` удалил `addUserBtn`/`addAuthorBtn`/`addGenreBtn`-обработчики и функции `editUser`/`deleteUser`/`editAuthor`/`deleteAuthor`/`editGenre`/`deleteGenre` (кнопка «+ Создать пользователя» на админке не работала). Функции восстановлены из `git show 19d1ad8^`, жанровые мутации переведены на `/api/v1/genres` (в admin-группе только GET). Файл синхронизирован в `src_android/app/src/main/assets/www/static/js/admin.js`. Проверено: `node --check` OK, полный цикл create/update/delete пользователя через API работает.
+- Реализована поддержка env-переменных `LIBAPP_JWT_SECRET` и `LIBAPP_TOKEN_TTL` в `src/config/config.go` (`applyEnv`) — документация в README/AGENTS.md и код теперь совпадают.
+- Проверено соответствие конфигурации: `config.toml.example` = структура `Config` в коде; все `LIBAPP_*` из README/AGENTS читаются кодом; env.example (volume-mount пути для docker-compose) не является конфигом приложения.
+
 ### Blocked
 - `.rar` files in example (10_the_active_side_of_infinity.rar, 11_the_wheel_of_time.rar) are not supported – no RAR extraction; user has not requested this.
 

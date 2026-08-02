@@ -141,6 +141,7 @@ go build -o library_app ./src/
 | `LIBAPP_LLM_TIMEOUT` | llm.timeout | Таймаут (сек) |
 | `LIBAPP_LLM_PROMPT` | llm.prompt | Основной промпт |
 | `LIBAPP_LLM_PROMPT2` | llm.prompt2 | Повторный промпт |
+| `CONFIG_PATH` | — | Путь к файлу `config.toml` (иначе текущая директория) |
 
 Полный пример — `config.toml.example`.
 

@@ -189,6 +189,104 @@ function renderUsers() {
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
+function editUser(id) {
+    api(API + '/users/' + id).then(r => r.json()).then(u => {
+        openAdminModal('Редактировать пользователя #' + id, `
+            <div class="form-group">
+                <label>Имя пользователя:</label>
+                <input type="text" id="f_username" value="${escapeHtml(u.username || '')}">
+            </div>
+            <div class="form-group">
+                <label>Новый пароль (оставьте пустым, чтобы не менять):</label>
+                <input type="password" id="f_password">
+            </div>
+            <div class="form-group">
+                <label>Email:</label>
+                <input type="email" id="f_email" value="${escapeHtml(u.email || '')}">
+            </div>
+            <div class="form-group">
+                <label>Роль:</label>
+                <select id="f_role">
+                    <option value="">— не менять —</option>
+                    <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
+                    <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor</option>
+                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
+                </select>
+            </div>
+        `);
+        document.getElementById('adminForm').onsubmit = async function(e) {
+            e.preventDefault();
+            var body = {};
+            var us = document.getElementById('f_username').value;
+            var p = document.getElementById('f_password').value;
+            var em = document.getElementById('f_email').value;
+            var r = document.getElementById('f_role').value;
+            if (us) body.username = us;
+            if (p) body.password = p;
+            if (em) body.email = em;
+            if (r) body.role = r;
+            var res = await api(API + '/users/' + id, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (res.ok) { closeAdminModal(); loadUsers(); }
+            else { var d = await res.json(); alert(d.error || 'Error'); }
+        };
+    });
+}
+
+function deleteUser(id) {
+    if (!confirm('Удалить пользователя #' + id + '?')) return;
+    api(API + '/users/' + id, {method: 'DELETE'}).then(r => {
+        if (r.ok || r.status === 204) loadUsers();
+        else r.json().then(d => alert(d.error || 'Error'));
+    });
+}
+
+document.getElementById('addUserBtn').addEventListener('click', function() {
+    openAdminModal('Создать пользователя', `
+        <div class="form-group">
+            <label>Имя пользователя:</label>
+            <input type="text" id="f_username" required>
+        </div>
+        <div class="form-group">
+            <label>Пароль:</label>
+            <input type="password" id="f_password" required>
+        </div>
+        <div class="form-group">
+            <label>Email:</label>
+            <input type="email" id="f_email">
+        </div>
+        <div class="form-group">
+            <label>Роль:</label>
+            <select id="f_role">
+                <option value="viewer">viewer</option>
+                <option value="editor">editor</option>
+                <option value="admin">admin</option>
+            </select>
+        </div>
+    `);
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var body = {
+            username: document.getElementById('f_username').value,
+            password: document.getElementById('f_password').value
+        };
+        var email = document.getElementById('f_email').value;
+        var role = document.getElementById('f_role').value;
+        if (email) body.email = email;
+        if (role) body.role = role;
+        var res = await api(API + '/users', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) { closeAdminModal(); loadUsers(); }
+        else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+});
+
 function loadAuthors() {
     authorsPage = 1;
     api(API + '/persons').then(r => r.json()).then(persons => {
@@ -227,6 +325,129 @@ function renderAuthors() {
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
+document.getElementById('addAuthorBtn').addEventListener('click', function() {
+    openAdminModal('Создать автора', `
+        <div class="form-group">
+            <label>Фамилия:</label>
+            <input type="text" id="f_last_name" required>
+        </div>
+        <div class="form-group">
+            <label>Имя:</label>
+            <input type="text" id="f_first_name">
+        </div>
+        <div class="form-group">
+            <label>Отчество:</label>
+            <input type="text" id="f_middle_name">
+        </div>
+        <div class="form-group">
+            <label>Псевдоним:</label>
+            <input type="text" id="f_pseudonym">
+        </div>
+        <div class="form-group">
+            <label>Дата рождения (ГГГГ-ММ-ДД):</label>
+            <input type="date" id="f_birth_date">
+        </div>
+        <div class="form-group">
+            <label>Дата смерти (ГГГГ-ММ-ДД):</label>
+            <input type="date" id="f_death_date">
+        </div>
+        <div class="form-group">
+            <label>Биография:</label>
+            <textarea id="f_biography" rows="3"></textarea>
+        </div>
+    `);
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var body = {
+            last_name: document.getElementById('f_last_name').value,
+            first_name: document.getElementById('f_first_name').value,
+            middle_name: document.getElementById('f_middle_name').value
+        };
+        var p = document.getElementById('f_pseudonym').value;
+        var bd = document.getElementById('f_birth_date').value;
+        var dd = document.getElementById('f_death_date').value;
+        var bg = document.getElementById('f_biography').value;
+        if (p) body.pseudonym = p;
+        if (bd) body.birth_date = bd;
+        if (dd) body.death_date = dd;
+        if (bg) body.biography = bg;
+        var res = await api(API + '/persons', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) { closeAdminModal(); loadAuthors(); }
+        else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+});
+
+function editAuthor(id) {
+    api(API + '/persons').then(r => r.json()).then(all => {
+        var p = all.find(a => a.id === id) || {};
+        openAdminModal('Редактировать автора #' + id, `
+            <div class="form-group">
+                <label>Фамилия:</label>
+                <input type="text" id="f_last_name" value="${escapeHtml(p.last_name || '')}" required>
+            </div>
+            <div class="form-group">
+                <label>Имя:</label>
+                <input type="text" id="f_first_name" value="${escapeHtml(p.first_name || '')}">
+            </div>
+            <div class="form-group">
+                <label>Отчество:</label>
+                <input type="text" id="f_middle_name" value="${escapeHtml(p.middle_name || '')}">
+            </div>
+            <div class="form-group">
+                <label>Псевдоним:</label>
+                <input type="text" id="f_pseudonym" value="${escapeHtml(p.pseudonym || '')}">
+            </div>
+            <div class="form-group">
+                <label>Дата рождения (ГГГГ-ММ-ДД):</label>
+                <input type="date" id="f_birth_date" value="${p.birth_date || ''}">
+            </div>
+            <div class="form-group">
+                <label>Дата смерти (ГГГГ-ММ-ДД):</label>
+                <input type="date" id="f_death_date" value="${p.death_date || ''}">
+            </div>
+            <div class="form-group">
+                <label>Биография:</label>
+                <textarea id="f_biography" rows="3">${escapeHtml(p.biography || '')}</textarea>
+            </div>
+        `);
+        document.getElementById('adminForm').onsubmit = async function(e) {
+            e.preventDefault();
+            var body = {
+                last_name: document.getElementById('f_last_name').value,
+                first_name: document.getElementById('f_first_name').value,
+                middle_name: document.getElementById('f_middle_name').value
+            };
+            var ps = document.getElementById('f_pseudonym').value;
+            var bd = document.getElementById('f_birth_date').value;
+            var dd = document.getElementById('f_death_date').value;
+            var bg = document.getElementById('f_biography').value;
+            if (ps) body.pseudonym = ps; else body.pseudonym = null;
+            if (bd) body.birth_date = bd; else body.birth_date = null;
+            if (dd) body.death_date = dd; else body.death_date = null;
+            if (bg) body.biography = bg; else body.biography = null;
+            var res = await api(API + '/persons/' + id, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (res.ok) { closeAdminModal(); loadAuthors(); }
+            else { var d = await res.json(); alert(d.error || 'Error'); }
+        };
+    });
+}
+
+function deleteAuthor(id) {
+    if (!confirm('Удалить автора #' + id + '?')) return;
+    api(API + '/persons/' + id, {method: 'DELETE'}).then(r => {
+        if (r.ok || r.status === 204) loadAuthors();
+        else r.json().then(d => alert(d.error || 'Error'));
+    });
+}
+
 function loadGenres() {
     genresPage = 1;
     api(API + '/genres').then(r => r.json()).then(genres => {
@@ -262,6 +483,89 @@ function renderGenres() {
     if (pagEl) pagEl.innerHTML = pagHtml;
     var pagTop = document.getElementById('genresPaginationTop');
     if (pagTop) pagTop.innerHTML = pagHtml;
+}
+
+document.getElementById('addGenreBtn').addEventListener('click', function() {
+    api(API + '/genres').then(r => r.json()).then(allGenres => {
+        var options = '<option value="">Нет родителя</option>' +
+            allGenres.map(g => '<option value="' + g.id + '">' + escapeHtml(g.name) + '</option>').join('');
+        openAdminModal('Создать жанр', `
+            <div class="form-group">
+                <label>Название:</label>
+                <input type="text" id="f_name" required>
+            </div>
+            <div class="form-group">
+                <label>Родительский жанр:</label>
+                <select id="f_parent_id">${options}</select>
+            </div>
+            <div class="form-group">
+                <label>Описание:</label>
+                <textarea id="f_description" rows="3"></textarea>
+            </div>
+        `);
+        document.getElementById('adminForm').onsubmit = async function(e) {
+            e.preventDefault();
+            var body = {name: document.getElementById('f_name').value};
+            var pid = document.getElementById('f_parent_id').value;
+            var desc = document.getElementById('f_description').value;
+            if (pid) body.parent_id = parseInt(pid);
+            if (desc) body.description = desc;
+            var res = await api('/api/v1/genres', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (res.ok) { closeAdminModal(); loadGenres(); }
+            else { var d = await res.json(); alert(d.error || 'Error'); }
+        };
+    });
+});
+
+function editGenre(id) {
+    api(API + '/genres').then(r => r.json()).then(all => {
+        var g = all.find(ge => ge.id === id) || {};
+        api(API + '/genres').then(r2 => r2.json()).then(allGenres => {
+            var options = '<option value="">Нет родителя</option>' +
+                allGenres.filter(ge => ge.id !== id).map(ge => '<option value="' + ge.id + '" ' + (g.parent_id === ge.id ? 'selected' : '') + '>' + escapeHtml(ge.name) + '</option>').join('');
+            openAdminModal('Редактировать жанр #' + id, `
+                <div class="form-group">
+                    <label>Название:</label>
+                    <input type="text" id="f_name" value="${escapeHtml(g.name || '')}" required>
+                </div>
+                <div class="form-group">
+                    <label>Родительский жанр:</label>
+                    <select id="f_parent_id">${options}</select>
+                </div>
+                <div class="form-group">
+                    <label>Описание:</label>
+                    <textarea id="f_description" rows="3">${escapeHtml(g.description || '')}</textarea>
+                </div>
+            `);
+            document.getElementById('adminForm').onsubmit = async function(e) {
+                e.preventDefault();
+                var body = {name: document.getElementById('f_name').value};
+                var pid = document.getElementById('f_parent_id').value;
+                var desc = document.getElementById('f_description').value;
+                if (pid) body.parent_id = parseInt(pid); else body.parent_id = null;
+                if (desc) body.description = desc; else body.description = null;
+                var res = await api('/api/v1/genres/' + id, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                if (res.ok) { closeAdminModal(); loadGenres(); }
+                else { var d = await res.json(); alert(d.error || 'Error'); }
+            };
+        });
+    });
+}
+
+function deleteGenre(id) {
+    if (!confirm('Удалить жанр #' + id + '?')) return;
+    api('/api/v1/genres/' + id, {method: 'DELETE'}).then(r => {
+        if (r.ok || r.status === 204) loadGenres();
+        else r.json().then(d => alert(d.error || 'Error'));
+    });
 }
 
 function loadTags() {

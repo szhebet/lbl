@@ -142,6 +142,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LIBAPP_LOG_LEVEL"); v != "" {
 		cfg.Server.LogLevel = v
 	}
+	if v := os.Getenv("LIBAPP_JWT_SECRET"); v != "" {
+		cfg.Server.JWTSecret = v
+	}
+	if v := os.Getenv("LIBAPP_TOKEN_TTL"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.Server.TokenTTL = p
+		}
+	}
 
 	if v := os.Getenv("LIBAPP_DIR_BOOKARCH"); v != "" {
 		cfg.Directories.Bookarch = v
