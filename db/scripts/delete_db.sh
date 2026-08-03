@@ -15,7 +15,7 @@ DB_USER=$(sed -n '/^\[database\]/,/^\[/{s/^user = "\(.*\)"/\1/p}' "$CONFIG_FILE"
 DB_PASS=$(sed -n '/^\[database\]/,/^\[/{s/^password = "\(.*\)"/\1/p}' "$CONFIG_FILE" 2>/dev/null || echo "postgres")
 
 echo "Stopping library_app if running..."
-pkill -f library_app 2>/dev/null || true
+pkill -x library_app 2>/dev/null || true
 sleep 1
 
 echo "Dropping database '$DB_NAME' on $DB_HOST:$DB_PORT..."

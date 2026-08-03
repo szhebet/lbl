@@ -80,7 +80,10 @@ var embeddedMigration43 string
 //go:embed migration_4.4.sql
 var embeddedMigration44 string
 
-const currentDBVersion = "4.4"
+//go:embed migration_4.5.sql
+var embeddedMigration45 string
+
+const currentDBVersion = "4.5"
 
 type migration struct {
 	Version     string
@@ -163,6 +166,11 @@ var migrations = []migration{
 		Version:     "4.4",
 		Description: "Add suggestions table for book suggestion feature",
 		SQL:         stripSchema(embeddedMigration44),
+	},
+	{
+		Version:     "4.5",
+		Description: "Add user_parents table (M:N self-referential parent-child)",
+		SQL:         stripSchema(embeddedMigration45),
 	},
 }
 
@@ -842,6 +850,13 @@ func main() {
 		admin.GET("/suggestions/readlist/:id", adminGetReadListSuggestions(db))
 		admin.DELETE("/suggestions/:id", adminDeleteSuggestion(db))
 		admin.POST("/suggestions/import", adminImportAndSuggest(db))
+
+		// Other users' read lists (visible only to parents of the owner)
+		admin.GET("/readlists", adminListReadLists(db))
+		admin.POST("/readlists", adminCreateReadListItems(db))
+		admin.GET("/readlists/children", adminListChildren(db))
+		admin.PUT("/readlists/:id", adminUpdateReadListItem(db))
+		admin.DELETE("/readlists/:id", adminDeleteReadListItem(db))
 	}
 
 	// Serve static files with cache-busting headers for JS

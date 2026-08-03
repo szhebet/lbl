@@ -421,7 +421,7 @@ cd /home/sergey/git/aitest/agents/lbl
 
 # Kill old instances
 docker rm -f library-app 2>/dev/null
-pkill -f library_app 2>/dev/null; sleep 1
+pkill -x library_app 2>/dev/null; sleep 1
 
 # Create minimal image
 cd /tmp && mkdir -p library-app
@@ -461,7 +461,7 @@ curl -sk -H "X-Platform: android" https://localhost/ | grep -o 'class="android"'
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `bind: address already in use` | Old process still listening | `docker rm -f library-app 2>/dev/null; pkill -f library_app 2>/dev/null` |
+| `bind: address already in use` | Old process still listening | `docker rm -f library-app 2>/dev/null; pkill -x library_app 2>/dev/null` |
 | `connection refused` | Container not started or port mismatch | Check `docker logs library-app`; verify config.toml port is 9091 |
 | PostgreSQL errors | DB not running | Check `pg_isready`; start cluster |
 | Docker Hub pull fails (403) | No registry access | Use `docker import` (no registry required) |

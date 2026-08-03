@@ -30,6 +30,7 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
         if (tab.dataset.tab === 'import') { checkImportStatus(); }
         if (tab.dataset.tab === 'suggestions') { loadSuggestions(); }
+        if (tab.dataset.tab === 'readlists') { loadChildren(); loadReadlists(); }
     });
 });
 
@@ -164,7 +165,7 @@ function renderUsers() {
     var tbody = document.getElementById('usersTableBody');
     var pagEl = document.getElementById('usersPagination');
     var filterText = document.getElementById('filter-users').value;
-    var filtered = filterData(storeUsers, filterText, ['username', 'email', 'role']);
+    var filtered = filterData(storeUsers, filterText, ['username', 'email', 'role', 'parent_names']);
     var sorted = sortData(filtered, getSortKey('table-users'), getSortDir('table-users'));
     var total = sorted.length;
     var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -177,6 +178,7 @@ function renderUsers() {
             '<td>' + escapeHtml(u.username) + '</td>' +
             '<td>' + escapeHtml(u.email || '') + '</td>' +
             '<td><span class="badge-role ' + (u.role || '') + '">' + escapeHtml(u.role || '') + '</span></td>' +
+            '<td>' + escapeHtml(u.parent_names || '') + '</td>' +
             '<td>' + (u.created_at || '') + '</td>' +
             '<td class="actions">' +
             '<button class="btn btn-small edit-user" data-id="' + u.id + '">✎</button> ' +
@@ -188,6 +190,152 @@ function renderUsers() {
     var pagTop = document.getElementById('usersPaginationTop');
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
+
+// ─── User relation picker (parents / children) ──────────────
+// Mirrors the book-edit author picker: each selected user is a row with an
+// autocomplete input + popup <select> of all users + a remove button, plus
+// an "+ Add" button at the bottom. Selected ids live in hidden .user-row-id.
+
+function userPickerLabel(id) {
+    var u = (storeUsers || []).find(function(x){ return x.id === id; });
+    return u ? (u.username + ' (#' + u.id + ')') : ('#' + id);
+}
+
+function userOptionsHtml(selectedId) {
+    var opts = '<option value="">-- Выберите --</option>';
+    (storeUsers || []).forEach(function(u) {
+        var sel = (u.id === selectedId) ? ' selected' : '';
+        opts += '<option value="' + u.id + '"' + sel + '>' + escapeHtml(u.username) + ' (#' + u.id + ')</option>';
+    });
+    return opts;
+}
+
+function userRowHtml(id, containerId, idx) {
+    var label = id ? userPickerLabel(id) : '';
+    return '<div class="user-picker-row author-row" data-idx="' + idx + '">' +
+        '<input type="hidden" class="user-row-input" value="' + (id || '') + '">' +
+        '<div class="author-autocomplete-group">' +
+            '<input type="text" class="user-picker-autocomplete author-autocomplete" value="' + escapeHtml(label) + '" autocomplete="off" placeholder="Начните вводить имя пользователя...">' +
+            '<select class="user-picker-popup author-popup" size="5" style="display:none;margin-top:2px;width:100%">' + userOptionsHtml(id) + '</select>' +
+        '</div>' +
+        '<button type="button" class="btn-remove-user-row btn-remove-author" data-container="' + containerId + '">✕</button>' +
+    '</div>';
+}
+
+function addUserPickerRow(containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var idx = container.querySelectorAll('.user-picker-row').length;
+    container.insertAdjacentHTML('beforeend', userRowHtml(0, containerId, idx));
+    var rows = container.querySelectorAll('.user-picker-row');
+    setupUserRow(rows[rows.length - 1]);
+}
+
+function initUserPicker(containerId, ids) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    ids = ids || [];
+    var html = '';
+    if (ids.length === 0) {
+        html = userRowHtml(0, containerId, 0);
+    } else {
+        for (var i = 0; i < ids.length; i++) {
+            html += userRowHtml(ids[i], containerId, i);
+        }
+    }
+    container.innerHTML = html;
+    container.querySelectorAll('.user-picker-row').forEach(function(row){ setupUserRow(row); });
+}
+
+function setupUserRow(row) {
+    var input = row.querySelector('.user-picker-autocomplete');
+    var popup = row.querySelector('.user-picker-popup');
+    if (input && popup) setupUserPickerAutocomplete(input, popup);
+}
+
+function collectUserPick(containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return [];
+    var ids = [];
+    container.querySelectorAll('.user-row-input').forEach(function(h) {
+        if (h.value) ids.push(parseInt(h.value, 10));
+    });
+    return ids;
+}
+
+function setupUserPickerAutocomplete(input, popup) {
+    if (!input || !popup) return;
+    var fill = function(opt) {
+        opt.selected = true;
+        var row = input.closest('.user-picker-row');
+        var hid = row ? row.querySelector('.user-row-input') : null;
+        if (hid) hid.value = opt.value;
+        input.value = opt.textContent;
+        popup.style.display = 'none';
+    };
+    input.addEventListener('input', function() {
+        var val = this.value.toLowerCase();
+        var matched = [];
+        for (var i = 0; i < popup.options.length; i++) {
+            if (popup.options[i].value === '') continue;
+            var m = popup.options[i].textContent.toLowerCase().indexOf(val) !== -1;
+            popup.options[i].style.display = m ? '' : 'none';
+            if (m) matched.push(popup.options[i]);
+        }
+        var row = this.closest('.user-picker-row');
+        var hid = row ? row.querySelector('.user-row-input') : null;
+        if (hid) hid.value = '';
+        popup.style.display = (val && matched.length > 0) ? '' : 'none';
+    });
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            var val = this.value.toLowerCase();
+            if (!val) return;
+            var matched = [];
+            for (var i = 0; i < popup.options.length; i++) {
+                if (popup.options[i].value === '') continue;
+                if (popup.options[i].textContent.toLowerCase().indexOf(val) !== -1) matched.push(popup.options[i]);
+            }
+            if (matched.length === 1) { e.preventDefault(); fill(matched[0]); }
+        }
+    });
+    input.addEventListener('blur', function() {
+        var val = this.value.toLowerCase();
+        if (!val) return;
+        var matched = [];
+        for (var i = 0; i < popup.options.length; i++) {
+            if (popup.options[i].value === '') continue;
+            if (popup.options[i].textContent.toLowerCase().indexOf(val) !== -1) matched.push(popup.options[i]);
+        }
+        if (matched.length === 1) fill(matched[0]);
+    });
+    popup.addEventListener('change', function() {
+        if (this.value) fill(this.options[this.selectedIndex]);
+        else {
+            var row = input.closest('.user-picker-row');
+            var hid = row ? row.querySelector('.user-row-input') : null;
+            if (hid) hid.value = '';
+        }
+    });
+}
+
+// Delegate "add" and "remove" for user picker rows (CSP: no inline handlers)
+document.addEventListener('click', function(e) {
+    var add = e.target.closest('.add-user-picker-row');
+    if (add) {
+        e.preventDefault();
+        addUserPickerRow(add.dataset.container);
+        return;
+    }
+    var rm = e.target.closest('.btn-remove-user-row');
+    if (rm) {
+        e.preventDefault();
+        var container = document.getElementById(rm.dataset.container);
+        var row = rm.closest('.user-picker-row');
+        if (container && row) row.remove();
+        return;
+    }
+});
 
 function editUser(id) {
     api(API + '/users/' + id).then(r => r.json()).then(u => {
@@ -213,7 +361,19 @@ function editUser(id) {
                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label>Родители:</label>
+                <div id="f_parents_picker" class="user-picker"></div>
+                <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_parents_picker">+ Добавить родителя</button>
+            </div>
+            <div class="form-group">
+                <label>Дети:</label>
+                <div id="f_children_picker" class="user-picker"></div>
+                <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_children_picker">+ Добавить ребёнка</button>
+            </div>
         `);
+        initUserPicker('f_parents_picker', u.parent_ids);
+        initUserPicker('f_children_picker', u.child_ids);
         document.getElementById('adminForm').onsubmit = async function(e) {
             e.preventDefault();
             var body = {};
@@ -225,6 +385,8 @@ function editUser(id) {
             if (p) body.password = p;
             if (em) body.email = em;
             if (r) body.role = r;
+            body.parent_ids = collectUserPick('f_parents_picker');
+            body.child_ids = collectUserPick('f_children_picker');
             var res = await api(API + '/users/' + id, {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
@@ -266,7 +428,19 @@ document.getElementById('addUserBtn').addEventListener('click', function() {
                 <option value="admin">admin</option>
             </select>
         </div>
+        <div class="form-group">
+            <label>Родители:</label>
+            <div id="f_parents_picker" class="user-picker"></div>
+            <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_parents_picker">+ Добавить родителя</button>
+        </div>
+        <div class="form-group">
+            <label>Дети:</label>
+            <div id="f_children_picker" class="user-picker"></div>
+            <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_children_picker">+ Добавить ребёнка</button>
+        </div>
     `);
+    initUserPicker('f_parents_picker', []);
+    initUserPicker('f_children_picker', []);
     document.getElementById('adminForm').onsubmit = async function(e) {
         e.preventDefault();
         var body = {
@@ -277,6 +451,8 @@ document.getElementById('addUserBtn').addEventListener('click', function() {
         var role = document.getElementById('f_role').value;
         if (email) body.email = email;
         if (role) body.role = role;
+        body.parent_ids = collectUserPick('f_parents_picker');
+        body.child_ids = collectUserPick('f_children_picker');
         var res = await api(API + '/users', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -746,6 +922,7 @@ document.addEventListener('click', function(e) {
         else if (tab === 'authors') { authorsPage = page; renderAuthors(); }
         else if (tab === 'genres') { genresPage = page; renderGenres(); }
         else if (tab === 'tags') { tagsPage = page; renderTags(); }
+        else if (tab === 'readlists') { readlistsPage = page; loadReadlists(); }
         return;
     }
 
@@ -765,6 +942,10 @@ document.addEventListener('click', function(e) {
         editTag(parseInt(target.dataset.id));
     } else if (target.classList.contains('delete-tag')) {
         deleteTag(parseInt(target.dataset.id));
+    } else if (target.classList.contains('edit-rl')) {
+        editReadlist(target.dataset.id);
+    } else if (target.classList.contains('delete-rl')) {
+        deleteReadlist(target.dataset.id);
     }
 });
 
@@ -1321,6 +1502,401 @@ async function doSuggestImport(readListId) {
     }
 }
 
+var readlistsPage = 1;
+var storeReadlists = [];
+var readlistsTotal = 0;
+var readlistsSortKey = 'created_at';
+var readlistsSortDir = 'desc';
+var storeChildren = [];
+var selectedChildren = [];
+
+function setupReadlistsFilters() {
+    ['filter-rl-listname', 'filter-rl-bookname', 'filter-rl-author'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') { readlistsPage = 1; loadReadlists(); }
+        });
+    });
+    var btn = document.getElementById('rlApplyBtn');
+    if (btn) btn.addEventListener('click', function() { readlistsPage = 1; loadReadlists(); });
+    var createBtn = document.getElementById('rlCreateBtn');
+    if (createBtn) createBtn.addEventListener('click', openCreateReadlistModal);
+    var filterBtn = document.getElementById('rlChildrenFilterBtn');
+    if (filterBtn) filterBtn.addEventListener('click', toggleChildrenDropdown);
+    var allBtn = document.getElementById('rlChildrenAllBtn');
+    if (allBtn) allBtn.addEventListener('click', function() {
+        selectedChildren = storeChildren.map(function(c) { return c.id; });
+        renderChildrenFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
+    var clearBtn = document.getElementById('rlChildrenClearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+        selectedChildren = [];
+        renderChildrenFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
+    document.addEventListener('click', function(e) {
+        var wrap = document.getElementById('rlChildrenFilterWrap');
+        if (wrap && !wrap.contains(e.target)) {
+            var dd = document.getElementById('rlChildrenDropdown');
+            if (dd) dd.style.display = 'none';
+        }
+    });
+}
+
+async function loadChildren() {
+    try {
+        var res = await api(API + '/readlists/children');
+        if (!res.ok) return;
+        var data = await res.json();
+        storeChildren = data.items || [];
+        renderChildrenFilter();
+    } catch(e) { /* ignore */ }
+}
+
+function renderChildrenFilter() {
+    var btn = document.getElementById('rlChildrenFilterBtn');
+    if (!btn) return;
+    if (selectedChildren.length === 0) {
+        btn.textContent = 'Дети: все';
+    } else if (selectedChildren.length === storeChildren.length && storeChildren.length > 0) {
+        btn.textContent = 'Дети: все (' + storeChildren.length + ')';
+    } else {
+        btn.textContent = 'Дети: ' + selectedChildren.length;
+    }
+    var list = document.getElementById('rlChildrenList');
+    if (!list) return;
+    var html = '';
+    (storeChildren || []).forEach(function(c) {
+        var checked = selectedChildren.indexOf(c.id) !== -1;
+        html += '<label class="rl-children-list-item"><input type="checkbox" class="rl-child-check" data-id="' + c.id + '"' + (checked ? ' checked' : '') + '> ' +
+            escapeHtml(c.username) + ' (#' + c.id + ')</label>';
+    });
+    if (!html) html = '<div class="no-results">Нет детей</div>';
+    list.innerHTML = html;
+    list.querySelectorAll('.rl-child-check').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var id = parseInt(cb.dataset.id, 10);
+            if (cb.checked) {
+                if (selectedChildren.indexOf(id) === -1) selectedChildren.push(id);
+            } else {
+                selectedChildren = selectedChildren.filter(function(x) { return x !== id; });
+            }
+            renderChildrenFilter();
+            readlistsPage = 1;
+            loadReadlists();
+        });
+    });
+}
+
+function toggleChildrenDropdown() {
+    var dd = document.getElementById('rlChildrenDropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? '' : 'none';
+}
+
+function setupReadlistsSorting() {
+    var table = document.getElementById('table-readlists');
+    if (!table) return;
+    table.querySelectorAll('th[data-sort]').forEach(function(th) {
+        th.style.cursor = 'pointer';
+        th.addEventListener('click', function() {
+            var key = th.dataset.sort;
+            if (readlistsSortKey === key) {
+                readlistsSortDir = readlistsSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                readlistsSortKey = key;
+                readlistsSortDir = 'asc';
+            }
+            table.querySelectorAll('th[data-sort]').forEach(function(h) { h.classList.remove('sorted-asc', 'sorted-desc'); });
+            th.classList.add('sorted-' + readlistsSortDir);
+            renderReadlists();
+        });
+    });
+}
+
+async function loadReadlists() {
+    var body = document.getElementById('readlistsTableBody');
+    if (body) body.innerHTML = '<tr><td colspan="8" class="loading">Загрузка...</td></tr>';
+
+    var listname = document.getElementById('filter-rl-listname') ? document.getElementById('filter-rl-listname').value : '';
+    var bookname = document.getElementById('filter-rl-bookname') ? document.getElementById('filter-rl-bookname').value : '';
+    var author = document.getElementById('filter-rl-author') ? document.getElementById('filter-rl-author').value : '';
+
+    var params = new URLSearchParams();
+    if (selectedChildren.length > 0) params.set('user_ids', selectedChildren.join(','));
+    if (listname) params.set('listname', listname);
+    if (bookname) params.set('bookname', bookname);
+    if (author) params.set('author', author);
+    params.set('limit', PAGE_SIZE);
+    params.set('offset', (readlistsPage - 1) * PAGE_SIZE);
+
+    try {
+        var res = await api(API + '/readlists?' + params.toString());
+        if (!res.ok) {
+            if (body) body.innerHTML = '<tr><td colspan="8" class="error">Ошибка загрузки</td></tr>';
+            return;
+        }
+        var data = await res.json();
+        storeReadlists = data.items || [];
+        readlistsTotal = data.total || 0;
+        renderReadlists();
+    } catch(e) {
+        if (body) body.innerHTML = '<tr><td colspan="8" class="error">Ошибка: ' + escapeHtml(e.message) + '</td></tr>';
+    }
+}
+
+function renderReadlists() {
+    var body = document.getElementById('readlistsTableBody');
+    if (!body) return;
+
+    var sorted = storeReadlists.slice();
+    sorted.sort(function(a, b) {
+        var va = a[readlistsSortKey], vb = b[readlistsSortKey];
+        if (readlistsSortKey === 'created_at') {
+            va = va ? va : '';
+            vb = vb ? vb : '';
+        }
+        if (readlistsSortKey === 'on_shelf') {
+            return readlistsSortDir === 'asc' ? (va ? 1 : 0) - (vb ? 1 : 0) : (vb ? 1 : 0) - (va ? 1 : 0);
+        }
+        if (va == null) va = '';
+        if (vb == null) vb = '';
+        if (typeof va === 'number' && typeof vb === 'number') {
+            return readlistsSortDir === 'asc' ? va - vb : vb - va;
+        }
+        va = va.toString().toLowerCase();
+        vb = vb.toString().toLowerCase();
+        if (va < vb) return readlistsSortDir === 'asc' ? -1 : 1;
+        if (va > vb) return readlistsSortDir === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    if (!sorted || sorted.length === 0) {
+        body.innerHTML = '<tr><td colspan="8" class="no-results">Нет данных</td></tr>';
+    } else {
+        body.innerHTML = sorted.map(function(item) {
+            var shelf = item.on_shelf ? '✓' : '';
+            var status = item.status ? escapeHtml(item.status) : '';
+            return '<tr>' +
+                '<td>' + escapeHtml(item.username || '') + '</td>' +
+                '<td>' + escapeHtml(item.listname || '') + '</td>' +
+                '<td>' + escapeHtml(item.author || '') + '</td>' +
+                '<td>' + escapeHtml(item.bookname || '') + '</td>' +
+                '<td>' + status + '</td>' +
+                '<td>' + escapeHtml(formatDateTime(item.created_at)) + '</td>' +
+                '<td class="center">' + shelf + '</td>' +
+                '<td class="actions">' +
+                '<button class="btn btn-small edit-rl" data-id="' + escapeHtml(item.id) + '">✏️</button> ' +
+                '<button class="btn btn-small btn-danger delete-rl" data-id="' + escapeHtml(item.id) + '">🗑️</button>' +
+                '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    var totalPages = Math.max(1, Math.ceil(readlistsTotal / PAGE_SIZE));
+    var pagHtml = renderPagination(readlistsTotal, readlistsPage, totalPages, 'readlists');
+    var pt = document.getElementById('readlistsPaginationTop');
+    var pb = document.getElementById('readlistsPagination');
+    if (pt) pt.innerHTML = pagHtml;
+    if (pb) pb.innerHTML = pagHtml;
+}
+
+// ─── Children picker for read-list creation (mirrors author picker) ──────
+// Rows are sourced from storeChildren (only current user's children).
+
+function childPickerLabel(id) {
+    var c = (storeChildren || []).find(function(x){ return x.id === id; });
+    return c ? (c.username + ' (#' + c.id + ')') : ('#' + id);
+}
+
+function childOptionsHtml(selectedId) {
+    var opts = '<option value="">-- Выберите --</option>';
+    (storeChildren || []).forEach(function(c) {
+        var sel = (c.id === selectedId) ? ' selected' : '';
+        opts += '<option value="' + c.id + '"' + sel + '>' + escapeHtml(c.username) + ' (#' + c.id + ')</option>';
+    });
+    return opts;
+}
+
+function childRowHtml(id, containerId, idx) {
+    var label = id ? childPickerLabel(id) : '';
+    return '<div class="user-picker-row author-row" data-idx="' + idx + '">' +
+        '<input type="hidden" class="user-row-input" value="' + (id || '') + '">' +
+        '<div class="author-autocomplete-group">' +
+            '<input type="text" class="user-picker-autocomplete author-autocomplete" value="' + escapeHtml(label) + '" autocomplete="off" placeholder="Начните вводить имя ребёнка...">' +
+            '<select class="user-picker-popup author-popup" size="5" style="display:none;margin-top:2px;width:100%">' + childOptionsHtml(id) + '</select>' +
+        '</div>' +
+        '<button type="button" class="btn-remove-user-row btn-remove-author" data-container="' + containerId + '">✕</button>' +
+    '</div>';
+}
+
+function addChildPickerRow(containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var idx = container.querySelectorAll('.user-picker-row').length;
+    container.insertAdjacentHTML('beforeend', childRowHtml(0, containerId, idx));
+    var rows = container.querySelectorAll('.user-picker-row');
+    setupUserRow(rows[rows.length - 1]);
+}
+
+function initChildPicker(containerId, ids) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    ids = ids || [];
+    var html = '';
+    if (ids.length === 0) {
+        html = childRowHtml(0, containerId, 0);
+    } else {
+        for (var i = 0; i < ids.length; i++) {
+            html += childRowHtml(ids[i], containerId, i);
+        }
+    }
+    container.innerHTML = html;
+    container.querySelectorAll('.user-picker-row').forEach(function(row){ setupUserRow(row); });
+}
+
+function collectChildPick(containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return [];
+    var ids = [];
+    container.querySelectorAll('.user-row-input').forEach(function(h) {
+        if (h.value) ids.push(parseInt(h.value, 10));
+    });
+    return ids;
+}
+
+function openCreateReadlistModal() {
+    var statuses = ['Не заполнено', 'Прочитано', 'Читаю', 'Отложил', 'Бросил'];
+    var statusOptions = statuses.map(function(s) {
+        return '<option value="' + s + '">' + s + '</option>';
+    }).join('');
+    var prefill = selectedChildren.slice();
+    openAdminModal('Создать список', `
+        <div class="form-group">
+            <label>Дети:</label>
+            <div id="f_rl_children_picker" class="user-picker"></div>
+            <button type="button" class="btn btn-secondary add-child-picker-row" data-container="f_rl_children_picker">+ Добавить ребёнка</button>
+        </div>
+        <div class="form-group">
+            <label>Название списка:</label>
+            <input type="text" id="f_rl_new_listname" required>
+        </div>
+        <div class="form-group">
+            <label>Автор:</label>
+            <input type="text" id="f_rl_new_author">
+        </div>
+        <div class="form-group">
+            <label>Книга:</label>
+            <input type="text" id="f_rl_new_bookname">
+        </div>
+        <div class="form-group">
+            <label>Статус:</label>
+            <select id="f_rl_new_status">${statusOptions}</select>
+        </div>
+        <div class="form-group">
+            <label>Комментарий:</label>
+            <textarea id="f_rl_new_comment" rows="3"></textarea>
+        </div>
+    `);
+    initChildPicker('f_rl_children_picker', prefill);
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var user_ids = collectChildPick('f_rl_children_picker');
+        if (!user_ids.length) { alert('Выберите хотя бы одного ребёнка'); return; }
+        var body = {
+            user_ids: user_ids,
+            listname: document.getElementById('f_rl_new_listname').value,
+            author: document.getElementById('f_rl_new_author').value,
+            bookname: document.getElementById('f_rl_new_bookname').value,
+            status: document.getElementById('f_rl_new_status').value,
+            comment: document.getElementById('f_rl_new_comment').value
+        };
+        var res = await api(API + '/readlists', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) { closeAdminModal(); loadReadlists(); }
+        else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+}
+
+function formatDateTime(s) {
+    if (!s) return '';
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return escapeHtml(s);
+    var dd = String(d.getDate()).padStart(2, '0');
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var yyyy = d.getFullYear();
+    var hh = String(d.getHours()).padStart(2, '0');
+    var min = String(d.getMinutes()).padStart(2, '0');
+    return dd + '.' + mm + '.' + yyyy + ' ' + hh + ':' + min;
+}
+
+function editReadlist(id) {
+    var item = storeReadlists.find(function(i) { return i.id === id; });
+    if (!item) { alert('Элемент не найден'); return; }
+    var statuses = ['Не заполнено', 'Прочитано', 'Читаю', 'Отложил', 'Бросил'];
+    var statusOptions = statuses.map(function(s) {
+        return '<option value="' + s + '" ' + (item.status === s ? 'selected' : '') + '>' + s + '</option>';
+    }).join('');
+    openAdminModal('Редактировать элемент списка', `
+        <div class="form-group">
+            <label>Пользователь:</label>
+            <input type="text" value="${escapeHtml(item.username || '')}" disabled>
+        </div>
+        <div class="form-group">
+            <label>Название списка:</label>
+            <input type="text" id="f_rl_listname" value="${escapeHtml(item.listname || '')}">
+        </div>
+        <div class="form-group">
+            <label>Автор:</label>
+            <input type="text" id="f_rl_author" value="${escapeHtml(item.author || '')}">
+        </div>
+        <div class="form-group">
+            <label>Книга:</label>
+            <input type="text" id="f_rl_bookname" value="${escapeHtml(item.bookname || '')}">
+        </div>
+        <div class="form-group">
+            <label>Статус:</label>
+            <select id="f_rl_status">${statusOptions}</select>
+        </div>
+        <div class="form-group">
+            <label>Комментарий:</label>
+            <textarea id="f_rl_comment" rows="3">${escapeHtml(item.comment || '')}</textarea>
+        </div>
+    `);
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var body = {
+            listname: document.getElementById('f_rl_listname').value,
+            author: document.getElementById('f_rl_author').value,
+            bookname: document.getElementById('f_rl_bookname').value,
+            status: document.getElementById('f_rl_status').value,
+            comment: document.getElementById('f_rl_comment').value
+        };
+        var res = await api(API + '/readlists/' + encodeURIComponent(id), {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) { closeAdminModal(); loadReadlists(); }
+        else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+}
+
+function deleteReadlist(id) {
+    if (!confirm('Удалить элемент списка?')) return;
+    api(API + '/readlists/' + encodeURIComponent(id), {method: 'DELETE'}).then(r => {
+        if (r.ok) loadReadlists();
+        else r.json().then(d => alert(d.error || 'Error'));
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     if (!await checkAdminAccess()) return;
 
@@ -1336,6 +1912,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         loadGenres();
         loadTags();
         setupSuggestionsFilters();
+        setupReadlistsFilters();
+        setupReadlistsSorting();
         return;
     }
 
@@ -1348,6 +1926,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     loadGenres();
     loadTags();
     setupSuggestionsFilters();
+    setupReadlistsFilters();
+    setupReadlistsSorting();
     document.getElementById('adminBackLink').addEventListener('click', function(e) {
         e.preventDefault();
         if (window.history.length > 1) {
