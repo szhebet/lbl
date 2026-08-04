@@ -24,6 +24,11 @@
 .rl-children-list-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-radius: 4px; }
 .rl-children-list-item:hover { background: #f0f4f8; }
 .rl-children-list-item input { cursor: pointer; }
+.rl-shelf-star { background: none; border: none; cursor: pointer; font-size: 18px; color: #f39c12; padding: 2px 6px; line-height: 1; }
+.rl-shelf-star:hover { transform: scale(1.2); }
+.rl-bulk-frame { margin-left: auto; border: 1px solid #ccc; border-radius: 6px; padding: 6px 8px; background: #fafbfc; display: flex; align-items: center; gap: 10px; }
+.rl-bulk-title { font-size: 12px; color: #888; font-weight: 600; white-space: nowrap; }
+.rl-bulk-buttons { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .back-link { display: inline-block; margin-bottom: 15px; color: #3498db; text-decoration: none; }
 .back-link:hover { text-decoration: underline; }
 .badge-role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ecf0f1; color: #555; }

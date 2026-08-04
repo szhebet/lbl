@@ -30,7 +30,7 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         if (tab.dataset.tab === 'books' && typeof loadBooks === 'function') { enableDelete = true; loadBooks(); }
         if (tab.dataset.tab === 'import') { checkImportStatus(); }
         if (tab.dataset.tab === 'suggestions') { loadSuggestions(); }
-        if (tab.dataset.tab === 'readlists') { loadChildren(); loadReadlists(); }
+        if (tab.dataset.tab === 'readlists') { loadChildren(); loadListNames(); loadReadlists(); }
     });
 });
 
@@ -46,6 +46,8 @@ function openAdminModal(title, content) {
     document.getElementById('adminModalBody').innerHTML = content;
     document.getElementById('adminModal').style.display = 'flex';
     document.getElementById('adminForm').onsubmit = null;
+    var submitBtn = document.getElementById('adminForm').querySelector('.modal-footer .btn[type="submit"]');
+    if (submitBtn) submitBtn.textContent = 'Сохранить';
 }
 
 function closeAdminModal() {
@@ -333,6 +335,12 @@ document.addEventListener('click', function(e) {
         var container = document.getElementById(rm.dataset.container);
         var row = rm.closest('.user-picker-row');
         if (container && row) row.remove();
+        return;
+    }
+    var cadd = e.target.closest('.add-child-picker-row');
+    if (cadd) {
+        e.preventDefault();
+        addChildPickerRow(cadd.dataset.container);
         return;
     }
 });
@@ -946,6 +954,8 @@ document.addEventListener('click', function(e) {
         editReadlist(target.dataset.id);
     } else if (target.classList.contains('delete-rl')) {
         deleteReadlist(target.dataset.id);
+    } else if (target.classList.contains('rl-shelf-star')) {
+        toggleReadlistShelf(target);
     }
 });
 
@@ -1509,9 +1519,13 @@ var readlistsSortKey = 'created_at';
 var readlistsSortDir = 'desc';
 var storeChildren = [];
 var selectedChildren = [];
+var storeListNames = [];
+var selectedListNames = [];
+var storeStatuses = ['Не заполнено', 'Прочитано', 'Читаю', 'Отложил', 'Бросил'];
+var selectedStatuses = [];
 
 function setupReadlistsFilters() {
-    ['filter-rl-listname', 'filter-rl-bookname', 'filter-rl-author'].forEach(function(id) {
+    ['filter-rl-bookname', 'filter-rl-author'].forEach(function(id) {
         var el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('keypress', function(e) {
@@ -1522,29 +1536,167 @@ function setupReadlistsFilters() {
     if (btn) btn.addEventListener('click', function() { readlistsPage = 1; loadReadlists(); });
     var createBtn = document.getElementById('rlCreateBtn');
     if (createBtn) createBtn.addEventListener('click', openCreateReadlistModal);
-    var filterBtn = document.getElementById('rlChildrenFilterBtn');
-    if (filterBtn) filterBtn.addEventListener('click', toggleChildrenDropdown);
-    var allBtn = document.getElementById('rlChildrenAllBtn');
+    var shelfBtn = document.getElementById('rlBulkShelfBtn');
+    if (shelfBtn) shelfBtn.addEventListener('click', bulkShelfReadlists);
+    var statusBtn = document.getElementById('rlBulkStatusBtn');
+    if (statusBtn) statusBtn.addEventListener('click', bulkStatusReadlists);
+    var deleteBtn = document.getElementById('rlBulkDeleteBtn');
+    if (deleteBtn) deleteBtn.addEventListener('click', bulkDeleteReadlists);
+    var filterBtn = document.getElementById('rlListFilterBtn');
+    if (filterBtn) filterBtn.addEventListener('click', toggleListDropdown);
+    var allBtn = document.getElementById('rlListAllBtn');
     if (allBtn) allBtn.addEventListener('click', function() {
-        selectedChildren = storeChildren.map(function(c) { return c.id; });
+        selectedListNames = storeListNames.slice();
+        renderListFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
+    var clearBtn = document.getElementById('rlListClearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+        selectedListNames = [];
+        renderListFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
+    var chFilterBtn = document.getElementById('rlChildrenFilterBtn');
+    if (chFilterBtn) chFilterBtn.addEventListener('click', toggleChildrenDropdown);
+    var chAllBtn = document.getElementById('rlChildrenAllBtn');
+    if (chAllBtn) chAllBtn.addEventListener('click', function() {
+        selectedChildren = (storeChildren || []).map(function(c) { return c.id; });
         renderChildrenFilter();
         readlistsPage = 1;
         loadReadlists();
     });
-    var clearBtn = document.getElementById('rlChildrenClearBtn');
-    if (clearBtn) clearBtn.addEventListener('click', function() {
+    var chClearBtn = document.getElementById('rlChildrenClearBtn');
+    if (chClearBtn) chClearBtn.addEventListener('click', function() {
         selectedChildren = [];
         renderChildrenFilter();
         readlistsPage = 1;
         loadReadlists();
     });
+    var stFilterBtn = document.getElementById('rlStatusFilterBtn');
+    if (stFilterBtn) stFilterBtn.addEventListener('click', toggleStatusDropdown);
+    var stAllBtn = document.getElementById('rlStatusAllBtn');
+    if (stAllBtn) stAllBtn.addEventListener('click', function() {
+        selectedStatuses = storeStatuses.slice();
+        renderStatusFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
+    var stClearBtn = document.getElementById('rlStatusClearBtn');
+    if (stClearBtn) stClearBtn.addEventListener('click', function() {
+        selectedStatuses = [];
+        renderStatusFilter();
+        readlistsPage = 1;
+        loadReadlists();
+    });
     document.addEventListener('click', function(e) {
-        var wrap = document.getElementById('rlChildrenFilterWrap');
+        var wrap = document.getElementById('rlListFilterWrap');
         if (wrap && !wrap.contains(e.target)) {
-            var dd = document.getElementById('rlChildrenDropdown');
+            var dd = document.getElementById('rlListDropdown');
             if (dd) dd.style.display = 'none';
         }
+        var chWrap = document.getElementById('rlChildrenFilterWrap');
+        if (chWrap && !chWrap.contains(e.target)) {
+            var cdd = document.getElementById('rlChildrenDropdown');
+            if (cdd) cdd.style.display = 'none';
+        }
+        var stWrap = document.getElementById('rlStatusFilterWrap');
+        if (stWrap && !stWrap.contains(e.target)) {
+            var sdd = document.getElementById('rlStatusDropdown');
+            if (sdd) sdd.style.display = 'none';
+        }
     });
+}
+
+async function loadListNames() {
+    try {
+        var res = await api(API + '/readlists/names');
+        if (!res.ok) return;
+        var data = await res.json();
+        storeListNames = data.items || [];
+        renderListFilter();
+    } catch(e) { /* ignore */ }
+}
+
+function renderListFilter() {
+    var btn = document.getElementById('rlListFilterBtn');
+    if (!btn) return;
+    if (selectedListNames.length === 0) {
+        btn.textContent = 'Списки: все';
+    } else {
+        btn.textContent = 'Списки: ' + selectedListNames.length;
+    }
+    var list = document.getElementById('rlListList');
+    if (!list) return;
+    var html = '';
+    (storeListNames || []).forEach(function(n) {
+        var checked = selectedListNames.indexOf(n) !== -1;
+        html += '<label class="rl-children-list-item"><input type="checkbox" class="rl-list-check" data-name="' + escapeHtml(n) + '"' + (checked ? ' checked' : '') + '> ' +
+            escapeHtml(n) + '</label>';
+    });
+    if (!html) html = '<div class="no-results">Нет списков</div>';
+    list.innerHTML = html;
+    list.querySelectorAll('.rl-list-check').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var name = cb.dataset.name;
+            if (cb.checked) {
+                if (selectedListNames.indexOf(name) === -1) selectedListNames.push(name);
+            } else {
+                selectedListNames = selectedListNames.filter(function(x) { return x !== name; });
+            }
+            renderListFilter();
+            readlistsPage = 1;
+            loadReadlists();
+        });
+    });
+}
+
+function toggleListDropdown() {
+    var dd = document.getElementById('rlListDropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? '' : 'none';
+}
+
+function renderStatusFilter() {
+    var btn = document.getElementById('rlStatusFilterBtn');
+    if (!btn) return;
+    if (selectedStatuses.length === 0) {
+        btn.textContent = 'Статус: все';
+    } else if (selectedStatuses.length === storeStatuses.length && storeStatuses.length > 0) {
+        btn.textContent = 'Статус: все (' + storeStatuses.length + ')';
+    } else {
+        btn.textContent = 'Статус: ' + selectedStatuses.length;
+    }
+    var list = document.getElementById('rlStatusList');
+    if (!list) return;
+    var html = '';
+    (storeStatuses || []).forEach(function(s) {
+        var checked = selectedStatuses.indexOf(s) !== -1;
+        html += '<label class="rl-children-list-item"><input type="checkbox" class="rl-status-check" data-name="' + escapeHtml(s) + '"' + (checked ? ' checked' : '') + '> ' +
+            escapeHtml(s) + '</label>';
+    });
+    if (!html) html = '<div class="no-results">Нет статусов</div>';
+    list.innerHTML = html;
+    list.querySelectorAll('.rl-status-check').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var name = cb.dataset.name;
+            if (cb.checked) {
+                if (selectedStatuses.indexOf(name) === -1) selectedStatuses.push(name);
+            } else {
+                selectedStatuses = selectedStatuses.filter(function(x) { return x !== name; });
+            }
+            renderStatusFilter();
+            readlistsPage = 1;
+            loadReadlists();
+        });
+    });
+}
+
+function toggleStatusDropdown() {
+    var dd = document.getElementById('rlStatusDropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? '' : 'none';
 }
 
 async function loadChildren() {
@@ -1618,26 +1770,30 @@ function setupReadlistsSorting() {
     });
 }
 
-async function loadReadlists() {
-    var body = document.getElementById('readlistsTableBody');
-    if (body) body.innerHTML = '<tr><td colspan="8" class="loading">Загрузка...</td></tr>';
-
-    var listname = document.getElementById('filter-rl-listname') ? document.getElementById('filter-rl-listname').value : '';
+function readlistFilterParams() {
     var bookname = document.getElementById('filter-rl-bookname') ? document.getElementById('filter-rl-bookname').value : '';
     var author = document.getElementById('filter-rl-author') ? document.getElementById('filter-rl-author').value : '';
-
     var params = new URLSearchParams();
     if (selectedChildren.length > 0) params.set('user_ids', selectedChildren.join(','));
-    if (listname) params.set('listname', listname);
+    if (selectedListNames.length > 0) params.set('listnames', selectedListNames.join(','));
+    if (selectedStatuses.length > 0) params.set('statuses', selectedStatuses.join(','));
     if (bookname) params.set('bookname', bookname);
     if (author) params.set('author', author);
+    return params;
+}
+
+async function loadReadlists() {
+    var body = document.getElementById('readlistsTableBody');
+    if (body) body.innerHTML = '<tr><td colspan="9" class="loading">Загрузка...</td></tr>';
+
+    var params = readlistFilterParams();
     params.set('limit', PAGE_SIZE);
     params.set('offset', (readlistsPage - 1) * PAGE_SIZE);
 
     try {
         var res = await api(API + '/readlists?' + params.toString());
         if (!res.ok) {
-            if (body) body.innerHTML = '<tr><td colspan="8" class="error">Ошибка загрузки</td></tr>';
+            if (body) body.innerHTML = '<tr><td colspan="9" class="error">Ошибка загрузки</td></tr>';
             return;
         }
         var data = await res.json();
@@ -1645,7 +1801,7 @@ async function loadReadlists() {
         readlistsTotal = data.total || 0;
         renderReadlists();
     } catch(e) {
-        if (body) body.innerHTML = '<tr><td colspan="8" class="error">Ошибка: ' + escapeHtml(e.message) + '</td></tr>';
+        if (body) body.innerHTML = '<tr><td colspan="9" class="error">Ошибка: ' + escapeHtml(e.message) + '</td></tr>';
     }
 }
 
@@ -1676,19 +1832,22 @@ function renderReadlists() {
     });
 
     if (!sorted || sorted.length === 0) {
-        body.innerHTML = '<tr><td colspan="8" class="no-results">Нет данных</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="no-results">Нет данных</td></tr>';
     } else {
         body.innerHTML = sorted.map(function(item) {
-            var shelf = item.on_shelf ? '✓' : '';
             var status = item.status ? escapeHtml(item.status) : '';
+            var star = item.book_id
+                ? '<button class="rl-shelf-star" data-id="' + item.book_id + '" title="На полку" ' + (item.on_shelf ? 'aria-pressed="true"' : '') + '>' + (item.on_shelf ? '★' : '☆') + '</button>'
+                : '';
             return '<tr>' +
                 '<td>' + escapeHtml(item.username || '') + '</td>' +
                 '<td>' + escapeHtml(item.listname || '') + '</td>' +
                 '<td>' + escapeHtml(item.author || '') + '</td>' +
                 '<td>' + escapeHtml(item.bookname || '') + '</td>' +
                 '<td>' + status + '</td>' +
+                '<td>' + escapeHtml(item.created_by_username || '') + '</td>' +
                 '<td>' + escapeHtml(formatDateTime(item.created_at)) + '</td>' +
-                '<td class="center">' + shelf + '</td>' +
+                '<td class="center">' + star + '</td>' +
                 '<td class="actions">' +
                 '<button class="btn btn-small edit-rl" data-id="' + escapeHtml(item.id) + '">✏️</button> ' +
                 '<button class="btn btn-small btn-danger delete-rl" data-id="' + escapeHtml(item.id) + '">🗑️</button>' +
@@ -1775,6 +1934,7 @@ function openCreateReadlistModal() {
         return '<option value="' + s + '">' + s + '</option>';
     }).join('');
     var prefill = selectedChildren.slice();
+    var prefillListname = selectedListNames.length === 1 ? selectedListNames[0] : '';
     openAdminModal('Создать список', `
         <div class="form-group">
             <label>Дети:</label>
@@ -1783,15 +1943,25 @@ function openCreateReadlistModal() {
         </div>
         <div class="form-group">
             <label>Название списка:</label>
-            <input type="text" id="f_rl_new_listname" required>
+            <input type="text" id="f_rl_new_listname" value="${escapeHtml(prefillListname)}" required>
+        </div>
+        <div class="form-group">
+            <label>Название книги:</label>
+            <input type="hidden" id="f_rl_new_book_id" value="">
+            <input type="text" id="f_rl_new_bookname" autocomplete="off" placeholder="Начните вводить название...">
+            <div id="f_rl_new_book_select" class="search-results" style="display:none"></div>
         </div>
         <div class="form-group">
             <label>Автор:</label>
-            <input type="text" id="f_rl_new_author">
+            <input type="hidden" id="f_rl_new_author_id" value="">
+            <input type="text" id="f_rl_new_author" autocomplete="off" placeholder="Начните вводить автора...">
+            <div id="f_rl_new_author_select" class="search-results" style="display:none"></div>
         </div>
         <div class="form-group">
-            <label>Книга:</label>
-            <input type="text" id="f_rl_new_bookname">
+            <label>Загрузить книгу:</label>
+            <input type="file" id="f_rl_new_bookfile" accept=".fb2,.fb2.zip,.epub,.zip,.pdf,.doc,.docx" class="file-input">
+            <button type="button" class="btn btn-secondary" id="f_rl_new_upload_btn">Загрузить файл</button>
+            <div id="f_rl_new_upload_msg"></div>
         </div>
         <div class="form-group">
             <label>Статус:</label>
@@ -1803,15 +1973,22 @@ function openCreateReadlistModal() {
         </div>
     `);
     initChildPicker('f_rl_children_picker', prefill);
+    setupRlBookSearch('f_rl_new_bookname', 'f_rl_new_book_select', 'f_rl_new_book_id', 'f_rl_new_author', 'f_rl_new_author_id', 'f_rl_new_author_select');
+    setupRlAuthorSearch('f_rl_new_author', 'f_rl_new_author_select', 'f_rl_new_author_id');
+    setupRlBookUpload('f_rl_new_bookfile', 'f_rl_new_upload_btn', 'f_rl_new_upload_msg', 'f_rl_new_bookname', 'f_rl_new_book_id', 'f_rl_new_author', 'f_rl_new_author_id');
     document.getElementById('adminForm').onsubmit = async function(e) {
         e.preventDefault();
         var user_ids = collectChildPick('f_rl_children_picker');
         if (!user_ids.length) { alert('Выберите хотя бы одного ребёнка'); return; }
+        var bookIdVal = document.getElementById('f_rl_new_book_id').value;
+        var authorIdVal = document.getElementById('f_rl_new_author_id').value;
         var body = {
             user_ids: user_ids,
             listname: document.getElementById('f_rl_new_listname').value,
-            author: document.getElementById('f_rl_new_author').value,
             bookname: document.getElementById('f_rl_new_bookname').value,
+            author: document.getElementById('f_rl_new_author').value,
+            book_id: bookIdVal ? parseInt(bookIdVal) : null,
+            author_id: authorIdVal ? parseInt(authorIdVal) : null,
             status: document.getElementById('f_rl_new_status').value,
             comment: document.getElementById('f_rl_new_comment').value
         };
@@ -1823,6 +2000,163 @@ function openCreateReadlistModal() {
         if (res.ok) { closeAdminModal(); loadReadlists(); }
         else { var d = await res.json(); alert(d.error || 'Error'); }
     };
+}
+
+// ─── Book/author search in the readlist create/edit modal ────────────────
+// Mirrors the "Списки чтения" editor on the main page (index.html):
+// author results come from the persons list, book results from /books search.
+
+var rlPersonMap = {};
+
+async function setupRlAuthorSearch(inputId, selectId, hiddenId) {
+    var input = document.getElementById(inputId);
+    var select = document.getElementById(selectId);
+    if (!input || !select) return;
+    rlPersonMap = {};
+    try {
+        var res = await api(API + '/persons');
+        if (res.ok) {
+            var persons = await res.json();
+            select.innerHTML = '';
+            persons.forEach(function(p) {
+                var name = (p.last_name || '') + ' ' + (p.first_name || '');
+                rlPersonMap[name.trim().toLowerCase()] = p.id;
+                var el = document.createElement('div');
+                el.className = 'search-result-item';
+                el.dataset.id = p.id;
+                el.textContent = name.trim();
+                select.appendChild(el);
+            });
+        }
+    } catch(e) { /* ignore */ }
+    input.addEventListener('input', function() {
+        var val = this.value.toLowerCase();
+        var matched = [];
+        Array.prototype.forEach.call(select.querySelectorAll('.search-result-item'), function(item) {
+            if (!item.dataset.id) return;
+            var m = item.textContent.toLowerCase().indexOf(val) !== -1;
+            item.style.display = m ? '' : 'none';
+            if (m) matched.push(item);
+        });
+        document.getElementById(hiddenId).value = '';
+        select.style.display = (val && matched.length > 0) ? '' : 'none';
+    });
+    input.addEventListener('blur', function() {
+        var val = this.value.toLowerCase();
+        var matched = [];
+        Array.prototype.forEach.call(select.querySelectorAll('.search-result-item'), function(item) {
+            if (!item.dataset.id) return;
+            if (item.textContent.toLowerCase().indexOf(val) !== -1) matched.push(item);
+        });
+        if (matched.length === 1) {
+            input.value = matched[0].textContent;
+            document.getElementById(hiddenId).value = matched[0].dataset.id;
+            select.style.display = 'none';
+        }
+    });
+    select.addEventListener('click', function(e) {
+        var item = e.target.closest('.search-result-item');
+        if (!item || !item.dataset.id) return;
+        input.value = item.textContent;
+        document.getElementById(hiddenId).value = item.dataset.id;
+        select.style.display = 'none';
+    });
+}
+
+function setupRlBookSearch(inputId, selectId, hiddenId, authorInputId, authorHiddenId, authorSelectId) {
+    var input = document.getElementById(inputId);
+    var select = document.getElementById(selectId);
+    if (!input || !select) return;
+    var timer = null;
+    input.addEventListener('input', function() {
+        var val = this.value.trim();
+        document.getElementById(hiddenId).value = '';
+        if (val.length < 1) {
+            select.innerHTML = '';
+            select.style.display = 'none';
+            return;
+        }
+        select.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">поиск…</div>';
+        select.style.display = '';
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function() {
+            api('/api/v1/books?book=' + encodeURIComponent(val) + '&limit=10').then(function(res) {
+                if (!res.ok) return null;
+                return res.json();
+            }).then(function(data) {
+                if (!data || !data.books || data.books.length === 0) {
+                    select.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">— ничего не найдено —</div>';
+                    return;
+                }
+                select.innerHTML = '';
+                for (var i = 0; i < data.books.length; i++) {
+                    var b = data.books[i];
+                    var title = (b.edition_title || b.original_title || '').trim();
+                    if (!title) continue;
+                    var author = '';
+                    if (typeof b.authors === 'string') author = b.authors;
+                    else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
+                    var firstAuthor = author ? author.split(',')[0].trim() : '';
+                    var el = document.createElement('div');
+                    el.className = 'search-result-item';
+                    el.dataset.id = b.edition_id;
+                    el.dataset.title = title;
+                    el.dataset.firstAuthor = firstAuthor;
+                    el.textContent = title + (author ? ' (' + author + ')' : '');
+                    el.addEventListener('click', function(e) {
+                        var item = e.currentTarget;
+                        document.getElementById(inputId).value = item.dataset.title;
+                        document.getElementById(hiddenId).value = item.dataset.id;
+                        var fa = item.dataset.firstAuthor || '';
+                        if (fa && authorInputId) {
+                            document.getElementById(authorInputId).value = fa;
+                            var aid = rlPersonMap[fa.toLowerCase()];
+                            document.getElementById(authorHiddenId).value = aid || '';
+                            var as = document.getElementById(authorSelectId);
+                            if (as) as.style.display = 'none';
+                        }
+                        select.style.display = 'none';
+                    });
+                    select.appendChild(el);
+                }
+            }).catch(function() {
+                select.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">— ошибка —</div>';
+            });
+        }, 300);
+    });
+}
+
+function setupRlBookUpload(fileId, btnId, msgId, booknameId, bookId, authorId, authorHiddenId) {
+    var btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async function() {
+        var fileInput = document.getElementById(fileId);
+        if (!fileInput.files || !fileInput.files.length) { alert('Выберите файл'); return; }
+        var msg = document.getElementById(msgId);
+        if (msg) msg.textContent = 'Загрузка...';
+        var fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+        try {
+            var res = await api('/api/v1/import/file', { method: 'POST', body: fd });
+            var data = await res.json();
+            if (!res.ok || data.duplicate) {
+                if (msg) msg.textContent = (data.message || data.error || 'Ошибка загрузки');
+                return;
+            }
+            document.getElementById(booknameId).value = data.title || '';
+            document.getElementById(bookId).value = data.edition_id || '';
+            var authors = Array.isArray(data.authors) ? data.authors.join(', ') : (data.authors || '');
+            if (authors) {
+                var firstAuthor = authors.split(',')[0].trim();
+                document.getElementById(authorId).value = firstAuthor;
+                var aid = rlPersonMap[firstAuthor.toLowerCase()];
+                document.getElementById(authorHiddenId).value = aid || '';
+            }
+            if (msg) msg.textContent = 'Книга загружена: ' + (data.title || '');
+        } catch(e) {
+            if (msg) msg.textContent = 'Ошибка: ' + e.message;
+        }
+    });
 }
 
 function formatDateTime(s) {
@@ -1854,12 +2188,22 @@ function editReadlist(id) {
             <input type="text" id="f_rl_listname" value="${escapeHtml(item.listname || '')}">
         </div>
         <div class="form-group">
-            <label>Автор:</label>
-            <input type="text" id="f_rl_author" value="${escapeHtml(item.author || '')}">
+            <label>Название книги:</label>
+            <input type="hidden" id="f_rl_book_id" value="${item.book_id || ''}">
+            <input type="text" id="f_rl_bookname" autocomplete="off" placeholder="Начните вводить название..." value="${escapeHtml(item.bookname || '')}">
+            <div id="f_rl_book_select" class="search-results" style="display:none"></div>
         </div>
         <div class="form-group">
-            <label>Книга:</label>
-            <input type="text" id="f_rl_bookname" value="${escapeHtml(item.bookname || '')}">
+            <label>Автор:</label>
+            <input type="hidden" id="f_rl_author_id" value="${item.author_id || ''}">
+            <input type="text" id="f_rl_author" autocomplete="off" placeholder="Начните вводить автора..." value="${escapeHtml(item.author || '')}">
+            <div id="f_rl_author_select" class="search-results" style="display:none"></div>
+        </div>
+        <div class="form-group">
+            <label>Загрузить книгу:</label>
+            <input type="file" id="f_rl_bookfile" accept=".fb2,.fb2.zip,.epub,.zip,.pdf,.doc,.docx" class="file-input">
+            <button type="button" class="btn btn-secondary" id="f_rl_upload_btn">Загрузить файл</button>
+            <div id="f_rl_upload_msg"></div>
         </div>
         <div class="form-group">
             <label>Статус:</label>
@@ -1870,12 +2214,19 @@ function editReadlist(id) {
             <textarea id="f_rl_comment" rows="3">${escapeHtml(item.comment || '')}</textarea>
         </div>
     `);
+    setupRlBookSearch('f_rl_bookname', 'f_rl_book_select', 'f_rl_book_id', 'f_rl_author', 'f_rl_author_id', 'f_rl_author_select');
+    setupRlAuthorSearch('f_rl_author', 'f_rl_author_select', 'f_rl_author_id');
+    setupRlBookUpload('f_rl_bookfile', 'f_rl_upload_btn', 'f_rl_upload_msg', 'f_rl_bookname', 'f_rl_book_id', 'f_rl_author', 'f_rl_author_id');
     document.getElementById('adminForm').onsubmit = async function(e) {
         e.preventDefault();
+        var bookIdVal = document.getElementById('f_rl_book_id').value;
+        var authorIdVal = document.getElementById('f_rl_author_id').value;
         var body = {
             listname: document.getElementById('f_rl_listname').value,
-            author: document.getElementById('f_rl_author').value,
             bookname: document.getElementById('f_rl_bookname').value,
+            author: document.getElementById('f_rl_author').value,
+            book_id: bookIdVal ? parseInt(bookIdVal) : null,
+            author_id: authorIdVal ? parseInt(authorIdVal) : null,
             status: document.getElementById('f_rl_status').value,
             comment: document.getElementById('f_rl_comment').value
         };
@@ -1895,6 +2246,87 @@ function deleteReadlist(id) {
         if (r.ok) loadReadlists();
         else r.json().then(d => alert(d.error || 'Error'));
     });
+}
+
+function toggleReadlistShelf(starBtn) {
+    var bookId = starBtn.dataset.id;
+    var onShelf = starBtn.getAttribute('aria-pressed') === 'true';
+    api('/api/v1/books/' + bookId + '/shelf', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({on_shelf: !onShelf})
+    }).then(function(r) {
+        if (r.ok) {
+            if (onShelf) {
+                starBtn.removeAttribute('aria-pressed');
+                starBtn.textContent = '☆';
+            } else {
+                starBtn.setAttribute('aria-pressed', 'true');
+                starBtn.textContent = '★';
+            }
+        } else {
+            alert('Ошибка при изменении полки');
+        }
+    }).catch(function() { alert('Ошибка сети'); });
+}
+
+function bulkShelfReadlists() {
+    if (!confirm('Выложить на полку все книги, прикреплённые к отфильтрованным записям?')) return;
+    var params = readlistFilterParams();
+    api(API + '/readlists/bulk/shelf?' + params.toString(), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    }).then(function(r) {
+        return r.json().then(function(d) {
+            if (r.ok) { alert('На полку: ' + (d.total != null ? d.total : 0)); loadReadlists(); }
+            else { alert(d.error || 'Ошибка'); }
+        });
+    }).catch(function() { alert('Ошибка сети'); });
+}
+
+function bulkDeleteReadlists() {
+    if (!confirm('Удалить все отфильтрованные записи, созданные вами? Записи других пользователей останутся.')) return;
+    var params = readlistFilterParams();
+    api(API + '/readlists/bulk/delete?' + params.toString(), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    }).then(function(r) {
+        return r.json().then(function(d) {
+            if (r.ok) { alert('Удалено: ' + (d.edited != null ? d.edited : 0)); loadReadlists(); }
+            else { alert(d.error || 'Ошибка'); }
+        });
+    }).catch(function() { alert('Ошибка сети'); });
+}
+
+function bulkStatusReadlists() {
+    var statuses = ['Не заполнено', 'Прочитано', 'Читаю', 'Отложил', 'Бросил'];
+    var options = statuses.map(function(s) {
+        return '<option value="' + s + '">' + s + '</option>';
+    }).join('');
+    openAdminModal('Установить статус', `
+        <div class="form-group">
+            <label>Статус прочтения:</label>
+            <select id="f_rl_bulk_status">${options}</select>
+        </div>
+        <p style="color:#666;font-size:13px;">Статус будет установлен всем записям, отображаемым в списке.</p>
+    `);
+    var submitBtn = document.getElementById('adminForm').querySelector('.modal-footer .btn[type="submit"]');
+    if (submitBtn) submitBtn.textContent = 'ОК';
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var status = document.getElementById('f_rl_bulk_status').value;
+        var params = readlistFilterParams();
+        var res = await api(API + '/readlists/bulk/status?' + params.toString(), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({status: status})
+        });
+        var d = await res.json();
+        if (res.ok) { closeAdminModal(); alert('Обновлено: ' + (d.edited != null ? d.edited : 0)); loadReadlists(); }
+        else { alert(d.error || 'Ошибка'); }
+    };
 }
 
 document.addEventListener('DOMContentLoaded', async function() {

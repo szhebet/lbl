@@ -547,11 +547,11 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 		var editionID sql.NullInt64
 		var updatedAt, syncedAt sql.NullString
 		err := db.QueryRow(`
-			INSERT INTO read_list (id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status, looking_for, deleted, updated_at)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::user_book_status, $11, $12, NOW())
+			INSERT INTO read_list (id, listname, bookname, author, priority, author_id, book_id, user_id, comment, status, looking_for, deleted, created_by, updated_at)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10::user_book_status, $11, $12, $13, NOW())
 			RETURNING id::text, listname, bookname, author, priority, author_id, book_id, user_id, comment, status::text, looking_for, deleted, created_at, updated_at, synced_at
 		`, itemID, req.Listname, req.Bookname, req.Author, req.Priority, req.AuthorID, req.BookID,
-			uid, req.Comment, req.Status, req.LookingFor, req.Deleted).Scan(
+			uid, req.Comment, req.Status, req.LookingFor, req.Deleted, uid).Scan(
 			&item.ID, &item.Listname, &item.Bookname, &item.Author,
 			&item.Priority, &item.AuthorID, &item.BookID, &item.UserID,
 			&item.Comment, &item.Status, &item.LookingFor, &item.Deleted, &item.CreatedAt,

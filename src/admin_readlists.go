@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +27,8 @@ type AdminReadListItem struct {
 	OnShelf    bool   `json:"on_shelf"`
 	BookID     *int   `json:"book_id,omitempty"`
 	EditionID  *int   `json:"edition_id,omitempty"`
+	CreatedBy  int    `json:"created_by"`
+	CreatedByU string `json:"created_by_username"`
 }
 
 // parentOfOwnerExpr returns a SQL condition that is true when the current user
@@ -48,6 +51,103 @@ func canManageReadListItem(db *sql.DB, uid int, itemID string) (bool, error) {
 	return ok, nil
 }
 
+// readListFilter holds the filter criteria parsed from query parameters. It is
+// shared by the list endpoint and the bulk actions (shelf / delete / status).
+type readListFilter struct {
+	UserIDs    []int
+	Listnames  []string
+	Listname   string
+	Bookname   string
+	Author     string
+	Statuses   []string
+}
+
+func parseReadListFilter(c *gin.Context) readListFilter {
+	var f readListFilter
+
+	for _, part := range strings.Split(c.Query("user_ids"), ",") {
+		id, err := strconv.Atoi(strings.TrimSpace(part))
+		if err == nil && id > 0 {
+			f.UserIDs = append(f.UserIDs, id)
+		}
+	}
+	for _, part := range strings.Split(c.Query("listnames"), ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			f.Listnames = append(f.Listnames, part)
+		}
+	}
+	for _, part := range strings.Split(c.Query("statuses"), ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			f.Statuses = append(f.Statuses, part)
+		}
+	}
+	f.Listname = c.Query("listname")
+	f.Bookname = c.Query("bookname")
+	f.Author = c.Query("author")
+	return f
+}
+
+// buildWhereClause renders the WHERE clause for the shared filter plus the
+// parent-of-owner condition. Returns the clause (starting with "WHERE"),
+// the positional arguments and the next free argument number.
+func (f readListFilter) buildWhereClause(uid int) (string, []interface{}, int) {
+	whereClause := fmt.Sprintf(`WHERE rl.deleted = FALSE AND %s`, fmt.Sprintf(parentOfOwnerCondition, uid))
+	args := []interface{}{}
+	argNum := 1
+
+	if len(f.UserIDs) > 0 {
+		whereClause += fmt.Sprintf(" AND rl.user_id = ANY($%d::int[])", argNum)
+		args = append(args, f.UserIDs)
+		argNum++
+	}
+	if len(f.Listnames) > 0 {
+		whereClause += fmt.Sprintf(" AND rl.listname = ANY($%d::text[])", argNum)
+		args = append(args, f.Listnames)
+		argNum++
+	}
+	if f.Listname != "" {
+		whereClause += fmt.Sprintf(" AND rl.listname ILIKE $%d", argNum)
+		args = append(args, "%"+f.Listname+"%")
+		argNum++
+	}
+	if f.Bookname != "" {
+		whereClause += fmt.Sprintf(" AND rl.bookname ILIKE $%d", argNum)
+		args = append(args, "%"+f.Bookname+"%")
+		argNum++
+	}
+	if f.Author != "" {
+		whereClause += fmt.Sprintf(" AND rl.author ILIKE $%d", argNum)
+		args = append(args, "%"+f.Author+"%")
+		argNum++
+	}
+	if len(f.Statuses) > 0 {
+		whereClause += fmt.Sprintf(" AND rl.status::text = ANY($%d::text[])", argNum)
+		args = append(args, f.Statuses)
+		argNum++
+	}
+	return whereClause, args, argNum
+}
+
+// linkBookToMatchingChildren attaches the given edition (book_id) to every
+// non-deleted read_list row of the current user's children whose normalized
+// bookname and author match the supplied values. authorID is only set when
+// non-nil (so a title-only match keeps its existing author link).
+func linkBookToMatchingChildren(db *sql.DB, uid int, bookID *int, authorID *int, bookname, author string) {
+	if bookID == nil || *bookID <= 0 {
+		return
+	}
+	// Match on normalized (lowercase + ё→е) bookname and author.
+	db.Exec(`
+		UPDATE read_list rl SET book_id = $1, author_id = COALESCE($2, author_id), updated_at = NOW()
+		WHERE rl.deleted = FALSE
+		  AND rl.user_id IN (SELECT user_id FROM user_parents WHERE parent_id = $3)
+		  AND LOWER(REPLACE(rl.bookname, 'ё', 'е')) = LOWER(REPLACE($4, 'ё', 'е'))
+		  AND LOWER(REPLACE(rl.author, 'ё', 'е')) = LOWER(REPLACE($5, 'ё', 'е'))
+	`, *bookID, authorID, uid, bookname, author)
+}
+
 func adminListReadLists(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		currentUserID, _ := c.Get("user_id")
@@ -57,50 +157,16 @@ func adminListReadLists(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		userIDsFilter := c.Query("user_ids")
-		listnameFilter := c.Query("listname")
-		booknameFilter := c.Query("bookname")
-		authorFilter := c.Query("author")
 		limit := parseLimit(c.DefaultQuery("limit", "50"), 50)
 		offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-		whereClause := fmt.Sprintf(`WHERE rl.deleted = FALSE AND %s`, fmt.Sprintf(parentOfOwnerCondition, uid))
-		args := []interface{}{}
-		argNum := 1
-
-		if userIDsFilter != "" {
-			var ids []int
-			for _, part := range strings.Split(userIDsFilter, ",") {
-				id, err := strconv.Atoi(strings.TrimSpace(part))
-				if err == nil && id > 0 {
-					ids = append(ids, id)
-				}
-			}
-			if len(ids) > 0 {
-				whereClause += fmt.Sprintf(" AND rl.user_id = ANY($%d::int[])", argNum)
-				args = append(args, ids)
-				argNum++
-			}
-		}
-		if listnameFilter != "" {
-			whereClause += fmt.Sprintf(" AND rl.listname ILIKE $%d", argNum)
-			args = append(args, "%"+listnameFilter+"%")
-			argNum++
-		}
-		if booknameFilter != "" {
-			whereClause += fmt.Sprintf(" AND rl.bookname ILIKE $%d", argNum)
-			args = append(args, "%"+booknameFilter+"%")
-			argNum++
-		}
-		if authorFilter != "" {
-			whereClause += fmt.Sprintf(" AND rl.author ILIKE $%d", argNum)
-			args = append(args, "%"+authorFilter+"%")
-			argNum++
-		}
+		flt := parseReadListFilter(c)
+		whereClause, args, argNum := flt.buildWhereClause(uid)
 
 		baseQuery := `
 			FROM read_list rl
 			JOIN users u ON u.id = rl.user_id
+			LEFT JOIN users cu ON cu.id = rl.created_by
 			LEFT JOIN editions e ON e.id = rl.book_id
 			%s
 		`
@@ -115,7 +181,7 @@ func adminListReadLists(db *sql.DB) gin.HandlerFunc {
 		query := fmt.Sprintf(`
 			SELECT rl.id::text, rl.user_id, u.username, rl.listname, rl.bookname,
 				rl.author, rl.priority, rl.status::text, rl.comment, rl.created_at,
-				COALESCE(e.on_shelf, false), rl.book_id
+				COALESCE(e.on_shelf, false), rl.book_id, rl.created_by, cu.username
 			%s
 			ORDER BY rl.created_at DESC
 			LIMIT $%d OFFSET $%d
@@ -133,9 +199,11 @@ func adminListReadLists(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var item AdminReadListItem
 			var bookID sql.NullInt64
+			var createdBy sql.NullInt64
+			var createdByU sql.NullString
 			if err := rows.Scan(&item.ID, &item.UserID, &item.Username, &item.Listname,
 				&item.Bookname, &item.Author, &item.Priority, &item.Status, &item.Comment,
-				&item.CreatedAt, &item.OnShelf, &bookID); err != nil {
+				&item.CreatedAt, &item.OnShelf, &bookID, &createdBy, &createdByU); err != nil {
 				adminInternalError(c, err)
 				return
 			}
@@ -144,6 +212,10 @@ func adminListReadLists(db *sql.DB) gin.HandlerFunc {
 				item.BookID = &id
 				item.EditionID = &id
 			}
+			if createdBy.Valid {
+				item.CreatedBy = int(createdBy.Int64)
+			}
+			item.CreatedByU = createdByU.String
 			items = append(items, item)
 		}
 
@@ -208,6 +280,9 @@ func adminUpdateReadListItem(db *sql.DB) gin.HandlerFunc {
 					status = $1::user_book_status, updated_at = CURRENT_TIMESTAMP
 			`, req.Status, id)
 		}
+
+		// A parent loading a book attaches it to all matching entries of children
+		linkBookToMatchingChildren(db, uid, req.BookID, req.AuthorID, req.Bookname, req.Author)
 
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
@@ -291,6 +366,43 @@ func adminListChildren(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// adminListReadListNames returns the union of all distinct list names of the
+// current user's children, used for the multi-select list filter.
+func adminListReadListNames(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, _ := c.Get("user_id")
+		uid := currentUserID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		rows, err := db.Query(`
+			SELECT DISTINCT rl.listname
+			FROM read_list rl
+			JOIN user_parents up ON up.user_id = rl.user_id AND up.parent_id = $1
+			WHERE rl.deleted = FALSE AND rl.listname <> ''
+			ORDER BY rl.listname
+		`, uid)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		defer rows.Close()
+
+		names := make([]string, 0)
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				adminInternalError(c, err)
+				return
+			}
+			names = append(names, name)
+		}
+		c.JSON(http.StatusOK, gin.H{"items": names})
+	}
+}
+
 // adminCreateReadListItems creates read-list entries for several children at
 // once. Each user_id must be a child of the current user; a list entry is
 // created for every selected child.
@@ -308,6 +420,8 @@ func adminCreateReadListItems(db *sql.DB) gin.HandlerFunc {
 			Listname string `json:"listname"`
 			Bookname string `json:"bookname"`
 			Author   string `json:"author"`
+			AuthorID *int   `json:"author_id"`
+			BookID   *int   `json:"book_id"`
 			Comment  string `json:"comment"`
 			Status   string `json:"status"`
 			Priority int    `json:"priority"`
@@ -349,10 +463,11 @@ func adminCreateReadListItems(db *sql.DB) gin.HandlerFunc {
 		for _, childID := range req.UserIDs {
 			var item ReadListItem
 			err := db.QueryRow(`
-				INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, updated_at)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::user_book_status, NOW())
+				INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, author_id, book_id, created_by, updated_at)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::user_book_status, $8, $9, $10, NOW())
 				RETURNING id::text, created_at
-			`, req.Listname, req.Bookname, req.Author, req.Priority, childID, req.Comment, req.Status).Scan(&item.ID, &item.CreatedAt)
+			`, req.Listname, req.Bookname, req.Author, req.Priority, childID, req.Comment, req.Status,
+				req.AuthorID, req.BookID, uid).Scan(&item.ID, &item.CreatedAt)
 			if err != nil {
 				adminInternalError(c, err)
 				return
@@ -364,9 +479,156 @@ func adminCreateReadListItems(db *sql.DB) gin.HandlerFunc {
 			item.UserID = childID
 			item.Comment = req.Comment
 			item.Status = req.Status
+			item.AuthorID = req.AuthorID
+			item.BookID = req.BookID
 			created = append(created, item)
 		}
 
+		// A parent loading a book attaches it to all matching entries of children
+		linkBookToMatchingChildren(db, uid, req.BookID, req.AuthorID, req.Bookname, req.Author)
+
 		c.JSON(http.StatusCreated, gin.H{"items": created})
+	}
+}
+
+// readListBulkResult is returned by the bulk read-list actions.
+type readListBulkResult struct {
+	Total  int `json:"total"`
+	Edited int `json:"edited"`
+}
+
+// adminBulkShelfReadLists puts on the shelf every edition attached to a
+// read-list entry of the current user's children that matches the shared
+// filter. Only entries with a linked book_id are affected.
+func adminBulkShelfReadLists(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, _ := c.Get("user_id")
+		uid := currentUserID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		flt := parseReadListFilter(c)
+		whereClause, args, _ := flt.buildWhereClause(uid)
+
+		query := fmt.Sprintf(`
+			SELECT DISTINCT e.id
+			FROM read_list rl
+			JOIN editions e ON e.id = rl.book_id
+			%s
+		`, whereClause)
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		defer rows.Close()
+
+		cfg := getConfig(c)
+		var editionIDs []string
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				adminInternalError(c, err)
+				return
+			}
+			editionIDs = append(editionIDs, strconv.Itoa(id))
+		}
+
+		for _, editionID := range editionIDs {
+			if err := extractBookForShelf(db, editionID, cfg); err != nil {
+				log.Printf("Shelf extract warning for edition %s: %v", editionID, err)
+			}
+			db.Exec("DELETE FROM shelf_tokens WHERE edition_id = $1", editionID)
+			db.QueryRow("INSERT INTO shelf_tokens (token, edition_id) VALUES (gen_random_uuid()::text, $1) RETURNING token", editionID)
+			db.Exec("UPDATE editions SET on_shelf = true, shelf_order = COALESCE(shelf_order, 0) + 1 WHERE id = $1", editionID)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "total": len(editionIDs)})
+	}
+}
+
+// adminBulkDeleteReadLists soft-deletes every read-list entry matching the
+// shared filter that was created by the current user. Entries created by
+// other users are left untouched.
+func adminBulkDeleteReadLists(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, _ := c.Get("user_id")
+		uid := currentUserID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		flt := parseReadListFilter(c)
+		whereClause, args, argNum := flt.buildWhereClause(uid)
+
+		query := fmt.Sprintf(`
+			UPDATE read_list rl SET deleted = TRUE, updated_at = NOW()
+			%s AND rl.created_by = $%d
+		`, whereClause, argNum)
+		args = append(args, uid)
+		result, err := db.Exec(query, args...)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		edited, _ := result.RowsAffected()
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "edited": edited})
+	}
+}
+
+// adminBulkStatusReadLists sets the reading status on every read-list entry
+// matching the shared filter. The status is validated against the allowed set.
+func adminBulkStatusReadLists(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, _ := c.Get("user_id")
+		uid := currentUserID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+			return
+		}
+
+		var req struct {
+			Status string `json:"status"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+		if !validReadListStatuses[req.Status] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Недопустимый статус"})
+			return
+		}
+
+		flt := parseReadListFilter(c)
+		whereClause, args, argNum := flt.buildWhereClause(uid)
+
+		query := fmt.Sprintf(`
+			UPDATE read_list rl SET status = $%d::user_book_status, updated_at = NOW()
+			%s
+		`, argNum, whereClause)
+		args = append(args, req.Status)
+		result, err := db.Exec(query, args...)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		edited, _ := result.RowsAffected()
+
+		// Sync to the owner's user_books for entries that have a linked book
+		db.Exec(`
+			INSERT INTO user_books (user_id, edition_id, status)
+			SELECT rl.user_id, rl.book_id, $1::user_book_status
+			FROM read_list rl
+			JOIN user_parents up ON up.user_id = rl.user_id AND up.parent_id = $2
+			WHERE rl.deleted = FALSE AND rl.book_id IS NOT NULL
+			ON CONFLICT (user_id, edition_id) DO UPDATE SET
+				status = EXCLUDED.status, updated_at = CURRENT_TIMESTAMP
+		`, req.Status, uid)
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "edited": edited})
 	}
 }

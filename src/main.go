@@ -83,7 +83,10 @@ var embeddedMigration44 string
 //go:embed migration_4.5.sql
 var embeddedMigration45 string
 
-const currentDBVersion = "4.5"
+//go:embed migration_4.6.sql
+var embeddedMigration46 string
+
+const currentDBVersion = "4.6"
 
 type migration struct {
 	Version     string
@@ -171,6 +174,11 @@ var migrations = []migration{
 		Version:     "4.5",
 		Description: "Add user_parents table (M:N self-referential parent-child)",
 		SQL:         stripSchema(embeddedMigration45),
+	},
+	{
+		Version:     "4.6",
+		Description: "Add created_by (creator) to read_list",
+		SQL:         stripSchema(embeddedMigration46),
 	},
 }
 
@@ -855,8 +863,14 @@ func main() {
 		admin.GET("/readlists", adminListReadLists(db))
 		admin.POST("/readlists", adminCreateReadListItems(db))
 		admin.GET("/readlists/children", adminListChildren(db))
+		admin.GET("/readlists/names", adminListReadListNames(db))
 		admin.PUT("/readlists/:id", adminUpdateReadListItem(db))
 		admin.DELETE("/readlists/:id", adminDeleteReadListItem(db))
+
+		// Bulk read-list actions (shared filter, all matching entries)
+		admin.POST("/readlists/bulk/shelf", adminBulkShelfReadLists(db))
+		admin.POST("/readlists/bulk/delete", adminBulkDeleteReadLists(db))
+		admin.POST("/readlists/bulk/status", adminBulkStatusReadLists(db))
 	}
 
 	// Serve static files with cache-busting headers for JS

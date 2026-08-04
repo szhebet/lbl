@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -26,8 +27,12 @@ func setupAdminReadlistsRouter(db *sql.DB) *gin.Engine {
 		admin.GET("/readlists", adminListReadLists(db))
 		admin.POST("/readlists", adminCreateReadListItems(db))
 		admin.GET("/readlists/children", adminListChildren(db))
+		admin.GET("/readlists/names", adminListReadListNames(db))
 		admin.PUT("/readlists/:id", adminUpdateReadListItem(db))
 		admin.DELETE("/readlists/:id", adminDeleteReadListItem(db))
+		admin.POST("/readlists/bulk/shelf", adminBulkShelfReadLists(db))
+		admin.POST("/readlists/bulk/delete", adminBulkDeleteReadLists(db))
+		admin.POST("/readlists/bulk/status", adminBulkStatusReadLists(db))
 	}
 	return r
 }
@@ -357,4 +362,409 @@ func TestAdminReadListsUserIDsFilter(t *testing.T) {
 	w = doJSON(t, r, "GET", "/api/v1/admin/readlists", nil, adminToken)
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 2, resp.Total)
+}
+
+func TestAdminReadListNamesUnion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-names-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID1, _ := insertUserWithParent(t, db, adminID)
+	childID2, _ := insertUserWithParent(t, db, adminID)
+
+	insertReadListItemFor(t, db, childID1, "Книжный список", "Book1", "Author1", "Читаю")
+	insertReadListItemFor(t, db, childID1, "Книжный список", "Book2", "Author2", "Читаю")
+	insertReadListItemFor(t, db, childID2, "Научная фантастика", "Book3", "Author3", "Отложил")
+
+	// A child of another parent must NOT contribute list names
+	otherAdminID, _ := insertAdminUser(t, db)
+	otherChildID, _ := insertUserWithParent(t, db, otherAdminID)
+	insertReadListItemFor(t, db, otherChildID, "Чужие списки", "Book4", "Author4", "Читаю")
+
+	r := setupAdminReadlistsRouter(db)
+
+	w := doJSON(t, r, "GET", "/api/v1/admin/readlists/names", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Items []string `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	got := map[string]bool{}
+	for _, n := range resp.Items {
+		got[n] = true
+	}
+	assert.True(t, got["Книжный список"], "child1 list should be in union")
+	assert.True(t, got["Научная фантастика"], "child2 list should be in union")
+	assert.False(t, got["Чужие списки"], "other parent's child list must not leak")
+	assert.Equal(t, 2, len(resp.Items))
+}
+
+func TestAdminReadListsListnamesFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-listnames-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	insertReadListItemFor(t, db, childID, "Список А", "Book1", "Author1", "Читаю")
+	insertReadListItemFor(t, db, childID, "Список Б", "Book2", "Author2", "Читаю")
+
+	r := setupAdminReadlistsRouter(db)
+
+	var resp struct {
+		Total int `json:"total"`
+	}
+
+	// Both names → both items
+	w := doJSON(t, r, "GET", "/api/v1/admin/readlists?listnames="+url.QueryEscape("Список А,Список Б"), nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 2, resp.Total)
+
+	// Single name → one item
+	w = doJSON(t, r, "GET", "/api/v1/admin/readlists?listnames="+url.QueryEscape("Список Б"), nil, adminToken)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 1, resp.Total)
+
+	// Non-matching name → nothing
+	w = doJSON(t, r, "GET", "/api/v1/admin/readlists?listnames="+url.QueryEscape("Нет такого"), nil, adminToken)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 0, resp.Total)
+}
+
+func TestAdminReadListsStatusesFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-statuses-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	insertReadListItemFor(t, db, childID, "Список А", "Book1", "Author1", "Читаю")
+	insertReadListItemFor(t, db, childID, "Список Б", "Book2", "Author2", "Прочитано")
+	insertReadListItemFor(t, db, childID, "Список В", "Book3", "Author3", "Читаю")
+
+	r := setupAdminReadlistsRouter(db)
+
+	var resp struct {
+		Total int `json:"total"`
+	}
+
+	// Two statuses → matching items only
+	w := doJSON(t, r, "GET", "/api/v1/admin/readlists?statuses="+url.QueryEscape("Читаю,Прочитано"), nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 3, resp.Total)
+
+	// Single status → only matching items
+	w = doJSON(t, r, "GET", "/api/v1/admin/readlists?statuses="+url.QueryEscape("Читаю"), nil, adminToken)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 2, resp.Total)
+
+	// Non-matching status → nothing
+	w = doJSON(t, r, "GET", "/api/v1/admin/readlists?statuses="+url.QueryEscape("Бросил"), nil, adminToken)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, 0, resp.Total)
+}
+
+func TestAdminReadListsBulkDeleteOwnOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-bulkdel-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	r := setupAdminReadlistsRouter(db)
+
+	// Entry created by the admin (created_by = admin)
+	uniqMine := "Мои_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	w := doJSON(t, r, "POST", "/api/v1/admin/readlists", map[string]interface{}{
+		"user_ids": []int{childID}, "listname": uniqMine, "bookname": "Книга 1",
+		"author": "Автор 1", "status": "Читаю",
+	}, adminToken)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE listname = $1", uniqMine) })
+
+	// Entry created by someone else (created_by = NULL via direct insert)
+	uniqOther := "Чужие_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	insertReadListItemFor(t, db, childID, uniqOther, "Книга 2", "Автор 2", "Прочитано")
+
+	// Bulk delete on a filter matching both → only the admin-created one dies
+	w = doJSON(t, r, "POST", "/api/v1/admin/readlists/bulk/delete?listnames="+url.QueryEscape(uniqMine+","+uniqOther), nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var res struct {
+		Edited int `json:"edited"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Equal(t, 1, res.Edited, "only own entries may be deleted")
+
+	var mineDeleted, otherDeleted bool
+	db.QueryRow(`SELECT deleted FROM read_list WHERE listname = $1`, uniqMine).Scan(&mineDeleted)
+	db.QueryRow(`SELECT deleted FROM read_list WHERE listname = $1`, uniqOther).Scan(&otherDeleted)
+	assert.True(t, mineDeleted, "own entry must be soft-deleted")
+	assert.False(t, otherDeleted, "other user's entry must survive")
+}
+
+func TestAdminReadListsBulkStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-bulkstatus-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	uniqList := "Массовый_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	insertReadListItemFor(t, db, childID, uniqList, "Книга 1", "Автор 1", "Читаю")
+	insertReadListItemFor(t, db, childID, uniqList, "Книга 2", "Автор 2", "Читаю")
+	// A different list that must NOT change
+	otherList := "Другой_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	insertReadListItemFor(t, db, childID, otherList, "Книга 3", "Автор 3", "Читаю")
+
+	r := setupAdminReadlistsRouter(db)
+
+	w := doJSON(t, r, "POST", "/api/v1/admin/readlists/bulk/status?listnames="+url.QueryEscape(uniqList), map[string]interface{}{
+		"status": "Прочитано",
+	}, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var res struct {
+		Edited int `json:"edited"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Equal(t, 2, res.Edited)
+
+	var st1, st2, st3 string
+	db.QueryRow(`SELECT status::text FROM read_list WHERE listname = $1 AND bookname = 'Книга 1'`, uniqList).Scan(&st1)
+	db.QueryRow(`SELECT status::text FROM read_list WHERE listname = $1 AND bookname = 'Книга 2'`, uniqList).Scan(&st2)
+	db.QueryRow(`SELECT status::text FROM read_list WHERE listname = $1 AND bookname = 'Книга 3'`, otherList).Scan(&st3)
+	assert.Equal(t, "Прочитано", st1)
+	assert.Equal(t, "Прочитано", st2)
+	assert.Equal(t, "Читаю", st3, "entries outside the filter must be untouched")
+
+	// Invalid status → 400
+	w = doJSON(t, r, "POST", "/api/v1/admin/readlists/bulk/status", map[string]interface{}{
+		"status": "Недопустимо",
+	}, adminToken)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminReadListsBulkShelf(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-bulkshelf-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	// Two real editions
+	insertEditionFor := func(title string) int {
+		var workID int
+		err := db.QueryRow(`INSERT INTO works (original_title) VALUES ($1) RETURNING id`, title).Scan(&workID)
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Exec("DELETE FROM works WHERE id = $1", workID) })
+		var editionID int
+		err = db.QueryRow(`INSERT INTO editions (work_id, title) VALUES ($1, $2) RETURNING id`, workID, title).Scan(&editionID)
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Exec("DELETE FROM editions WHERE id = $1", editionID) })
+		return editionID
+	}
+	ed1 := insertEditionFor("Полка Книга 1")
+	ed2 := insertEditionFor("Полка Книга 2")
+
+	uniqList := "Полочный_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// Entry with book_id set
+	var id1 string
+	err := db.QueryRow(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, book_id, updated_at)
+		VALUES (gen_random_uuid(), $1, 'Книга 1', 'Автор 1', 5, $2, 'c', 'Читаю'::user_book_status, $3, NOW())
+		RETURNING id::text
+	`, uniqList, childID, ed1).Scan(&id1)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE id = $1::uuid", id1) })
+	// Entry WITHOUT book_id must not break the bulk shelf
+	var id2 string
+	err = db.QueryRow(`
+		INSERT INTO read_list (id, listname, bookname, author, priority, user_id, comment, status, book_id, updated_at)
+		VALUES (gen_random_uuid(), $1, 'Книга 2', 'Автор 2', 5, $2, 'c', 'Читаю'::user_book_status, $3, NOW())
+		RETURNING id::text
+	`, uniqList, childID, ed2).Scan(&id2)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE id = $1::uuid", id2) })
+
+	r := setupAdminReadlistsRouter(db)
+
+	w := doJSON(t, r, "POST", "/api/v1/admin/readlists/bulk/shelf?listnames="+url.QueryEscape(uniqList), nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var res struct {
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Equal(t, 2, res.Total, "both linked editions must go on shelf")
+
+	var on1, on2 bool
+	db.QueryRow(`SELECT on_shelf FROM editions WHERE id = $1`, ed1).Scan(&on1)
+	db.QueryRow(`SELECT on_shelf FROM editions WHERE id = $1`, ed2).Scan(&on2)
+	assert.True(t, on1)
+	assert.True(t, on2)
+}
+
+func TestAdminReadListsCreatedBy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-createdby-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID, _ := insertUserWithParent(t, db, adminID)
+
+	// Create via admin endpoint → created_by = the parent admin
+	uniqList := "Для создателя_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	r := setupAdminReadlistsRouter(db)
+	w := doJSON(t, r, "POST", "/api/v1/admin/readlists", map[string]interface{}{
+		"user_ids": []int{childID}, "listname": uniqList, "bookname": "Книга",
+		"author": "Автор", "status": "Читаю",
+	}, adminToken)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE listname = $1", uniqList) })
+
+	var createdBy int
+	err := db.QueryRow("SELECT created_by FROM read_list WHERE listname = $1", uniqList).Scan(&createdBy)
+	require.NoError(t, err)
+	assert.Equal(t, adminID, createdBy, "creator must be the parent admin")
+
+	// The list endpoint returns created_by + creator username
+	var listResp struct {
+		Items []AdminReadListItem `json:"items"`
+	}
+	w = doJSON(t, r, "GET", "/api/v1/admin/readlists?listname="+url.QueryEscape(uniqList), nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	require.Len(t, listResp.Items, 1)
+	assert.Equal(t, adminID, listResp.Items[0].CreatedBy)
+	assert.NotEmpty(t, listResp.Items[0].CreatedByU)
+}
+
+func TestAdminReadListsCreatedBySelfOnUserCreate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-createdby-self-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	// A child creates their own read-list item → created_by = the child itself
+	adminID, _ := insertAdminUser(t, db)
+	childID, childToken := insertUserWithParent(t, db, adminID)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+	r.Use(authMiddleware())
+	r.POST("/api/v1/user/readlist", createReadListItem(db))
+
+	uniqList := "Сам себе_"+strconv.FormatInt(time.Now().UnixNano(), 36)
+	w := doJSON(t, r, "POST", "/api/v1/user/readlist", map[string]interface{}{
+		"listname": uniqList, "bookname": "Книга", "author": "Автор", "status": "Читаю",
+	}, childToken)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE listname = $1", uniqList) })
+
+	var createdBy int
+	err := db.QueryRow("SELECT created_by FROM read_list WHERE listname = $1", uniqList).Scan(&createdBy)
+	require.NoError(t, err)
+	assert.Equal(t, childID, createdBy, "creator must be the child itself")
+}
+
+func TestAdminReadListsBookLinkToChildren(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-arl-booklink-secret")
+
+	db := setupTestDB()
+	t.Cleanup(func() { db.Close() })
+
+	adminID, adminToken := insertAdminUser(t, db)
+	childID1, _ := insertUserWithParent(t, db, adminID)
+	childID2, _ := insertUserWithParent(t, db, adminID)
+
+	// Matching entries among children of the admin
+	itemA := insertReadListItemFor(t, db, childID1, "default", "Книга о море", "Иван Мореход", "Читаю")
+	itemB := insertReadListItemFor(t, db, childID2, "default", "Книга о море", "Иван Мореход", "Читаю")
+	// Non-matching entry (different bookname) must NOT be linked
+	itemC := insertReadListItemFor(t, db, childID2, "default", "Другая книга", "Иван Мореход", "Читаю")
+
+	r := setupAdminReadlistsRouter(db)
+
+	// Valid person id for the author field (FK to persons)
+	var personID int
+	err := db.QueryRow(`INSERT INTO persons (first_name, last_name) VALUES ('Иван', 'Мореход') RETURNING id`).Scan(&personID)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Exec("DELETE FROM persons WHERE id = $1", personID) })
+
+	// A real edition (book_id references editions(id))
+	var workID int
+	err = db.QueryRow(`INSERT INTO works (original_title) VALUES ('Книга о море') RETURNING id`).Scan(&workID)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Exec("DELETE FROM works WHERE id = $1", workID) })
+	var editionID int
+	err = db.QueryRow(`INSERT INTO editions (work_id, title) VALUES ($1, 'Книга о море') RETURNING id`, workID).Scan(&editionID)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Exec("DELETE FROM editions WHERE id = $1", editionID) })
+
+	// Create a new item for child1 with book_id set (as if a book was loaded)
+	uniqList := "С привязкой_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	w := doJSON(t, r, "POST", "/api/v1/admin/readlists", map[string]interface{}{
+		"user_ids": []int{childID1}, "listname": uniqList, "bookname": "Книга о море",
+		"author": "Иван Мореход", "status": "Читаю", "author_id": personID, "book_id": editionID,
+	}, adminToken)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	t.Cleanup(func() { db.Exec("DELETE FROM read_list WHERE listname = $1", uniqList) })
+
+	// book_id should be attached to matching entries, not to itemC
+	var bookID sql.NullInt64
+	err = db.QueryRow("SELECT book_id FROM read_list WHERE id = $1::uuid", itemA).Scan(&bookID)
+	require.NoError(t, err)
+	require.True(t, bookID.Valid)
+	assert.Equal(t, int64(editionID), bookID.Int64)
+
+	err = db.QueryRow("SELECT book_id FROM read_list WHERE id = $1::uuid", itemB).Scan(&bookID)
+	require.NoError(t, err)
+	require.True(t, bookID.Valid)
+	assert.Equal(t, int64(editionID), bookID.Int64)
+
+	err = db.QueryRow("SELECT book_id FROM read_list WHERE id = $1::uuid", itemC).Scan(&bookID)
+	require.NoError(t, err)
+	assert.False(t, bookID.Valid, "non-matching entry must not be linked")
+
+	// Same on update: editing a matching entry links the book to all matches
+	var updateResp struct {
+		OK bool `json:"ok"`
+	}
+	w = doJSON(t, r, "PUT", "/api/v1/admin/readlists/"+itemA, map[string]interface{}{
+		"listname": "default", "bookname": "Книга о море", "author": "Иван Мореход",
+		"status": "Читаю", "book_id": editionID,
+	}, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updateResp))
+
+	err = db.QueryRow("SELECT book_id FROM read_list WHERE id = $1::uuid", itemB).Scan(&bookID)
+	require.NoError(t, err)
+	require.True(t, bookID.Valid)
+	assert.Equal(t, int64(editionID), bookID.Int64)
 }
