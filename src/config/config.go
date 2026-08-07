@@ -48,12 +48,13 @@ type DatabaseConfig struct {
 }
 
 type LLMConfig struct {
-	BaseURL string `toml:"base_url"`
-	Model   string `toml:"model"`
-	Token   string `toml:"token"`
-	Prompt  string `toml:"prompt"`
-	Prompt2 string `toml:"prompt2"`
-	Timeout int    `toml:"timeout"`
+	BaseURL      string `toml:"base_url"`
+	Model        string `toml:"model"`
+	Token        string `toml:"token"`
+	Prompt       string `toml:"prompt"`
+	Prompt2      string `toml:"prompt2"`
+	PromptConvert string `toml:"prompt_convert"`
+	Timeout      int    `toml:"timeout"`
 }
 
 func DefaultConfig() *Config {
@@ -79,12 +80,13 @@ func DefaultConfig() *Config {
 			DataDir:  "/var/lib/postgresql/data",
 		},
 		LLM: LLMConfig{
-			BaseURL: "http://localhost:8080",
-			Model:   "llama",
-			Token:   "",
-			Prompt:  "в тексте первых 3х страниц книги найди ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
-			Prompt2: "по цитате нескольких страниц определи ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
-			Timeout: 60,
+			BaseURL:      "http://localhost:8080",
+			Model:        "llama",
+			Token:        "",
+			Prompt:       "в тексте первых 3х страниц книги найди ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
+			Prompt2:      "по цитате нескольких страниц определи ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
+			PromptConvert: "Преобразуй к формату Автор - Название произведения следующий текст: \n",
+			Timeout:      60,
 		},
 	}
 }
@@ -223,6 +225,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LIBAPP_LLM_PROMPT2"); v != "" {
 		cfg.LLM.Prompt2 = v
+	}
+	if v := os.Getenv("LIBAPP_LLM_PROMPT_CONVERT"); v != "" {
+		cfg.LLM.PromptConvert = v
 	}
 }
 

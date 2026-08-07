@@ -502,7 +502,7 @@ func adminDeleteTag(db *sql.DB) gin.HandlerFunc {
 func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query(`
-			SELECT g.id, g.name, g.parent_id, g.description,
+			SELECT g.id, g.name, g.ru_name, g.parent_id, g.description,
 				COALESCE(p.name, '') as parent_name,
 				COALESCE((SELECT COUNT(DISTINCT e.id) FROM work_genres wg
 					JOIN editions e ON e.work_id = wg.work_id
@@ -519,6 +519,7 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 		type AdminGenre struct {
 			ID          int     `json:"id"`
 			Name        string  `json:"name"`
+			RuName      *string `json:"ru_name,omitempty"`
 			ParentID    *int    `json:"parent_id,omitempty"`
 			Description *string `json:"description,omitempty"`
 			ParentName  string  `json:"parent_name"`
@@ -529,9 +530,13 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 			var g AdminGenre
 			var parentID sql.NullInt64
 			var desc sql.NullString
-			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc, &g.ParentName, &g.BooksCount); err != nil {
+			var ruName sql.NullString
+			if err := rows.Scan(&g.ID, &g.Name, &ruName, &parentID, &desc, &g.ParentName, &g.BooksCount); err != nil {
 				adminInternalError(c, err)
 				return
+			}
+			if ruName.Valid {
+				g.RuName = &ruName.String
 			}
 			if parentID.Valid {
 				v := int(parentID.Int64)

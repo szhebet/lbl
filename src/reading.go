@@ -383,6 +383,7 @@ func getReadListItems(db *sql.DB) gin.HandlerFunc {
 			"status":     "rl.status",
 			"comment":    "rl.comment",
 			"listname":   "rl.listname",
+			"shelf":      "(CASE WHEN e.id IS NULL THEN 0 WHEN COALESCE(e.on_shelf, false) THEN 2 ELSE 1 END)",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {

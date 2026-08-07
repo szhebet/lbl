@@ -86,7 +86,13 @@ var embeddedMigration45 string
 //go:embed migration_4.6.sql
 var embeddedMigration46 string
 
-const currentDBVersion = "4.6"
+//go:embed migration_4.7.sql
+var embeddedMigration47 string
+
+//go:embed migration_4.8.sql
+var embeddedMigration48 string
+
+const currentDBVersion = "4.8"
 
 type migration struct {
 	Version     string
@@ -179,6 +185,16 @@ var migrations = []migration{
 		Version:     "4.6",
 		Description: "Add created_by (creator) to read_list",
 		SQL:         stripSchema(embeddedMigration46),
+	},
+	{
+		Version:     "4.7",
+		Description: "Add ru_name (Russian display name) to genres",
+		SQL:         stripSchema(embeddedMigration47),
+	},
+	{
+		Version:     "4.8",
+		Description: "Prefill genres.ru_name with Russian display names",
+		SQL:         stripSchema(embeddedMigration48),
 	},
 }
 
@@ -812,6 +828,9 @@ func main() {
 		write.POST("/import/json", adminAuthMiddleware(), importBooksFromJSON(db))
 		write.POST("/books/:id/cover", adminAuthMiddleware(), uploadCover(db))
 
+		// LLM text conversion (editor+ only)
+		write.POST("/llm/convert", adminAuthMiddleware(), llmConvertText())
+
 		// Shelf management (all authenticated users - viewers can manage their shelf)
 		write.PUT("/books/:id/shelf", updateBookShelf(db))
 
@@ -895,13 +914,13 @@ func main() {
 
 	// Serve templates with mobile platform detection
 	mobileTopBarIndex := `<div class="mobile-top-bar">
-    <a href="/admin" class="mobile-admin-btn" title="Администрирование">А</a>
+    <a href="/admin" class="mobile-admin-btn" title="Управление">У</a>
     <span class="mobile-top-spacer"></span>
     <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
 </div>`
 	mobileTopBarAdmin := `<div class="mobile-top-bar">
     <a href="/" class="mobile-back-btn" title="Назад к библиотеке">←</a>
-    <span class="mobile-top-title">Админ</span>
+    <span class="mobile-top-title">Управление</span>
     <span class="mobile-top-spacer"></span>
     <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
 </div>`
@@ -1063,6 +1082,7 @@ func uploadCover(db *sql.DB) gin.HandlerFunc {
 func getBooks(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authorFilter := c.Query("author")
+		authorIDFilter := c.Query("author_id")
 		bookFilter := c.Query("book")
 		genreFilter := c.Query("genre")
 		statusFilter := c.Query("status")
@@ -1122,10 +1142,24 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 			)`, strings.Join(conditions, " OR "))
 		}
 
+		if authorIDFilter != "" {
+			if _, err := strconv.Atoi(authorIDFilter); err == nil {
+				whereClause += fmt.Sprintf(` AND edition_id IN (
+					SELECT DISTINCT e.id FROM editions e
+					JOIN works w ON w.id = e.work_id
+					JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+					WHERE wc.person_id = $%d
+				)`, argNum)
+				args = append(args, authorIDFilter)
+				argNum++
+			}
+		}
+
 		if genreFilter != "" {
-			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", argNum)
-			args = append(args, "%"+genreFilter+"%")
-			argNum++
+			pattern := "%" + normalizeQuery(genreFilter) + "%"
+			whereClause += fmt.Sprintf(" AND work_id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d OR LOWER(REPLACE(COALESCE(g.ru_name, ''), 'ё', 'е')) LIKE $%d)", argNum, argNum+1)
+			args = append(args, pattern, pattern)
+			argNum += 2
 		}
 
 		if statusFilter != "" && userID > 0 {
@@ -1263,9 +1297,10 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 			argIndex += 2
 		}
 		if genre != "" {
-			whereClause += fmt.Sprintf(" AND genres ILIKE $%d", argIndex)
-			args = append(args, "%"+genre+"%")
-			argIndex++
+			pattern := "%" + normalizeQuery(genre) + "%"
+			whereClause += fmt.Sprintf(" AND work_id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d OR LOWER(REPLACE(COALESCE(g.ru_name, ''), 'ё', 'е')) LIKE $%d)", argIndex, argIndex+1)
+			args = append(args, pattern, pattern)
+			argIndex += 2
 		}
 		if language != "" {
 			whereClause += fmt.Sprintf(" AND (original_language = $%d OR edition_language = $%d)", argIndex, argIndex)
@@ -1850,9 +1885,10 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		}
 
 		if genreFilter != "" {
-			whereClause += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d)", argNum)
-			whereArgs = append(whereArgs, "%"+strings.ToLower(genreFilter)+"%")
-			argNum++
+			pattern := "%" + normalizeQuery(genreFilter) + "%"
+			whereClause += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d OR LOWER(REPLACE(COALESCE(g.ru_name, ''), 'ё', 'е')) LIKE $%d)", argNum, argNum+1)
+			whereArgs = append(whereArgs, pattern, pattern)
+			argNum += 2
 		}
 
 		// Count total
@@ -2138,9 +2174,10 @@ func getAuthorWorks(db *sql.DB) gin.HandlerFunc {
 			workArgNum++
 		}
 		if genreFilter != "" {
-			worksQuery += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d)", workArgNum)
-			workArgs = append(workArgs, "%"+strings.ToLower(genreFilter)+"%")
-			workArgNum++
+			pattern := "%" + normalizeQuery(genreFilter) + "%"
+			worksQuery += fmt.Sprintf(" AND w.id IN (SELECT wg.work_id FROM work_genres wg JOIN genres g ON g.id = wg.genre_id WHERE LOWER(g.name) LIKE $%d OR LOWER(REPLACE(COALESCE(g.ru_name, ''), 'ё', 'е')) LIKE $%d)", workArgNum, workArgNum+1)
+			workArgs = append(workArgs, pattern, pattern)
+			workArgNum += 2
 		}
 
 		worksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
@@ -2306,15 +2343,17 @@ type AuthorData struct {
 
 // GenreData represents a genre
 type GenreData struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	ParentID *int   `json:"parent_id,omitempty"`
+	ID       int     `json:"id"`
+	Name     string  `json:"name"`
+	RuName   *string `json:"ru_name,omitempty"`
+	ParentID *int    `json:"parent_id,omitempty"`
 }
 
 // GenreWithAuthors represents a genre with its authors and books
 type GenreWithAuthors struct {
 	ID          int                `json:"id"`
 	Name        string             `json:"name"`
+	RuName      *string            `json:"ru_name,omitempty"`
 	ParentID    *int               `json:"parent_id"`
 	Description *string            `json:"description"`
 	Authors     []AuthorWithBooks  `json:"authors"`
@@ -2796,7 +2835,7 @@ func updateBookExtended(db *sql.DB) gin.HandlerFunc {
 // getGenres returns all genres
 func getGenres(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, name, parent_id FROM genres ORDER BY name")
+		rows, err := db.Query("SELECT id, name, ru_name, parent_id FROM genres ORDER BY name")
 		if err != nil {
 			internalError(c, err)
 			return
@@ -2807,9 +2846,13 @@ func getGenres(db *sql.DB) gin.HandlerFunc {
 		for rows.Next() {
 			var genre GenreData
 			var parentID sql.NullInt64
-			if err := rows.Scan(&genre.ID, &genre.Name, &parentID); err != nil {
+			var ruName sql.NullString
+			if err := rows.Scan(&genre.ID, &genre.Name, &ruName, &parentID); err != nil {
 				internalError(c, err)
 				return
+			}
+			if ruName.Valid {
+				genre.RuName = &ruName.String
 			}
 			if parentID.Valid {
 				v := int(parentID.Int64)
@@ -2826,7 +2869,8 @@ func getGenres(db *sql.DB) gin.HandlerFunc {
 func createGenre(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Name string `json:"name" binding:"required"`
+			Name   string  `json:"name" binding:"required"`
+			RuName *string `json:"ru_name"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -2834,10 +2878,14 @@ func createGenre(db *sql.DB) gin.HandlerFunc {
 		}
 
 		var genre GenreData
-		err := db.QueryRow("INSERT INTO genres (name) VALUES ($1) RETURNING id, name", req.Name).Scan(&genre.ID, &genre.Name)
+		var ruName sql.NullString
+		err := db.QueryRow("INSERT INTO genres (name, ru_name) VALUES ($1, $2) RETURNING id, name, ru_name", req.Name, req.RuName).Scan(&genre.ID, &genre.Name, &ruName)
 		if err != nil {
 			internalError(c, err)
 			return
+		}
+		if ruName.Valid {
+			genre.RuName = &ruName.String
 		}
 
 		c.JSON(http.StatusCreated, genre)
@@ -2853,11 +2901,12 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 		whereArgs := []interface{}{}
 
 		if genreFilter != "" {
-			whereClause = " WHERE LOWER(g.name) LIKE $1"
-			whereArgs = append(whereArgs, "%"+strings.ToLower(genreFilter)+"%")
+			pattern := "%" + normalizeQuery(genreFilter) + "%"
+			whereClause = " WHERE LOWER(g.name) LIKE $1 OR LOWER(REPLACE(COALESCE(g.ru_name, ''), 'ё', 'е')) LIKE $2"
+			whereArgs = append(whereArgs, pattern, pattern)
 		}
 
-		query := `SELECT g.id, g.name, g.parent_id, g.description FROM genres g` + whereClause + ` ORDER BY g.name`
+		query := `SELECT g.id, g.name, g.ru_name, g.parent_id, g.description FROM genres g` + whereClause + ` ORDER BY g.name`
 
 		rows, err := db.Query(query, whereArgs...)
 		if err != nil {
@@ -2871,9 +2920,13 @@ func getGenreTree(db *sql.DB) gin.HandlerFunc {
 			var g GenreWithAuthors
 			var parentID sql.NullInt64
 			var desc sql.NullString
-			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc); err != nil {
+			var ruName sql.NullString
+			if err := rows.Scan(&g.ID, &g.Name, &ruName, &parentID, &desc); err != nil {
 				internalError(c, err)
 				return
+			}
+			if ruName.Valid {
+				g.RuName = &ruName.String
 			}
 			if parentID.Valid {
 				v := int(parentID.Int64)
@@ -3106,6 +3159,7 @@ func updateGenre(db *sql.DB) gin.HandlerFunc {
 		id := c.Param("id")
 		var req struct {
 			Name        string  `json:"name"`
+			RuName      *string `json:"ru_name"`
 			Description *string `json:"description"`
 			ParentID    *int    `json:"parent_id"`
 		}
@@ -3116,20 +3170,25 @@ func updateGenre(db *sql.DB) gin.HandlerFunc {
 
 		_, err := db.Exec(`
 			UPDATE genres SET name = COALESCE(NULLIF($1, ''), name),
-				description = COALESCE($2, description),
-				parent_id = $3
-			WHERE id = $4
-		`, req.Name, req.Description, req.ParentID, id)
+				ru_name = COALESCE($2, ru_name),
+				description = COALESCE($3, description),
+				parent_id = $4
+			WHERE id = $5
+		`, req.Name, req.RuName, req.Description, req.ParentID, id)
 		if err != nil {
 			internalError(c, err)
 			return
 		}
 
 		var genre GenreData
-		err = db.QueryRow("SELECT id, name FROM genres WHERE id = $1", id).Scan(&genre.ID, &genre.Name)
+		var ruName sql.NullString
+		err = db.QueryRow("SELECT id, name, ru_name FROM genres WHERE id = $1", id).Scan(&genre.ID, &genre.Name, &ruName)
 		if err != nil {
 			internalError(c, err)
 			return
+		}
+		if ruName.Valid {
+			genre.RuName = &ruName.String
 		}
 
 		c.JSON(http.StatusOK, genre)
@@ -4714,8 +4773,61 @@ func getShelfCount(db *sql.DB) gin.HandlerFunc {
 func getAppConfig() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
+		prompt := cfg.LLM.PromptConvert
+		if prompt == "" {
+			prompt = "Преобразуй к формату Автор - Название произведения следующий текст: \n"
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"enable_delete": cfg.Server.EnableDelete,
+			"enable_delete":     cfg.Server.EnableDelete,
+			"llm_prompt_convert": prompt,
 		})
+	}
+}
+
+// llmConvertText sends the pasted book lines to the configured LLM so it can
+// normalize them into "Автор - Название" format. Returns the raw model reply.
+func llmConvertText() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		cfg := getConfig(c)
+		if cfg.LLM.BaseURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "LLM не настроен (llm.base_url пуст)"})
+			return
+		}
+
+		var req struct {
+			Text string `json:"text"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "неверный запрос"})
+			return
+		}
+
+		text := strings.TrimSpace(req.Text)
+		if text == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "пустой текст"})
+			return
+		}
+
+		// Normalize before concatenating with the prompt so markup/special
+		// chars/quotes do not confuse the LLM.
+		normalized := utils.NormalizeBookListText(text)
+		log.Printf("[LLM CONVERT] normalized input text: %s", normalized)
+
+		prompt := cfg.LLM.PromptConvert
+		if prompt == "" {
+			prompt = "Преобразуй к формату Автор - Название произведения следующий текст: \n"
+		}
+
+		result := utils.ConvertText(normalized, cfg.LLM.BaseURL, cfg.LLM.Model, cfg.LLM.Token, prompt, cfg.LLM.Timeout, true)
+		if result == "" {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "LLM вернул пустой ответ"})
+			return
+		}
+
+		// Log the raw LLM reply verbatim so we can see exactly what goes to
+		// the client for the author/title column split.
+		log.Printf("[LLM CONVERT] raw LLM result going to client: %s", result)
+
+		c.JSON(http.StatusOK, gin.H{"result": result})
 	}
 }

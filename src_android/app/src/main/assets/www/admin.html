@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Администрирование — Домашняя библиотека</title>
+    <title>Управление — Домашняя библиотека</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -12,7 +12,7 @@
 <body>
     <div class="container">
         <a href="/" class="back-link" id="adminBackLink">&larr; Назад к библиотеке</a>
-        <h1 style="margin-bottom:20px">Администрирование</h1>
+        <h1 style="margin-bottom:20px">Управление</h1>
 
         <div class="admin-tabs">
             <button class="admin-tab active" data-tab="users" data-short="П">Пользователи</button>
@@ -101,6 +101,7 @@
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
                     <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="ru_name">Наименование (рус.)<span class="sort-arrow"></span></th>
                     <th data-sort="parent_name">Родитель<span class="sort-arrow"></span></th>
                     <th data-sort="description">Описание<span class="sort-arrow"></span></th>
                     <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
@@ -146,42 +147,51 @@
         </div>
 
         <div id="tab-readlists" class="admin-content">
-            <div class="admin-toolbar">
-                <div class="rl-children-filter" id="rlChildrenFilterWrap">
-                    <button type="button" class="btn" id="rlChildrenFilterBtn">Дети: все</button>
-                    <div class="rl-children-dropdown" id="rlChildrenDropdown" style="display:none">
-                        <div class="rl-children-actions">
-                            <button type="button" class="btn btn-small" id="rlChildrenAllBtn">Выбрать всех</button>
-                            <button type="button" class="btn btn-small" id="rlChildrenClearBtn">Очистить</button>
+            <div class="admin-toolbar rl-toolbar">
+                <div class="rl-filters-col">
+                    <div class="rl-filter-row">
+                        <div class="rl-children-filter" id="rlChildrenFilterWrap">
+                            <button type="button" class="btn" id="rlChildrenFilterBtn">Дети: все</button>
+                            <div class="rl-children-dropdown" id="rlChildrenDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlChildrenAllBtn">Выбрать всех</button>
+                                    <button type="button" class="btn btn-small" id="rlChildrenClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlChildrenList"></div>
+                            </div>
                         </div>
-                        <div id="rlChildrenList"></div>
+                        <div class="rl-children-filter" id="rlListFilterWrap">
+                            <button type="button" class="btn" id="rlListFilterBtn">Списки: все</button>
+                            <div class="rl-children-dropdown" id="rlListDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlListAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlListClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlListList"></div>
+                            </div>
+                        </div>
+                        <div class="rl-children-filter" id="rlStatusFilterWrap">
+                            <button type="button" class="btn" id="rlStatusFilterBtn">Статус: все</button>
+                            <div class="rl-children-dropdown" id="rlStatusDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlStatusAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlStatusClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlStatusList"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rl-filter-row">
+                        <input type="text" class="filter-input" id="filter-rl-bookname" placeholder="Название книги...">
+                        <input type="text" class="filter-input" id="filter-rl-author" placeholder="Автор...">
+                        <button class="btn" id="rlApplyBtn">Применить</button>
                     </div>
                 </div>
-                <div class="rl-children-filter" id="rlListFilterWrap">
-                    <button type="button" class="btn" id="rlListFilterBtn">Списки: все</button>
-                    <div class="rl-children-dropdown" id="rlListDropdown" style="display:none">
-                        <div class="rl-children-actions">
-                            <button type="button" class="btn btn-small" id="rlListAllBtn">Выбрать все</button>
-                            <button type="button" class="btn btn-small" id="rlListClearBtn">Очистить</button>
-                        </div>
-                        <div id="rlListList"></div>
-                    </div>
-                </div>
-                <div class="rl-children-filter" id="rlStatusFilterWrap">
-                    <button type="button" class="btn" id="rlStatusFilterBtn">Статус: все</button>
-                    <div class="rl-children-dropdown" id="rlStatusDropdown" style="display:none">
-                        <div class="rl-children-actions">
-                            <button type="button" class="btn btn-small" id="rlStatusAllBtn">Выбрать все</button>
-                            <button type="button" class="btn btn-small" id="rlStatusClearBtn">Очистить</button>
-                        </div>
-                        <div id="rlStatusList"></div>
-                    </div>
-                </div>
-                <input type="text" class="filter-input" id="filter-rl-bookname" placeholder="Название книги...">
-                <input type="text" class="filter-input" id="filter-rl-author" placeholder="Автор...">
-                <button class="btn" id="rlApplyBtn">Применить</button>
                 <div class="rl-bulk-frame">
                     <div class="rl-bulk-title">Массовые операции</div>
+                    <div class="rl-bulk-top">
+                        <button class="btn" id="rlCreateFromTextBtn" title="Создать записи из вставленного текста (по одной книге на строку)">Создать из текста</button>
+                    </div>
                     <div class="rl-bulk-buttons">
                         <button class="btn" id="rlBulkShelfBtn" title="Выложить на полку все книги отфильтрованного списка">На полку</button>
                         <button class="btn" id="rlBulkStatusBtn" title="Установить статус всем записям отфильтрованного списка">Установить статус</button>

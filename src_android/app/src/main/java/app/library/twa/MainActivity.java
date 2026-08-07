@@ -108,14 +108,14 @@ public class MainActivity extends Activity {
         "<body class=\"android\">";
     private static final String MOBILE_TOP_BAR_INDEX =
         "<div class=\"mobile-top-bar\">\n" +
-        "    <a href=\"/admin\" class=\"mobile-admin-btn\" title=\"Администрирование\">А</a>\n" +
+        "    <a href=\"/admin\" class=\"mobile-admin-btn\" title=\"Управление\">У</a>\n" +
         "    <span class=\"mobile-top-spacer\"></span>\n" +
         "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
         "</div>";
     private static final String MOBILE_TOP_BAR_ADMIN =
         "<div class=\"mobile-top-bar\">\n" +
         "    <a href=\"/\" class=\"mobile-back-btn\" title=\"Назад к библиотеке\">←</a>\n" +
-        "    <span class=\"mobile-top-title\">Админ</span>\n" +
+        "    <span class=\"mobile-top-title\">Управление</span>\n" +
         "    <span class=\"mobile-top-spacer\"></span>\n" +
         "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
         "</div>";

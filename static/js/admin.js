@@ -42,20 +42,24 @@ function escapeHtml(text) {
 }
 
 function openAdminModal(title, content) {
+    var adminModal = document.getElementById('adminModal');
+    adminModal.classList.remove('rl-modal-wide', 'rl-modal-locked');
     document.getElementById('adminModalTitle').textContent = title;
     document.getElementById('adminModalBody').innerHTML = content;
-    document.getElementById('adminModal').style.display = 'flex';
+    adminModal.style.display = 'flex';
     document.getElementById('adminForm').onsubmit = null;
     var submitBtn = document.getElementById('adminForm').querySelector('.modal-footer .btn[type="submit"]');
     if (submitBtn) submitBtn.textContent = 'Сохранить';
 }
 
 function closeAdminModal() {
-    document.getElementById('adminModal').style.display = 'none';
+    var adminModal = document.getElementById('adminModal');
+    adminModal.classList.remove('rl-modal-wide', 'rl-modal-locked');
+    adminModal.style.display = 'none';
 }
 
 document.getElementById('adminModal').addEventListener('click', function(e) {
-    if (e.target === this) closeAdminModal();
+    if (e.target === this && !this.classList.contains('rl-modal-locked')) closeAdminModal();
 });
 
 document.addEventListener('click', function(e) {
@@ -644,7 +648,7 @@ function renderGenres() {
     var tbody = document.getElementById('genresTableBody');
     var pagEl = document.getElementById('genresPagination');
     var filterText = document.getElementById('filter-genres').value;
-    var filtered = filterData(storeGenres, filterText, ['name', 'parent_name', 'description']);
+    var filtered = filterData(storeGenres, filterText, ['name', 'ru_name', 'parent_name', 'description']);
     var sorted = sortData(filtered, getSortKey('table-genres'), getSortDir('table-genres'));
     var total = sorted.length;
     var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -655,6 +659,7 @@ function renderGenres() {
         return '<tr>' +
             '<td>' + g.id + '</td>' +
             '<td>' + escapeHtml(g.name) + '</td>' +
+            '<td>' + escapeHtml(g.ru_name || '') + '</td>' +
             '<td>' + escapeHtml(g.parent_name || '') + '</td>' +
             '<td>' + escapeHtml(g.description || '') + '</td>' +
             '<td>' + (g.books_count || 0) + '</td>' +
@@ -679,6 +684,10 @@ document.getElementById('addGenreBtn').addEventListener('click', function() {
                 <input type="text" id="f_name" required>
             </div>
             <div class="form-group">
+                <label>Наименование (рус.):</label>
+                <input type="text" id="f_ru_name" placeholder="Русское наименование для отображения">
+            </div>
+            <div class="form-group">
                 <label>Родительский жанр:</label>
                 <select id="f_parent_id">${options}</select>
             </div>
@@ -690,8 +699,10 @@ document.getElementById('addGenreBtn').addEventListener('click', function() {
         document.getElementById('adminForm').onsubmit = async function(e) {
             e.preventDefault();
             var body = {name: document.getElementById('f_name').value};
+            var ruName = document.getElementById('f_ru_name').value.trim();
             var pid = document.getElementById('f_parent_id').value;
             var desc = document.getElementById('f_description').value;
+            if (ruName) body.ru_name = ruName;
             if (pid) body.parent_id = parseInt(pid);
             if (desc) body.description = desc;
             var res = await api('/api/v1/genres', {
@@ -717,6 +728,10 @@ function editGenre(id) {
                     <input type="text" id="f_name" value="${escapeHtml(g.name || '')}" required>
                 </div>
                 <div class="form-group">
+                    <label>Наименование (рус.):</label>
+                    <input type="text" id="f_ru_name" value="${escapeHtml(g.ru_name || '')}" placeholder="Русское наименование для отображения">
+                </div>
+                <div class="form-group">
                     <label>Родительский жанр:</label>
                     <select id="f_parent_id">${options}</select>
                 </div>
@@ -730,8 +745,10 @@ function editGenre(id) {
                 var body = {name: document.getElementById('f_name').value};
                 var pid = document.getElementById('f_parent_id').value;
                 var desc = document.getElementById('f_description').value;
+                var ruName = document.getElementById('f_ru_name').value.trim();
                 if (pid) body.parent_id = parseInt(pid); else body.parent_id = null;
                 if (desc) body.description = desc; else body.description = null;
+                if (ruName) body.ru_name = ruName;
                 var res = await api('/api/v1/genres/' + id, {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
@@ -1133,9 +1150,7 @@ function buildSuggestionSlot(s) {
         '<div class="sug-book-search">' +
         '<input type="hidden" class="sug-edition-id" value="' + editionId + '">' +
         '<input type="text" class="sug-bookname form-input" autocomplete="off" placeholder="Начните вводить название..." value="' + escapeHtml(editionTitle) + '">' +
-        '<select class="sug-book-select form-input" size="5" style="margin-top:5px;display:none">' +
-        '<option value="">— введите 1+ символ —</option>' +
-        '</select>' +
+        '<div class="search-results" style="display:none"></div>' +
         '</div>' +
         '<label><input type="checkbox" class="sug-hidden-chk" ' + (hidden ? 'checked' : '') + '> Скрыть запрос</label>' +
         '</div>';
@@ -1158,7 +1173,7 @@ function setupSlotAutoAdd() {
     var container = document.getElementById('sugSlotsContainer');
     if (!container) return;
     container.addEventListener('change', function(e) {
-        if (e.target.classList.contains('sug-book-select') && e.target.value) {
+        if (e.target.classList.contains('sug-edition-id') && e.target.value) {
             scheduleSlotAutoAdd();
         }
     });
@@ -1182,21 +1197,24 @@ function scheduleSlotAutoAdd() {
 
 function attachGroupAutocomplete(group) {
     var input = group.querySelector('.sug-bookname');
-    var select = group.querySelector('.sug-book-select');
+    var results = group.querySelector('.search-results');
     var editionInput = group.querySelector('.sug-edition-id');
-    if (!input || !select) return;
+    if (!input || !results || !editionInput) return;
 
     var fetchTimer = null;
 
     input.addEventListener('input', function() {
-        var val = this.value;
+        var val = this.value.trim();
         editionInput.value = '';
 
         if (val.length < 1) {
-            select.innerHTML = '<option value="">— введите 1+ символ —</option>';
-            select.style.display = 'none';
+            results.innerHTML = '';
+            results.style.display = 'none';
             return;
         }
+
+        results.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">поиск…</div>';
+        results.style.display = '';
 
         if (fetchTimer) clearTimeout(fetchTimer);
         fetchTimer = setTimeout(function() {
@@ -1206,12 +1224,11 @@ function attachGroupAutocomplete(group) {
                 if (!res.ok) return null;
                 return res.json();
             }).then(function(data) {
-                if (!data || !data.books) {
-                    select.innerHTML = '<option value="">— ничего не найдено —</option>';
-                    select.style.display = 'none';
+                if (!data || !data.books || data.books.length === 0) {
+                    results.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">— ничего не найдено —</div>';
                     return;
                 }
-                var opts = '<option value="">— выберите книгу —</option>';
+                results.innerHTML = '';
                 var seen = {};
                 for (var i = 0; i < data.books.length; i++) {
                     var b = data.books[i];
@@ -1221,55 +1238,43 @@ function attachGroupAutocomplete(group) {
                     var author = '';
                     if (typeof b.authors === 'string') author = b.authors;
                     else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
-                    var label = title + (author ? ' (' + author + ')' : '');
-                    opts += '<option value="' + b.edition_id + '" data-title="' + escapeAttr(title) + '" data-firstauthor="' + escapeAttr(author) + '">' + escapeHtml(label) + '</option>';
+                    var el = document.createElement('div');
+                    el.className = 'search-result-item';
+                    el.dataset.id = b.edition_id;
+                    el.dataset.title = title;
+                    el.textContent = title + (author ? ' (' + author + ')' : '');
+                    (function(item) {
+                        // mousedown + preventDefault so the input keeps focus and
+                        // the change that triggers slot auto-add registers reliably.
+                        item.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            fillSuggSelection(input, results, editionInput, item);
+                        });
+                    })(el);
+                    results.appendChild(el);
                 }
-                select.innerHTML = opts;
-                select.style.display = select.options.length > 1 ? '' : 'none';
-            }).catch(function() {});
+            }).catch(function() {
+                results.innerHTML = '<div class="search-result-item" style="color:#999;cursor:default">— ошибка —</div>';
+            });
         }, 300);
     });
 
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
-            var val = this.value;
+            var val = this.value.trim();
             if (val.length < 1) return;
-            var opts = select.options;
+            var items = results.querySelectorAll('.search-result-item');
             var matched = [];
-            for (var i = 0; i < opts.length; i++) {
-                if (opts[i].value === '') continue;
-                if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
-                    matched.push(opts[i]);
+            for (var i = 0; i < items.length; i++) {
+                if (!items[i].dataset.id) continue;
+                if (items[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
+                    matched.push(items[i]);
                 }
             }
             if (matched.length === 1) {
                 e.preventDefault();
-                fillSuggSelection(input, select, editionInput, matched[0]);
+                fillSuggSelection(input, results, editionInput, matched[0]);
             }
-        }
-    });
-
-    input.addEventListener('blur', function() {
-        var val = this.value;
-        if (val.length < 1) return;
-        var opts = select.options;
-        var matched = [];
-        for (var i = 0; i < opts.length; i++) {
-            if (opts[i].value === '') continue;
-            if (opts[i].textContent.toLowerCase().indexOf(val.toLowerCase()) !== -1) {
-                matched.push(opts[i]);
-            }
-        }
-        if (matched.length === 1) {
-            fillSuggSelection(input, select, editionInput, matched[0]);
-        }
-    });
-
-    select.addEventListener('change', function() {
-        if (this.value) {
-            fillSuggSelection(input, select, editionInput, this.options[this.selectedIndex]);
-        } else {
-            editionInput.value = '';
         }
     });
 }
@@ -1280,19 +1285,13 @@ function attachSuggestionAutocomplete() {
     });
 }
 
-function fillSuggSelection(input, select, editionInput, opt) {
-    opt.selected = true;
-    editionInput.value = opt.value;
-    input.value = opt.dataset.title || opt.textContent;
-    select.style.display = 'none';
-    // Trigger change to detect slot-fill for auto-add
+function fillSuggSelection(input, results, editionInput, item) {
+    editionInput.value = item.dataset.id || '';
+    input.value = item.dataset.title || item.textContent;
+    results.style.display = 'none';
+    // Trigger change so the slot auto-add (new empty slot) fires
     var evt = new Event('change', {bubbles: true});
-    select.dispatchEvent(evt);
-}
-
-function escapeAttr(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    editionInput.dispatchEvent(evt);
 }
 
 async function saveSuggestions(readListId) {
@@ -1536,6 +1535,8 @@ function setupReadlistsFilters() {
     if (btn) btn.addEventListener('click', function() { readlistsPage = 1; loadReadlists(); });
     var createBtn = document.getElementById('rlCreateBtn');
     if (createBtn) createBtn.addEventListener('click', openCreateReadlistModal);
+    var createFromTextBtn = document.getElementById('rlCreateFromTextBtn');
+    if (createFromTextBtn) createFromTextBtn.addEventListener('click', openCreateFromTextModal);
     var shelfBtn = document.getElementById('rlBulkShelfBtn');
     if (shelfBtn) shelfBtn.addEventListener('click', bulkShelfReadlists);
     var statusBtn = document.getElementById('rlBulkStatusBtn');
@@ -1805,6 +1806,10 @@ async function loadReadlists() {
     }
 }
 
+function readlistShelfValue(item) {
+    return item.book_id ? (item.on_shelf ? 2 : 1) : 0;
+}
+
 function renderReadlists() {
     var body = document.getElementById('readlistsTableBody');
     if (!body) return;
@@ -1817,7 +1822,8 @@ function renderReadlists() {
             vb = vb ? vb : '';
         }
         if (readlistsSortKey === 'on_shelf') {
-            return readlistsSortDir === 'asc' ? (va ? 1 : 0) - (vb ? 1 : 0) : (vb ? 1 : 0) - (va ? 1 : 0);
+            var sa = readlistShelfValue(a), sb = readlistShelfValue(b);
+            return readlistsSortDir === 'asc' ? sa - sb : sb - sa;
         }
         if (va == null) va = '';
         if (vb == null) vb = '';
@@ -1999,6 +2005,471 @@ function openCreateReadlistModal() {
         });
         if (res.ok) { closeAdminModal(); loadReadlists(); }
         else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+}
+
+// Removes all quote/markup characters from a single field so only the plain
+// value (title, author) ends up in the column.
+function stripBookFieldQuotes(s) {
+    return String(s || '')
+        .replace(/[«»„“”‘’‚‛`´ʼ'"*_~#|]/g, '')
+        .trim();
+}
+
+// Parse one pasted line into {author, bookname}. Supported formats:
+//   "Автор — Название", "Автор - Название", "Название"
+function parseBookFromTextLine(line) {
+    line = stripBookFieldQuotes(line);
+    if (!line) return null;
+    var sepMatch = line.match(/^(.*?)\s+[—–-]\s+(.*)$/);
+    if (sepMatch) {
+        var author = (sepMatch[1] || '').trim();
+        var bookname = (sepMatch[2] || '').trim();
+        if (bookname) return { author: author, bookname: bookname };
+    }
+    return { author: '', bookname: line };
+}
+
+// Normalization: one line ("Строка") = one work; fields ("Поля") are the
+// author (ФИО or team) and the book/work title. Splits the pasted text into
+// lines and parses each into {author, bookname}.
+function normalizeBooksText(text) {
+    var rows = [];
+    String(text || '').split(/\r?\n/).forEach(function(line) {
+        var parsed = parseBookFromTextLine(line);
+        if (parsed) rows.push(parsed);
+    });
+    return rows;
+}
+
+// Rows currently shown in the works table (after "Применить").
+var rlTextRows = [];
+var rlTextSuggestTimers = {};
+// Library persons used to suggest authors in the works table (mirrors the
+// readlist create/edit form).
+var rlTextPersons = [];
+var rlTextPersonMap = {};
+
+// Loads library book options into the 3rd-column select of row `idx`,
+// filtered by the row's author (by id when picked from the suggestion list)
+// and title. Debounced when typing.
+function loadRlTextBookOptions(idx, debounce, cb) {
+    var row = rlTextRows[idx];
+    var select = document.querySelector('.rl-text-book-select[data-idx="' + idx + '"]');
+    if (!row || !select) return;
+    if (debounce) {
+        if (rlTextSuggestTimers[idx]) clearTimeout(rlTextSuggestTimers[idx]);
+        rlTextSuggestTimers[idx] = setTimeout(function() { loadRlTextBookOptions(idx, false, cb); }, 300);
+        return;
+    }
+    var params = [];
+    if (row.author_id) params.push('author_id=' + encodeURIComponent(row.author_id));
+    else if (row.author) params.push('author=' + encodeURIComponent(row.author));
+    if (row.bookname) params.push('book=' + encodeURIComponent(row.bookname));
+    select.innerHTML = '<option value="">поиск…</option>';
+    if (!params.length) {
+        var emptyHtml = '<option value="">— введите автора/название —</option>';
+        select.innerHTML = emptyHtml;
+        row._bookSearch = { html: emptyHtml, found: false };
+        row._rlFound = false;
+        if (cb) cb(false);
+        return;
+    }
+    api('/api/v1/books?' + params.join('&') + '&limit=10').then(function(res) {
+        return res.ok ? res.json() : null;
+    }).then(function(data) {
+        var options = '<option value="">— выбрать книгу —</option>';
+        var anyFound = false;
+        var autoSelected = false;
+        var firstID = null;
+        if (data && data.books && data.books.length) {
+            data.books.forEach(function(b) {
+                var title = (b.edition_title || b.original_title || '').trim();
+                if (!title) return;
+                var a = typeof b.authors === 'string' ? b.authors
+                    : (b.authors && typeof b.authors.String === 'string' ? b.authors.String : '');
+                var label = title + (a ? ' (' + a + ')' : '');
+                var selected = String(rlTextRows[idx].book_id) === String(b.edition_id) ? ' selected' : '';
+                if (!selected && !autoSelected) {
+                    selected = ' selected';
+                    autoSelected = true;
+                    firstID = b.edition_id;
+                }
+                anyFound = true;
+                var safeTitle = escapeHtml(title).replace(/"/g, '&quot;');
+                var safeAuthor = escapeHtml(a).replace(/"/g, '&quot;');
+                options += '<option value="' + b.edition_id + '" data-title="' + safeTitle + '" data-author="' + safeAuthor + '"' + selected + '>' + escapeHtml(label) + '</option>';
+            });
+        }
+        if (autoSelected) {
+            rlTextRows[idx].book_id = firstID;
+        }
+        if (!anyFound) {
+            options = '<option value="">-</option>';
+        }
+        select.innerHTML = options;
+        row._bookSearch = { html: options, found: anyFound };
+        row._rlFound = anyFound;
+        if (cb) cb(anyFound);
+    }).catch(function() {
+        select.innerHTML = '<option value="">— ошибка —</option>';
+        row._bookSearch = { html: '<option value="">— ошибка —</option>', found: false };
+        row._rlFound = false;
+        if (cb) cb(false);
+    });
+}
+
+// Loads the library person list so author fields can offer the exact names
+// known to the library (by analogy with the readlist create/edit form).
+async function loadRlTextPersons() {
+    rlTextPersons = [];
+    rlTextPersonMap = {};
+    try {
+        var res = await api(API + '/persons');
+        if (!res.ok) return;
+        var persons = await res.json();
+        persons.forEach(function(p) {
+            var name = ((p.last_name || '') + ' ' + (p.first_name || '')).trim();
+            if (!name) return;
+            rlTextPersons.push({ id: p.id, name: name });
+            rlTextPersonMap[name.toLowerCase()] = p.id;
+        });
+        document.querySelectorAll('.rl-text-author-select').forEach(function(div) {
+            populateRlTextAuthorSelect(parseInt(div.dataset.idx, 10));
+        });
+    } catch(e) { /* ignore */ }
+}
+
+// Fills the suggestion div of row `idx` with all library persons (filtering
+// happens on input).
+function populateRlTextAuthorSelect(idx) {
+    var div = document.querySelector('.rl-text-author-select[data-idx="' + idx + '"]');
+    if (!div) return;
+    div.innerHTML = '';
+    rlTextPersons.forEach(function(p) {
+        var el = document.createElement('div');
+        el.className = 'search-result-item';
+        el.dataset.id = p.id;
+        el.dataset.name = p.name;
+        el.textContent = p.name;
+        div.appendChild(el);
+    });
+}
+
+// Author text field → suggestion list: typing filters library persons, blur
+// fills the only match, clicking a person pins its author_id.
+function setupRlTextAuthorSearch(idx) {
+    var input = document.querySelector('.rl-text-author-input[data-idx="' + idx + '"]');
+    var select = document.querySelector('.rl-text-author-select[data-idx="' + idx + '"]');
+    if (!input || !select) return;
+    populateRlTextAuthorSelect(idx);
+    input.addEventListener('input', function() {
+        var row = rlTextRows[idx];
+        if (!row) return;
+        row.author = this.value;
+        row.author_id = null;
+        row.book_id = null;
+        loadRlTextBookOptions(idx, true);
+        var val = this.value.toLowerCase();
+        var matched = [];
+        Array.prototype.forEach.call(select.querySelectorAll('.search-result-item'), function(item) {
+            if (!item.dataset.id) return;
+            var m = item.textContent.toLowerCase().indexOf(val) !== -1;
+            item.style.display = m ? '' : 'none';
+            if (m) matched.push(item);
+        });
+        select.style.display = (val && matched.length > 0) ? '' : 'none';
+    });
+    input.addEventListener('blur', function() {
+        var row = rlTextRows[idx];
+        if (!row) return;
+        var val = this.value.toLowerCase();
+        var matched = [];
+        Array.prototype.forEach.call(select.querySelectorAll('.search-result-item'), function(item) {
+            if (!item.dataset.id) return;
+            if (item.textContent.toLowerCase().indexOf(val) !== -1) matched.push(item);
+        });
+        if (matched.length === 1) {
+            var item = matched[0];
+            input.value = item.dataset.name;
+            row.author = item.dataset.name;
+            row.author_id = item.dataset.id;
+            loadRlTextBookOptions(idx, false);
+        }
+        select.style.display = 'none';
+    });
+    // mousedown + preventDefault so the input keeps focus and the blur handler
+    // does not hide the list before the pick registers.
+    select.addEventListener('mousedown', function(e) {
+        var row = rlTextRows[idx];
+        if (!row) return;
+        var item = e.target.closest('.search-result-item');
+        if (!item || !item.dataset.id) return;
+        e.preventDefault();
+        input.value = item.dataset.name;
+        row.author = item.dataset.name;
+        row.author_id = item.dataset.id;
+        row.book_id = null;
+        select.style.display = 'none';
+        loadRlTextBookOptions(idx, false);
+    });
+}
+
+// Renders the normalized works table below the separator: №, editable author
+// (with library author suggestions), editable title, and a 3rd column offering
+// matching library books (restricted to the selected author when one is picked).
+// When `onAllSearched` is given it is invoked once every row's library search
+// has finished (rows that already have a cached search result are reused).
+function renderRlTextResultTable(onAllSearched) {
+    var container = document.getElementById('f_rl_text_result');
+    if (!container) return;
+    if (!rlTextRows.length) {
+        container.innerHTML = '<div class="form-group rl-text-empty">Не найдено ни одной строки</div>';
+        return;
+    }
+    var html = '<table class="admin-table rl-text-result-table"><thead><tr>' +
+        '<th class="rl-text-num">№</th>' +
+        '<th>Автор</th>' +
+        '<th>Название</th>' +
+        '<th>Книга из библиотеки</th>' +
+        '</tr></thead><tbody>';
+    rlTextRows.forEach(function(row, i) {
+        html += '<tr>' +
+            '<td class="rl-text-num">' + (i + 1) + '</td>' +
+            '<td><div class="rl-text-author-cell">' +
+            '<input type="text" class="rl-text-author-input" data-idx="' + i + '" autocomplete="off" placeholder="Начните вводить автора..." value="' + escapeHtml(row.author) + '">' +
+            '<div class="search-results rl-text-author-select" data-idx="' + i + '" style="display:none"></div>' +
+            '</div></td>' +
+            '<td><input type="text" class="rl-text-title-input" data-idx="' + i + '" value="' + escapeHtml(row.bookname) + '"></td>' +
+            '<td class="rl-text-work"><select class="rl-text-book-select" data-idx="' + i + '"><option value="">поиск…</option></select></td>' +
+            '</tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+    container.querySelectorAll('.rl-text-author-input').forEach(function(inp) {
+        var idx = parseInt(inp.dataset.idx, 10);
+        setupRlTextAuthorSearch(idx);
+    });
+    container.querySelectorAll('.rl-text-title-input').forEach(function(inp) {
+        inp.addEventListener('input', function() {
+            var idx = parseInt(this.dataset.idx, 10);
+            if (rlTextRows[idx]) {
+                rlTextRows[idx].bookname = this.value;
+                rlTextRows[idx].book_id = null;
+                loadRlTextBookOptions(idx, true);
+            }
+        });
+    });
+    container.querySelectorAll('.rl-text-book-select').forEach(function(sel) {
+        sel.addEventListener('change', function() {
+            var idx = parseInt(this.dataset.idx, 10);
+            var row = rlTextRows[idx];
+            if (!row) return;
+            var opt = this.options[this.selectedIndex];
+            row.book_id = this.value ? parseInt(this.value, 10) : null;
+            if (row.book_id && opt) {
+                var title = opt.dataset.title || '';
+                if (title) {
+                    row.bookname = title;
+                    var titleInput = document.querySelector('.rl-text-title-input[data-idx="' + idx + '"]');
+                    if (titleInput) titleInput.value = title;
+                }
+                var author = opt.dataset.author || '';
+                if (author) {
+                    var firstAuthor = author.split(',')[0].trim();
+                    row.author = firstAuthor;
+                    var authorInput = document.querySelector('.rl-text-author-input[data-idx="' + idx + '"]');
+                    if (authorInput) authorInput.value = firstAuthor;
+                    var aid = rlTextPersonMap[firstAuthor.toLowerCase()];
+                    row.author_id = aid || null;
+                    loadRlTextBookOptions(idx, false);
+                }
+            }
+        });
+    });
+    var pending = 0, completed = 0;
+    rlTextRows.forEach(function(row, i) {
+        if (row._bookSearch) {
+            var cachedSel = document.querySelector('.rl-text-book-select[data-idx="' + i + '"]');
+            if (cachedSel) cachedSel.innerHTML = row._bookSearch.html;
+            return;
+        }
+        pending++;
+        loadRlTextBookOptions(i, false, function() {
+            completed++;
+            if (onAllSearched && completed === pending) onAllSearched();
+        });
+    });
+    if (onAllSearched && pending === 0) onAllSearched();
+}
+
+// Sorts the rows so works with a matching library book come first (stable:
+// the relative order inside each group is preserved), then re-renders using
+// the cached search results.
+function reorderRlTextRowsFoundFirst() {
+    rlTextRows.sort(function(a, b) {
+        var fa = !!a._rlFound, fb = !!b._rlFound;
+        if (fa !== fb) return fa ? -1 : 1;
+        return 0;
+    });
+    renderRlTextResultTable();
+}
+
+// Opens the "Создать из текста" modal: paste multiple book titles, one per
+// line, optionally in "Автор — Название" format. "Применить" runs the
+// normalization and shows a works table below the separator; a record is
+// created for every row for the selected children.
+function openCreateFromTextModal() {
+    rlTextRows = [];
+    var prefill = selectedChildren.slice();
+    var prefillListname = selectedListNames.length === 1 ? selectedListNames[0] : '';
+    openAdminModal('Создать из текста', `
+        <div class="form-group">
+            <label>Дети:</label>
+            <div id="f_rl_text_children_picker" class="user-picker"></div>
+            <button type="button" class="btn btn-secondary add-child-picker-row" data-container="f_rl_text_children_picker">+ Добавить ребёнка</button>
+        </div>
+        <div class="form-group">
+            <label>Название списка:</label>
+            <input type="text" id="f_rl_text_listname" value="${escapeHtml(prefillListname)}" required>
+        </div>
+        <div class="form-group">
+            <label>Книги (по одной на строку, формат «Автор — Название»):
+                <button type="button" class="btn btn-secondary rl-llm-label-btn" id="rlTextPromptBtn">LLM-промпт</button>
+                <button type="button" class="btn btn-secondary rl-llm-label-btn" id="rlTextConvertBtn">LLM-преобразовать</button>
+                <span class="rl-llm-tip" id="rlTextLlmTip"></span>
+            </label>
+            <textarea id="f_rl_text_books" rows="8" placeholder="Лев Толстой — Война и мир&#10;Антуан де Сент-Экзюпери — Маленький принц"></textarea>
+        </div>
+        <hr class="rl-text-sep">
+        <div class="form-group">
+            <button type="button" class="btn" id="rlTextApplyBtn">Применить</button>
+        </div>
+        <div id="f_rl_text_result"></div>
+    `);
+    var adminModal = document.getElementById('adminModal');
+    adminModal.classList.add('rl-modal-wide', 'rl-modal-locked');
+    initChildPicker('f_rl_text_children_picker', prefill);
+    loadRlTextPersons();
+    var tip = document.getElementById('rlTextLlmTip');
+    var promptTextArea = document.getElementById('f_rl_text_books');
+
+    function rlLlmTip(msg, isError) {
+        if (!tip) return;
+        tip.textContent = msg;
+        tip.classList.toggle('rl-llm-error', !!isError);
+        setTimeout(function() { tip.textContent = ''; }, isError ? 6000 : 3000);
+    }
+
+    document.getElementById('rlTextPromptBtn').addEventListener('click', function() {
+        var text = promptTextArea.value || '';
+        api('/api/v1/config').then(function(r) { return r.json(); }).then(function(cfg) {
+            var prompt = (cfg && cfg.llm_prompt_convert) || 'Преобразуй к формату Автор - Название произведения следующий текст: \n';
+            var promptText = prompt + text;
+            function copyDone(ok) {
+                rlLlmTip(ok ? 'промпт скопирован в буфер обмена' : 'не удалось скопировать промпт');
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(promptText).then(function() { copyDone(true); }, function() { copyDone(false); });
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = promptText;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                try { copyDone(document.execCommand('copy')); } catch (e) { copyDone(false); }
+                document.body.removeChild(ta);
+            }
+        }).catch(function() {
+            rlLlmTip('не удалось получить промпт');
+        });
+    });
+
+    document.getElementById('rlTextConvertBtn').addEventListener('click', function() {
+        var text = promptTextArea.value.trim();
+        if (!text) { rlLlmTip('введите текст для преобразования'); return; }
+        rlLlmTip('обработка...');
+        var btn = document.getElementById('rlTextConvertBtn');
+        var prev = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Обработка...';
+        api('/api/v1/llm/convert', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: text})
+        }).then(function(res) {
+            if (!res.ok) {
+                return res.json().then(function(d) {
+                    throw new Error((d && d.error) || 'ошибка LLM');
+                });
+            }
+            return res.json();
+        }).then(function(data) {
+            if (!data || !data.result) { rlLlmTip('LLM вернул пустой ответ'); return; }
+            // Strip quote/markup chars line-by-line so each line parses cleanly
+            // into author/title columns on "Применить".
+            var cleaned = String(data.result || '').split(/\r?\n/).map(function(l) {
+                return stripBookFieldQuotes(l);
+            }).filter(function(l) { return l !== ''; }).join('\n');
+            promptTextArea.value = cleaned;
+            // Разносим результат по столбцам таблицы сразу.
+            rlTextRows = normalizeBooksText(cleaned);
+            renderRlTextResultTable(reorderRlTextRowsFoundFirst);
+            rlLlmTip('текст преобразован и разнесён по столбцам');
+        }).catch(function(err) {
+            var msg = err && err.message ? err.message : 'ошибка LLM';
+            rlLlmTip(msg, true);
+            alert('Ошибка LLM: ' + msg);
+        }).then(function() {
+            btn.disabled = false;
+            btn.textContent = prev;
+        });
+    });
+
+    document.getElementById('rlTextApplyBtn').addEventListener('click', function() {
+        rlTextRows = normalizeBooksText(document.getElementById('f_rl_text_books').value);
+        renderRlTextResultTable(reorderRlTextRowsFoundFirst);
+    });
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var user_ids = collectChildPick('f_rl_text_children_picker');
+        if (!user_ids.length) { alert('Выберите хотя бы одного ребёнка'); return; }
+        var listname = document.getElementById('f_rl_text_listname').value.trim();
+        if (!listname) { alert('Укажите название списка'); return; }
+        if (!rlTextRows.length) { alert('Нажмите «Применить», чтобы разобрать текст'); return; }
+        var created = 0, errors = 0, errMsg = '';
+        for (var i = 0; i < rlTextRows.length; i++) {
+            var body = {
+                user_ids: user_ids,
+                listname: listname,
+                bookname: rlTextRows[i].bookname,
+                author: rlTextRows[i].author,
+                book_id: rlTextRows[i].book_id || null,
+                author_id: rlTextRows[i].author_id || null,
+                status: 'Не заполнено',
+                comment: ''
+            };
+            try {
+                var res = await api(API + '/readlists', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                if (res.ok) { created++; }
+                else {
+                    errors++;
+                    if (!errMsg) { var d = await res.json(); errMsg = d.error || ''; }
+                }
+            } catch (err) {
+                errors++;
+                if (!errMsg) errMsg = 'Ошибка сети';
+            }
+        }
+        closeAdminModal();
+        if (errors === 0) alert('Создано записей: ' + created);
+        else alert('Создано: ' + created + ', ошибок: ' + errors + (errMsg ? ' — ' + errMsg : ''));
+        loadReadlists();
     };
 }
 
@@ -2264,6 +2735,12 @@ function toggleReadlistShelf(starBtn) {
                 starBtn.setAttribute('aria-pressed', 'true');
                 starBtn.textContent = '★';
             }
+            var bookIdNum = parseInt(bookId, 10);
+            (storeReadlists || []).forEach(function(it) {
+                if (it.book_id === bookIdNum || it.edition_id === bookIdNum) {
+                    it.on_shelf = !onShelf;
+                }
+            });
         } else {
             alert('Ошибка при изменении полки');
         }

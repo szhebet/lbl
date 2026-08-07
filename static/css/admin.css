@@ -26,9 +26,36 @@
 .rl-children-list-item input { cursor: pointer; }
 .rl-shelf-star { background: none; border: none; cursor: pointer; font-size: 18px; color: #f39c12; padding: 2px 6px; line-height: 1; }
 .rl-shelf-star:hover { transform: scale(1.2); }
-.rl-bulk-frame { margin-left: auto; border: 1px solid #ccc; border-radius: 6px; padding: 6px 8px; background: #fafbfc; display: flex; align-items: center; gap: 10px; }
+.rl-toolbar { align-items: flex-start; }
+.rl-filters-col { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-width: 260px; }
+.rl-filter-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rl-bulk-frame { border: 1px solid #ccc; border-radius: 6px; padding: 8px 10px; background: #fafbfc; display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
 .rl-bulk-title { font-size: 12px; color: #888; font-weight: 600; white-space: nowrap; }
+.rl-bulk-top { display: flex; }
 .rl-bulk-buttons { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rl-bulk-buttons .btn { margin-bottom: 0; }
+.rl-text-sep { border: 0; border-top: 1px solid #ccc; margin: 12px 0; }
+.rl-text-result-table { margin-top: 4px; }
+.rl-text-result-table th, .rl-text-result-table td { cursor: default; }
+.rl-text-result-table th:hover { background: #f5f6fa; }
+.rl-text-num { width: 36px; text-align: center; color: #888; }
+.rl-text-title-input { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
+.rl-text-title-input:focus { outline: none; border-color: #3498db; }
+.rl-text-work { width: 90px; }
+.rl-text-empty { color: #999; font-style: italic; }
+#adminModal.rl-modal-wide .modal-content { max-width: 1100px; width: 95%; }
+.rl-text-result-table th, .rl-text-result-table td { cursor: default; }
+.rl-text-author-cell { position: relative; }
+.rl-text-author-cell .rl-text-author-input { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
+.rl-text-author-cell .rl-text-author-input:focus { outline: none; border-color: #3498db; }
+.rl-text-author-select { position: absolute; left: 0; right: 0; z-index: 20; margin-top: 2px; }
+.rl-text-result-table .rl-text-author-input,
+.rl-text-result-table .rl-text-title-input { min-width: 140px; }
+.rl-text-book-select { width: 100%; min-width: 200px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+.rl-text-book-select:focus { outline: none; border-color: #3498db; }
+.rl-llm-label-btn { padding: 2px 10px; font-size: 12px; margin-left: 8px; vertical-align: middle; }
+.rl-llm-tip { color: #27ae60; font-size: 13px; margin-left: 8px; vertical-align: middle; }
+.rl-llm-tip.rl-llm-error { color: #e74c3c; }
 .back-link { display: inline-block; margin-bottom: 15px; color: #3498db; text-decoration: none; }
 .back-link:hover { text-decoration: underline; }
 .badge-role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ecf0f1; color: #555; }
@@ -127,10 +154,6 @@
 }
 .sug-book-search {
     position: relative;
-}
-.sug-book-search .sug-book-select {
-    width: 100%;
-    font-size: 14px;
 }
 .readonly-input {
     background: #f5f5f5;
