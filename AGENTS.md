@@ -12,6 +12,18 @@ After any code change, the application MUST be rebuilt and started (see Build & 
 The application MUST be left running after all testing is done so subsequent testing
 sessions can verify changes immediately.
 
+## Skills
+
+- **update-icons** (`.opencode/skills/update-icons/SKILL.md`): Regenerates the site
+  favicon (`static/favicon.ico`, `static/favicon.svg`) and the Android APK launcher
+  icons (legacy `mipmap-*/ic_launcher.png` + adaptive `mipmap-*/ic_launcher_fg.png`,
+  drawables) from a single source image/SVG, syncs APK web assets, and verifies on
+  the live server. **MUST be loaded whenever the user asks to update/replace the
+  project icons** (e.g. "обнови иконки", "сделай favicon", "замени иконку"). It
+  covers the critical pitfall: embedded BMP data-URIs often have alpha=0 on every
+  pixel and silently render invisible via `rsvg-convert` — always verify layers
+  before building icons.
+
 ## Directory Structure
 
 ```
@@ -26,6 +38,8 @@ lbl/
 ├── db/
 │   └── scripts/      # Database scripts
 ├── logs/             # Application logs
+├── .opencode/
+│   └── skills/update-icons/SKILL.md  # Icon regeneration skill (see Skills)
 ├── src/              # Go source code
 │   ├── main.go       # Entry point: routes, handlers, ImportManager, DB
 │   ├── auth.go       # Login, register, refresh token
@@ -62,7 +76,8 @@ lbl/
 │   └── admin.html    # Admin panel SPA
 ├── tempfld/          # Upload processing + shelf extraction directory
 ├── testdata/         # Sample books for testing
-├── nginx.conf        # nginx HTTPS + proxy configuration
+├── nginx.conf        # nginx HTTPS + proxy configuration (docker-compose: app:8080)
+├── nginx-standalone.conf  # nginx HTTPS for standalone host-net mode (127.0.0.1:9091)
 ├── docker-compose.yml
 ├── docker-compose-nginx.yml  # Override: adds nginx service
 ├── Dockerfile
@@ -421,7 +436,7 @@ cd /home/sergey/git/aitest/agents/lbl
 
 # Kill old instances
 docker rm -f library-app 2>/dev/null
-pkill -f library_app 2>/dev/null; sleep 1
+pkill -x library_app 2>/dev/null; sleep 1
 
 # Create minimal image
 cd /tmp && mkdir -p library-app
@@ -457,11 +472,30 @@ curl -sk https://localhost/api/v1/config
 curl -sk -H "X-Platform: android" https://localhost/ | grep -o 'class="android"'
 ```
 
+### Standalone nginx (host-net mode)
+
+`nginx.conf` proxies to `app:8080` (docker-compose service name) and does NOT work for
+the standalone host-net deployment where the app listens on `127.0.0.1:9091`.
+Use `nginx-standalone.conf` instead — it proxies to `127.0.0.1:9091` and forwards
+`X-Platform`. Start nginx in host-net mode (no port publishing):
+
+```bash
+docker rm -f library-nginx 2>/dev/null
+docker run -d --name library-nginx --net=host --restart unless-stopped \
+  -v /home/sergey/git/aitest/agents/lbl/nginx-standalone.conf:/etc/nginx/nginx.conf:ro \
+  -v /home/sergey/git/aitest/agents/lbl/certres/server.crt:/etc/nginx/certs/server.crt:ro \
+  -v /home/sergey/git/aitest/agents/lbl/certres/server.key:/etc/nginx/certs/server.key:ro \
+  nginx:alpine
+```
+
+Symptom that the compose-based config is mounted: nginx exits with
+`host not found in upstream "app"` in `docker logs library-nginx`.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `bind: address already in use` | Old process still listening | `docker rm -f library-app 2>/dev/null; pkill -f library_app 2>/dev/null` |
+| `bind: address already in use` | Old process still listening | `docker rm -f library-app 2>/dev/null; pkill -x library_app 2>/dev/null` |
 | `connection refused` | Container not started or port mismatch | Check `docker logs library-app`; verify config.toml port is 9091 |
 | PostgreSQL errors | DB not running | Check `pg_isready`; start cluster |
 | Docker Hub pull fails (403) | No registry access | Use `docker import` (no registry required) |
@@ -608,6 +642,11 @@ timeout = 60    # Seconds
 - *(none)*
 
 ### Done (latest)
+- **Favicon и иконка APK на основе `tmp/book.svg`**: SVG — «стоящая книга» (Inkscape, viewBox 0 0 841.89 595.28, встроенный BMP-«обложка» + векторные тёмные контуры #1b1918, видимый арт 613x1066 на прозрачном фоне). Установлены `librsvg2-bin` (`rsvg-convert`) и `imagemagick` (через `apt`; `pip`/pypi недоступен 403, npm ок). Из арта собраны: (1) `static/favicon.ico` — многоразмерный ICO 16/32/48/64 на белом фоне, арт на 82%; (2) `static/favicon.svg` — квадрат 64x64 с встроенным PNG base64 (браузеры отдают предпочтение SVG); (3) легаси-иконки `mipmap-*dpi/ic_launcher.png` 48/72/96/144/192; (4) адаптивные иконки API 26+: новые `mipmap-*dpi/ic_launcher_fg.png` 108/162/216/324/432 (арт на 55% — в безопасной зоне), `drawable/ic_launcher_foreground.xml` переведён на `<bitmap android:src="@mipmap/ic_launcher_fg">`, `ic_launcher_background.xml` залит белым (#ffffff) вместо #3a3a3a. Все favicon-файлы синхронизированы в APK-ассеты (`assets/www/` и `assets/www/static/`). Проверено: `go test ./src/...` зелёный, `identify` по всем mipmap верен, сервер отдаёт `/static/favicon.ico` 200 (13094 b) и `/static/favicon.svg` 200 (2940 b) через https.
+- **Исправлен пропущенный слой в иконках**: встроенный BMP-«обложка» в `tmp/book.svg` имел alpha=0 у всех 156 792 пикселей (файл 564x278, 32bpp BGRA, все байты alpha нулевые) — rsvg-convert рендерил его как полностью прозрачный, поэтому на иконках была только тёмная векторная «стоящая книга» без изображения книги на фоне. Исправление: декодирован BMP, alpha принудительно выставлен в 255, переупакован в PNG base64 и подставлен в SVG (`book_fixed`), рендер стал 872x1066 (включая обложку). Все иконки перегенерированы из исправленного рендера: `static/favicon.ico` (24358 b), `static/favicon.svg` (4252 b), все `mipmap-*` и `ic_launcher_fg`. Синхронизировано в APK-ассеты. Проверено ASCII-визуализацией: на иконке видны и обложка (рисунок открытой книги), и векторный силуэт; `go test ./src/...` зелёный; сервер отдаёт новые файлы 200.
+- **Восстановлен доступ к серверу**: nginx-контейнер `library-nginx` упал с `host not found in upstream "app"` — конфиг `nginx.conf` проксирует на docker-compose имя `app:8080`, а standalone-приложение работает на host-сети на порту 9091. Создан `nginx-standalone.conf` (proxy на `127.0.0.1:9091`, форвард `X-Platform`) и nginx перезапущен в `--net=host`. Проверено: `https://localhost/` → 200, HTTP → 301 HTTPS, логин через HTTPS OK, `/admin` → 200, детекция android через прокси работает, `rlCreateFromTextBtn` отдаётся.
+- **Layout вкладки «Программы чтения» (админка)**: тулбар перестроен в 2 колонки — слева фильтры (дропдауны Дети/Списки/Статус в первой строке, «Название книги» + «Автор» + «Применить» со второй строки), справа рамка «Массовые операции» (заголовок сверху, кнопка «Создать из текста», затем На полку / Установить статус / Создать список / Удалить). Исправлено смещение кнопки «Удалить» (`btn-danger` имел `margin-bottom:15px` — добавлен `.rl-bulk-buttons .btn { margin-bottom:0 }`). Новый CSS: `.rl-toolbar`, `.rl-filters-col`, `.rl-filter-row`, `.rl-bulk-top`. Вкладка «Программы чтения» скрыта в APK: `body.android .admin-tab[data-tab="readlists"]`/`#tab-readlists { display:none }` в `mobile.css` (детекция через `<body class="android">`, инжектится и сервером, и `MainActivity`). Проверено: `go test ./src/` зелёный, `node --check` OK, контейнер перезапущен (шаблон кэшируется), `/admin` отдаёт `rl-toolbar`/`rlCreateFromTextBtn`, `/static/css/mobile.css` содержит правило скрытия, E2E «Создать из текста» через API работает, тестовые данные вычищены, APK-ассеты синхронизированы.
+- **Кнопка «Создать из текста» в «Массовых операциях»** (`rlCreateFromTextBtn`): модалка с выбором детей (пикер переиспользует `initChildPicker`/`collectChildPick`), названием списка (префилл из единственного выбранного фильтра-списка), textarea «по одной книге на строку, формат «Автор — Название»» и селектом статуса. `parseBookFromTextLine()` разбирает строки (поддержка `—`/`–`/`-`), для каждой строки вызывается `POST /readlists` (одни и те же user_ids/listname/status), итог — alert с количеством созданных/ошибок. Кнопка привязана в `setupReadlistsFilters`.
 - **Статические тесты фронтенда `src/js_static_test.go`**: защита от класса бага, где Go-тесты проходят, а JS сломан (регрессия `19d1ad8` — делегирование вызывало удалённые `editUser`/`deleteUser`). Проверяют: (1) все bare-вызовы функций в JS определены в одном из JS-файлов страницы; (2) `getElementById('X').addEventListener` — ID существует в HTML или создаётся динамически в JS; (3) `<script src="/static/js/...">` указывает на существующий файл; (4) API-пути в JS зарегистрированы в main.go (с разрешением group-префиксов). Также найден и исправлен латентный баг: `appDebug(...)` в `offline.js:7` вызывался, но не был определён — теперь `window.appDebug(...)`. Проверено: тест ловит исходную регрессию (`deleteUser`/`editUser` не определены → FAIL), весь `go test ./src/` зелёный. `offline.js` синхронизирован в `src_android/app/src/main/assets/www/static/js/offline.js`.
 - **Восстановлено управление пользователями/авторами/жанрами в `static/js/admin.js`**: рефакторинг в коммите `19d1ad8` удалил `addUserBtn`/`addAuthorBtn`/`addGenreBtn`-обработчики и функции `editUser`/`deleteUser`/`editAuthor`/`deleteAuthor`/`editGenre`/`deleteGenre` (кнопка «+ Создать пользователя» на админке не работала). Функции восстановлены из `git show 19d1ad8^`, жанровые мутации переведены на `/api/v1/genres` (в admin-группе только GET). Файл синхронизирован в `src_android/app/src/main/assets/www/static/js/admin.js`. Проверено: `node --check` OK, полный цикл create/update/delete пользователя через API работает.
 - Реализована поддержка env-переменных `LIBAPP_JWT_SECRET` и `LIBAPP_TOKEN_TTL` в `src/config/config.go` (`applyEnv`) — документация в README/AGENTS.md и код теперь совпадают.

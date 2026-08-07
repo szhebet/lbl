@@ -105,6 +105,70 @@ func TestGetBooks(t *testing.T) {
 	assert.GreaterOrEqual(t, len(response.Books), 1)
 }
 
+func TestGetBooksByAuthorID(t *testing.T) {
+	// Set up Gin in test mode
+	gin.SetMode(gin.TestMode)
+
+	// Create a router
+	r := gin.New()
+
+	// Set up test database
+	db := setupTestDB()
+	defer db.Close()
+
+	// Add middleware
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+
+	// Register route
+	r.GET("/api/v1/books", getBooks(db))
+
+	// Find an author with editions (capped so the default pagination limit
+	// does not truncate the result list)
+	var authorID int
+	var expectedCount int
+	err := db.QueryRow(`
+		SELECT wc.person_id, COUNT(DISTINCT e.id)
+		FROM editions e
+		JOIN works w ON w.id = e.work_id
+		JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+		GROUP BY wc.person_id
+		HAVING COUNT(DISTINCT e.id) BETWEEN 1 AND 100
+		ORDER BY COUNT(DISTINCT e.id) DESC
+		LIMIT 1
+	`).Scan(&authorID, &expectedCount)
+	require.NoError(t, err)
+	require.Greater(t, expectedCount, 0)
+
+	req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/books?author_id=%d&limit=100", authorID), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response struct {
+		Total int           `json:"total"`
+		Books []BookDetails `json:"books"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, expectedCount, response.Total)
+	assert.Equal(t, expectedCount, len(response.Books))
+
+	// Every returned edition must actually have that author
+	for _, b := range response.Books {
+		var n int
+		err := db.QueryRow(`
+			SELECT COUNT(*) FROM editions e
+			JOIN works w ON w.id = e.work_id
+			JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
+			WHERE e.id = $1 AND wc.person_id = $2
+		`, b.EditionID, authorID).Scan(&n)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n, "книга %d должна принадлежать автору %d", b.EditionID, authorID)
+	}
+}
+
 func TestGetBook(t *testing.T) {
 	// Set up Gin in test mode
 	gin.SetMode(gin.TestMode)

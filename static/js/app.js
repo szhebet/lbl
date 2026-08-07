@@ -468,7 +468,9 @@ document.getElementById('editForm')?.addEventListener('submit', async (e) => {
             }
             const parentSelect = document.getElementById('genre_parent');
             const parentId = parentSelect ? parentSelect.value : '';
+            const ruNameInput = document.getElementById('genre_ru_name');
             const body = { name: name };
+            if (ruNameInput) body.ru_name = ruNameInput.value.trim();
             if (parentId) body.parent_id = parseInt(parentId);
             const response = await apiFetch(`${API_BASE}/genres/${id}`, {
                 method: 'PUT',
@@ -935,6 +937,13 @@ async function loadGenres() {
     }
 }
 
+function genreDisplayLabel(genre) {
+    if (genre.ru_name) {
+        return genre.ru_name + ' - (' + genre.name + ')';
+    }
+    return genre.name;
+}
+
 function renderGenreTree(genres, container) {
     container.innerHTML = '';
     genres.forEach(genre => renderGenreNode(genre, container, 1));
@@ -959,8 +968,8 @@ function renderGenreNode(genre, container, depth) {
     const canEditGenre = authUser && authUser.role && authUser.role !== 'viewer';
     header.innerHTML = `
         <span class="expand-icon">▶</span>
-        <span style="font-weight: ${depth === 1 ? 'bold' : 'normal'};">${escapeHtml(genre.name)}</span>
-        ${canEditGenre ? `<button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>` : ''}
+        <span style="font-weight: ${depth === 1 ? 'bold' : 'normal'};">${escapeHtml(genreDisplayLabel(genre))}</span>
+        ${canEditGenre ? `<button class="edit-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}" data-ru_name="${escapeHtml(genre.ru_name || '')}" data-parent_id="${genre.parent_id || ''}">Редактировать</button>` : ''}
         ${(canEditGenre && enableDelete) ? `<button class="delete-btn" data-type="genre" data-id="${genre.id}" data-name="${escapeHtml(genre.name)}">Удалить</button>` : ''}
     `;
 
@@ -971,6 +980,7 @@ function renderGenreNode(genre, container, depth) {
             openGenreModal({
                 id: btn.dataset.id,
                 name: btn.dataset.name,
+                ru_name: btn.dataset.ru_name,
                 parent_id: btn.dataset.parent_id ? parseInt(btn.dataset.parent_id) : null
             });
         });
@@ -1263,6 +1273,10 @@ async function openGenreModal(genre) {
         <div class="form-group">
             <label for="genre_name">Название:</label>
             <input type="text" id="genre_name" name="name" value="${escapeHtml(genre.name || '')}" required>
+        </div>
+        <div class="form-group">
+            <label for="genre_ru_name">Наименование (рус.):</label>
+            <input type="text" id="genre_ru_name" name="ru_name" value="${escapeHtml(genre.ru_name || '')}" placeholder="Русское наименование для отображения">
         </div>
         <div class="form-group">
             <label for="genre_parent">Родительский жанр:</label>
@@ -2444,7 +2458,7 @@ function renderReadlistTableDesktop(container, items) {
     html += '<th class="col-listname sortable" data-sort-by="listname">Список' + getReadlistSortIcon('listname') + '</th>';
     html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
     html += '<th class="col-format">Формат</th>';
-    html += '<th class="col-shelf">Полка</th>';
+    html += '<th class="col-shelf sortable" data-sort-by="shelf">Полка' + getReadlistSortIcon('shelf') + '</th>';
     html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
 
     items.forEach(function(item) {

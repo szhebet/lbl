@@ -613,6 +613,14 @@ body.android .admin-tab.active::before {
     display: none;
 }
 
+/* Reading programs tab is not shown inside the Android app */
+body.android .admin-tab[data-tab="readlists"] {
+    display: none;
+}
+body.android #tab-readlists {
+    display: none;
+}
+
 body.android .admin-table-wrapper {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;

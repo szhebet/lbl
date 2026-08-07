@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Администрирование — Домашняя библиотека</title>
+    <title>Управление — Домашняя библиотека</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -12,7 +12,7 @@
 <body>
     <div class="container">
         <a href="/" class="back-link" id="adminBackLink">&larr; Назад к библиотеке</a>
-        <h1 style="margin-bottom:20px">Администрирование</h1>
+        <h1 style="margin-bottom:20px">Управление</h1>
 
         <div class="admin-tabs">
             <button class="admin-tab active" data-tab="users" data-short="П">Пользователи</button>
@@ -21,6 +21,7 @@
             <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
             <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
             <button class="admin-tab" data-tab="suggestions" data-short="З">Запросы</button>
+            <button class="admin-tab" data-tab="readlists" data-short="Ч">Программы чтения</button>
             <span style="flex:1"></span>
             <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
         </div>
@@ -37,6 +38,7 @@
                     <th data-sort="username">Имя пользователя<span class="sort-arrow"></span></th>
                     <th data-sort="email">Email<span class="sort-arrow"></span></th>
                     <th data-sort="role">Роль<span class="sort-arrow"></span></th>
+                    <th data-sort="parent_names">Родитель<span class="sort-arrow"></span></th>
                     <th data-sort="created_at">Создан<span class="sort-arrow"></span></th>
                     <th class="actions">Действия</th>
                 </tr></thead>
@@ -99,6 +101,7 @@
                 <thead><tr>
                     <th data-sort="id">ID<span class="sort-arrow"></span></th>
                     <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="ru_name">Наименование (рус.)<span class="sort-arrow"></span></th>
                     <th data-sort="parent_name">Родитель<span class="sort-arrow"></span></th>
                     <th data-sort="description">Описание<span class="sort-arrow"></span></th>
                     <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
@@ -141,6 +144,78 @@
                 </select>
             </div>
             <div id="suggestionsTableContainer"><div class="loading">Загрузка...</div></div>
+        </div>
+
+        <div id="tab-readlists" class="admin-content">
+            <div class="admin-toolbar rl-toolbar">
+                <div class="rl-filters-col">
+                    <div class="rl-filter-row">
+                        <div class="rl-children-filter" id="rlChildrenFilterWrap">
+                            <button type="button" class="btn" id="rlChildrenFilterBtn">Дети: все</button>
+                            <div class="rl-children-dropdown" id="rlChildrenDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlChildrenAllBtn">Выбрать всех</button>
+                                    <button type="button" class="btn btn-small" id="rlChildrenClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlChildrenList"></div>
+                            </div>
+                        </div>
+                        <div class="rl-children-filter" id="rlListFilterWrap">
+                            <button type="button" class="btn" id="rlListFilterBtn">Списки: все</button>
+                            <div class="rl-children-dropdown" id="rlListDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlListAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlListClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlListList"></div>
+                            </div>
+                        </div>
+                        <div class="rl-children-filter" id="rlStatusFilterWrap">
+                            <button type="button" class="btn" id="rlStatusFilterBtn">Статус: все</button>
+                            <div class="rl-children-dropdown" id="rlStatusDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlStatusAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlStatusClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlStatusList"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rl-filter-row">
+                        <input type="text" class="filter-input" id="filter-rl-bookname" placeholder="Название книги...">
+                        <input type="text" class="filter-input" id="filter-rl-author" placeholder="Автор...">
+                        <button class="btn" id="rlApplyBtn">Применить</button>
+                    </div>
+                </div>
+                <div class="rl-bulk-frame">
+                    <div class="rl-bulk-title">Массовые операции</div>
+                    <div class="rl-bulk-top">
+                        <button class="btn" id="rlCreateFromTextBtn" title="Создать записи из вставленного текста (по одной книге на строку)">Создать из текста</button>
+                    </div>
+                    <div class="rl-bulk-buttons">
+                        <button class="btn" id="rlBulkShelfBtn" title="Выложить на полку все книги отфильтрованного списка">На полку</button>
+                        <button class="btn" id="rlBulkStatusBtn" title="Установить статус всем записям отфильтрованного списка">Установить статус</button>
+                        <button class="btn" id="rlCreateBtn" title="Создать новый список чтения">Создать список</button>
+                        <button class="btn btn-danger" id="rlBulkDeleteBtn" title="Удалить все созданные вами записи отфильтрованного списка">Удалить</button>
+                    </div>
+                </div>
+            </div>
+            <div class="pagination" id="readlistsPaginationTop"></div>
+            <table class="admin-table" id="table-readlists">
+                <thead><tr>
+                    <th data-sort="username">Пользователь<span class="sort-arrow"></span></th>
+                    <th data-sort="listname">Список<span class="sort-arrow"></span></th>
+                    <th data-sort="author">Автор<span class="sort-arrow"></span></th>
+                    <th data-sort="bookname">Книга<span class="sort-arrow"></span></th>
+                    <th data-sort="status">Статус<span class="sort-arrow"></span></th>
+                    <th data-sort="created_by_username">Создатель<span class="sort-arrow"></span></th>
+                    <th data-sort="created_at">Дата создания<span class="sort-arrow"></span></th>
+                    <th data-sort="on_shelf">Полка<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="readlistsTableBody"></tbody>
+            </table>
+            <div class="pagination" id="readlistsPagination"></div>
         </div>
 
         <div id="tab-import" class="admin-content">

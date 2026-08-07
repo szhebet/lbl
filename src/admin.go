@@ -12,11 +12,14 @@ import (
 )
 
 type AdminUser struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int       `json:"id"`
+	Username    string    `json:"username"`
+	Email       string    `json:"email"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"created_at"`
+	ParentIDs   []int     `json:"parent_ids,omitempty"`
+	ChildIDs    []int     `json:"child_ids,omitempty"`
+	ParentNames string    `json:"parent_names,omitempty"`
 }
 
 type PersonData struct {
@@ -36,7 +39,12 @@ type PersonData struct {
 
 func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rows, err := db.Query(`SELECT id, username, COALESCE(email,''), role, created_at FROM users ORDER BY username`)
+		rows, err := db.Query(`
+			SELECT u.id, u.username, COALESCE(u.email,''), u.role, u.created_at,
+				COALESCE((SELECT string_agg(p.username, ', ' ORDER BY p.username)
+					FROM user_parents up JOIN users p ON p.id = up.parent_id
+					WHERE up.user_id = u.id), '')
+			FROM users u ORDER BY u.username`)
 		if err != nil {
 			adminInternalError(c, err)
 			return
@@ -45,7 +53,7 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 		users := make([]AdminUser, 0)
 		for rows.Next() {
 			var u AdminUser
-			if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt); err != nil {
+			if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt, &u.ParentNames); err != nil {
 				adminInternalError(c, err)
 				return
 			}
@@ -63,8 +71,13 @@ func adminInternalError(c *gin.Context, err error) {
 func adminGetUser(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
+		uid, err := strconv.Atoi(id)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user id"})
+			return
+		}
 		var u AdminUser
-		err := db.QueryRow(`SELECT id, username, COALESCE(email,''), role, created_at FROM users WHERE id = $1`, id).
+		err = db.QueryRow(`SELECT id, username, COALESCE(email,''), role, created_at FROM users WHERE id = $1`, id).
 			Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.CreatedAt)
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
@@ -74,17 +87,45 @@ func adminGetUser(db *sql.DB) gin.HandlerFunc {
 			adminInternalError(c, err)
 			return
 		}
+		u.ParentIDs = userRelationIDs(db, uid, "parent")
+		u.ChildIDs = userRelationIDs(db, uid, "child")
 		c.JSON(http.StatusOK, u)
 	}
+}
+
+// userRelationIDs returns the IDs of parents (dir="parent") or children
+// (dir="child") of the given user from the user_parents link table.
+func userRelationIDs(db *sql.DB, userID int, dir string) []int {
+	var rows *sql.Rows
+	var err error
+	if dir == "child" {
+		rows, err = db.Query(`SELECT user_id FROM user_parents WHERE parent_id = $1 ORDER BY user_id`, userID)
+	} else {
+		rows, err = db.Query(`SELECT parent_id FROM user_parents WHERE user_id = $1 ORDER BY parent_id`, userID)
+	}
+	if err != nil {
+		return []int{}
+	}
+	defer rows.Close()
+	ids := []int{}
+	for rows.Next() {
+		var id int
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func adminCreateUser(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Username string `json:"username" binding:"required"`
-			Password string `json:"password" binding:"required"`
-			Email    string `json:"email"`
-			Role     string `json:"role"`
+			Username  string `json:"username" binding:"required"`
+			Password  string `json:"password" binding:"required"`
+			Email     string `json:"email"`
+			Role      string `json:"role"`
+			ParentIDs []int  `json:"parent_ids"`
+			ChildIDs  []int  `json:"child_ids"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -106,8 +147,14 @@ func adminCreateUser(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
 			return
 		}
+		tx, err := db.Begin()
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		defer tx.Rollback()
 		var user AdminUser
-		err = db.QueryRow(`
+		err = tx.QueryRow(`
 			INSERT INTO users (username, password_hash, email, role)
 			VALUES ($1, $2, NULLIF($3,''), $4)
 			RETURNING id, username, COALESCE(email,''), role, created_at
@@ -116,6 +163,16 @@ func adminCreateUser(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 			return
 		}
+		if err := replaceUserRelationsTx(tx, user.ID, req.ParentIDs, req.ChildIDs); err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		user.ParentIDs = req.ParentIDs
+		user.ChildIDs = req.ChildIDs
 		c.JSON(http.StatusCreated, user)
 	}
 }
@@ -124,13 +181,20 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		var req struct {
-			Username *string `json:"username"`
-			Password *string `json:"password"`
-			Email    *string `json:"email"`
-			Role     *string `json:"role"`
+			Username  *string `json:"username"`
+			Password  *string `json:"password"`
+			Email     *string `json:"email"`
+			Role      *string `json:"role"`
+			ParentIDs *[]int  `json:"parent_ids"`
+			ChildIDs  *[]int  `json:"child_ids"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+		uid, err := strconv.Atoi(id)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user id"})
 			return
 		}
 		if req.Username != nil {
@@ -174,7 +238,34 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 				return
 			}
 		}
-		_, err := db.Exec("UPDATE users SET updated_at = NOW() WHERE id = $1", id)
+		if req.ParentIDs != nil || req.ChildIDs != nil {
+			var parentIDs, childIDs []int
+			if req.ParentIDs != nil {
+				parentIDs = *req.ParentIDs
+			} else {
+				parentIDs = userRelationIDs(db, uid, "parent")
+			}
+			if req.ChildIDs != nil {
+				childIDs = *req.ChildIDs
+			} else {
+				childIDs = userRelationIDs(db, uid, "child")
+			}
+			tx, err := db.Begin()
+			if err != nil {
+				adminInternalError(c, err)
+				return
+			}
+			if err := replaceUserRelationsTx(tx, uid, parentIDs, childIDs); err != nil {
+				tx.Rollback()
+				adminInternalError(c, err)
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				adminInternalError(c, err)
+				return
+			}
+		}
+		_, err = db.Exec("UPDATE users SET updated_at = NOW() WHERE id = $1", id)
 		if err != nil {
 			adminInternalError(c, err)
 			return
@@ -186,8 +277,29 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 			return
 		}
+		user.ParentIDs = userRelationIDs(db, uid, "parent")
+		user.ChildIDs = userRelationIDs(db, uid, "child")
 		c.JSON(http.StatusOK, user)
 	}
+}
+
+// replaceUserRelationsTx clears and re-inserts the parent/child links for a
+// user inside the given transaction. Cycles and self-references are allowed.
+func replaceUserRelationsTx(tx *sql.Tx, userID int, parentIDs, childIDs []int) error {
+	if _, err := tx.Exec("DELETE FROM user_parents WHERE user_id = $1 OR parent_id = $1", userID); err != nil {
+		return err
+	}
+	for _, p := range parentIDs {
+		if _, err := tx.Exec("INSERT INTO user_parents (user_id, parent_id) VALUES ($1, $2)", userID, p); err != nil {
+			return err
+		}
+	}
+	for _, ch := range childIDs {
+		if _, err := tx.Exec("INSERT INTO user_parents (user_id, parent_id) VALUES ($1, $2)", ch, userID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func adminDeleteUser(db *sql.DB) gin.HandlerFunc {
@@ -390,7 +502,7 @@ func adminDeleteTag(db *sql.DB) gin.HandlerFunc {
 func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query(`
-			SELECT g.id, g.name, g.parent_id, g.description,
+			SELECT g.id, g.name, g.ru_name, g.parent_id, g.description,
 				COALESCE(p.name, '') as parent_name,
 				COALESCE((SELECT COUNT(DISTINCT e.id) FROM work_genres wg
 					JOIN editions e ON e.work_id = wg.work_id
@@ -407,6 +519,7 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 		type AdminGenre struct {
 			ID          int     `json:"id"`
 			Name        string  `json:"name"`
+			RuName      *string `json:"ru_name,omitempty"`
 			ParentID    *int    `json:"parent_id,omitempty"`
 			Description *string `json:"description,omitempty"`
 			ParentName  string  `json:"parent_name"`
@@ -417,9 +530,13 @@ func adminGetGenres(db *sql.DB) gin.HandlerFunc {
 			var g AdminGenre
 			var parentID sql.NullInt64
 			var desc sql.NullString
-			if err := rows.Scan(&g.ID, &g.Name, &parentID, &desc, &g.ParentName, &g.BooksCount); err != nil {
+			var ruName sql.NullString
+			if err := rows.Scan(&g.ID, &g.Name, &ruName, &parentID, &desc, &g.ParentName, &g.BooksCount); err != nil {
 				adminInternalError(c, err)
 				return
+			}
+			if ruName.Valid {
+				g.RuName = &ruName.String
 			}
 			if parentID.Valid {
 				v := int(parentID.Int64)
