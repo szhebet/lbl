@@ -63,8 +63,9 @@ var jsKnownLocalCalls = map[string]bool{
 
 // Pages map template name -> the set of JS files it loads (from <script>).
 var frontendPages = map[string][]string{
-	"index.html": {"app.js", "auth.js", "import.js", "offline.js"},
-	"admin.html": {"app.js", "auth.js", "import.js", "admin.js"},
+	"index.html":       {"app.js", "auth.js", "import.js", "offline.js"},
+	"admin.html":       {"app.js", "auth.js", "import.js", "admin.js"},
+	"admin_users.html": {"app.js", "auth.js", "import.js", "admin.js"},
 }
 
 var frontendJsDir = "../static/js"

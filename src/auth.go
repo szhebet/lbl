@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,7 @@ type LoginRequest struct {
 	Password          string `json:"password" binding:"required"`
 	DeviceName        string `json:"device_name"`
 	DeviceFingerprint string `json:"device_fingerprint"`
+	Role              string `json:"role"`
 }
 
 type AuthResponse struct {
@@ -54,7 +56,7 @@ func loginUser(db *sql.DB) gin.HandlerFunc {
 			req.DeviceName = "Unknown device"
 		}
 
-			// Use advisory lock to prevent race conditions on first-user creation
+		// Use advisory lock to prevent race conditions on first-user creation
 		tx, err := db.Begin()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
@@ -202,6 +204,17 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 			req.DeviceName = "Unknown device"
 		}
 
+		// Role is optional on registration: viewer by default, or server for
+		// peer-library machine accounts. editor/admin are never self-registrable.
+		role := strings.TrimSpace(req.Role)
+		if role == "" {
+			role = "viewer"
+		}
+		if role != "viewer" && role != "server" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, server"})
+			return
+		}
+
 		var existingID int
 		err := db.QueryRow("SELECT id FROM users WHERE username = $1", req.Username).Scan(&existingID)
 		if err == nil {
@@ -218,9 +231,9 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 		var user User
 		err = db.QueryRow(`
 			INSERT INTO users (username, password_hash, role)
-			VALUES ($1, $2, 'viewer')
+			VALUES ($1, $2, $3)
 			RETURNING id, username, COALESCE(email, ''), role, created_at
-		`, req.Username, string(hashedPassword)).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
+		`, req.Username, string(hashedPassword), role).Scan(&user.ID, &user.Username, &user.Email, &user.Role, &user.CreatedAt)
 		if err != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 			return

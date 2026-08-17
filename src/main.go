@@ -92,7 +92,10 @@ var embeddedMigration47 string
 //go:embed migration_4.8.sql
 var embeddedMigration48 string
 
-const currentDBVersion = "4.8"
+//go:embed migration_4.9.sql
+var embeddedMigration49 string
+
+const currentDBVersion = "4.9"
 
 type migration struct {
 	Version     string
@@ -195,6 +198,11 @@ var migrations = []migration{
 		Version:     "4.8",
 		Description: "Prefill genres.ru_name with Russian display names",
 		SQL:         stripSchema(embeddedMigration48),
+	},
+	{
+		Version:     "4.9",
+		Description: "Add api_neighbours table (peer library servers)",
+		SQL:         stripSchema(embeddedMigration49),
 	},
 }
 
@@ -518,60 +526,60 @@ func (im *ImportManager) run(ctx context.Context, dirPath string) {
 
 // BookDetails represents the denormalized book information from the view
 type BookDetails struct {
-	WorkID               int             `json:"work_id"`
-	OriginalTitle        string          `json:"original_title"`
-	OriginalLanguage     sql.NullString  `json:"original_language,omitempty"`
-	FirstPublished       sql.NullInt64   `json:"first_published,omitempty"`
-	WorkType             sql.NullString  `json:"work_type,omitempty"`
-	EditionID            int             `json:"edition_id"`
-	EditionTitle         string          `json:"edition_title"`
-	EditionLanguage      sql.NullString  `json:"edition_language,omitempty"`
-	ISBN                 sql.NullString  `json:"isbn,omitempty"`
-	Publisher            sql.NullString  `json:"publisher,omitempty"`
-	Year                 sql.NullInt64   `json:"year,omitempty"`
-	Pages                sql.NullInt64   `json:"pages,omitempty"`
-	Series               sql.NullString  `json:"series,omitempty"`
-	SeriesNumber         sql.NullString  `json:"series_number,omitempty"`
-	Quality              sql.NullString  `json:"quality,omitempty"`
-	Authors              sql.NullString  `json:"authors,omitempty"`
-	Translators          sql.NullString  `json:"translators,omitempty"`
-	Genres               sql.NullString  `json:"genres,omitempty"`
-	AvailableFormats     sql.NullString  `json:"available_formats,omitempty"`
-	FormatCount          int             `json:"format_count,omitempty"` // This is a count, so it's never NULL
-	PrimaryFilePath      sql.NullString  `json:"primary_file_path,omitempty"`
-	ReadingProgress      sql.NullInt64   `json:"reading_progress,omitempty"`
-	Rating               sql.NullInt64   `json:"rating,omitempty"`
-	FinishedAt           sql.NullString  `json:"finished_at,omitempty"`
-	CreatedAt            string          `json:"created_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW(), so it's never NULL
-	UpdatedAt            string          `json:"updated_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW() and updated by trigger, so it's never NULL
-	UploadDate           string          `json:"upload_date,omitempty"`
-	OnShelf              bool            `json:"on_shelf"`
-	ShelfOrder           int             `json:"shelf_order"`
-	UploadedBy           sql.NullInt64   `json:"uploaded_by,omitempty"`
-	UploadedByUsername   sql.NullString  `json:"uploaded_by_username,omitempty"`
+	WorkID             int            `json:"work_id"`
+	OriginalTitle      string         `json:"original_title"`
+	OriginalLanguage   sql.NullString `json:"original_language,omitempty"`
+	FirstPublished     sql.NullInt64  `json:"first_published,omitempty"`
+	WorkType           sql.NullString `json:"work_type,omitempty"`
+	EditionID          int            `json:"edition_id"`
+	EditionTitle       string         `json:"edition_title"`
+	EditionLanguage    sql.NullString `json:"edition_language,omitempty"`
+	ISBN               sql.NullString `json:"isbn,omitempty"`
+	Publisher          sql.NullString `json:"publisher,omitempty"`
+	Year               sql.NullInt64  `json:"year,omitempty"`
+	Pages              sql.NullInt64  `json:"pages,omitempty"`
+	Series             sql.NullString `json:"series,omitempty"`
+	SeriesNumber       sql.NullString `json:"series_number,omitempty"`
+	Quality            sql.NullString `json:"quality,omitempty"`
+	Authors            sql.NullString `json:"authors,omitempty"`
+	Translators        sql.NullString `json:"translators,omitempty"`
+	Genres             sql.NullString `json:"genres,omitempty"`
+	AvailableFormats   sql.NullString `json:"available_formats,omitempty"`
+	FormatCount        int            `json:"format_count,omitempty"` // This is a count, so it's never NULL
+	PrimaryFilePath    sql.NullString `json:"primary_file_path,omitempty"`
+	ReadingProgress    sql.NullInt64  `json:"reading_progress,omitempty"`
+	Rating             sql.NullInt64  `json:"rating,omitempty"`
+	FinishedAt         sql.NullString `json:"finished_at,omitempty"`
+	CreatedAt          string         `json:"created_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW(), so it's never NULL
+	UpdatedAt          string         `json:"updated_at,omitempty"` // This is from TIMESTAMP DEFAULT NOW() and updated by trigger, so it's never NULL
+	UploadDate         string         `json:"upload_date,omitempty"`
+	OnShelf            bool           `json:"on_shelf"`
+	ShelfOrder         int            `json:"shelf_order"`
+	UploadedBy         sql.NullInt64  `json:"uploaded_by,omitempty"`
+	UploadedByUsername sql.NullString `json:"uploaded_by_username,omitempty"`
 }
 
 // CreateBookRequest represents the request body for creating a book
 type CreateBookRequest struct {
-	Title       string `json:"title" binding:"required"`
-	Author      string `json:"author" binding:"required"`
-	ISBN        string `json:"isbn,omitempty"`
+	Title         string `json:"title" binding:"required"`
+	Author        string `json:"author" binding:"required"`
+	ISBN          string `json:"isbn,omitempty"`
 	PublishedYear int    `json:"published_year,omitempty"`
-	Genre       string `json:"genre,omitempty"`
-	Description string `json:"description,omitempty"`
-	Language    string `json:"language,omitempty"` // ISO 639-2/B code
+	Genre         string `json:"genre,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Language      string `json:"language,omitempty"` // ISO 639-2/B code
 }
 
 // UpdateBookRequest represents the request body for updating a book
 type UpdateBookRequest struct {
-	Title       *string `json:"title,omitempty"`
-	Author      *string `json:"author,omitempty"`
-	ISBN        *string `json:"isbn,omitempty"`
+	Title         *string `json:"title,omitempty"`
+	Author        *string `json:"author,omitempty"`
+	ISBN          *string `json:"isbn,omitempty"`
 	PublishedYear *int    `json:"published_year,omitempty"` // Pointer to distinguish between 0 and unset
-	Genre       *string `json:"genre,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Language    *string `json:"language,omitempty"` // ISO 639-2/B code
-	Publisher   *string `json:"publisher,omitempty"`
+	Genre         *string `json:"genre,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Language      *string `json:"language,omitempty"` // ISO 639-2/B code
+	Publisher     *string `json:"publisher,omitempty"`
 }
 
 func internalError(c *gin.Context, err error) {
@@ -725,6 +733,11 @@ func main() {
 
 	importManager = NewImportManager(db, cfg)
 
+	neighbourCrypto, err := NewNeighbourCrypto(db)
+	if err != nil {
+		log.Fatal("Failed to initialize neighbour password encryption: ", err)
+	}
+
 	initJWTSecret(cfg.Server.JWTSecret)
 	initTokenTTL(cfg.Server.TokenTTL)
 
@@ -741,7 +754,7 @@ func main() {
 		c.Next()
 	})
 
-// Auth routes (rate-limited, no JWT required)
+	// Auth routes (rate-limited, no JWT required)
 	auth := r.Group("/api/v1/auth")
 	{
 		auth.POST("/login", func(c *gin.Context) {
@@ -776,6 +789,21 @@ func main() {
 		public.GET("/shelf/count", getShelfCount(db))
 		public.PUT("/shelf/clear", clearShelf(db))
 		public.GET("/shelf/download/:token", downloadShelf(db))
+	}
+
+	// Peer-library federation API (role: server) — called by neighbouring
+	// library servers to search the catalog.
+	serverGrp := r.Group("/api/v1/server")
+	serverGrp.Use(requireAuthMiddleware(), serverOnlyMiddleware())
+	{
+		serverGrp.GET("/ping", serverPing())
+		serverGrp.POST("/search", serverSearchBooks(db))
+		// Returns the author/work/edition objects of an edition so a federating
+		// peer can recreate them locally with the same identifiers.
+		serverGrp.GET("/metadata/:id", serverBookMetadata(db))
+		// Reuses downloadBook: serves the stored archive (a single-format ZIP)
+		// of the requested edition so a federating peer can import it.
+		serverGrp.GET("/download/:id", downloadBook(db))
 	}
 
 	// Read-only routes (require auth)
@@ -871,6 +899,24 @@ func main() {
 		admin.DELETE("/tags/:id", adminDeleteTag(db))
 		admin.GET("/genres", adminGetGenres(db))
 
+		// Peer library servers (api_neighbours) — admin only
+		adminNeighbours := admin.Group("/neighbours")
+		adminNeighbours.Use(adminOnlyMiddleware())
+		{
+			adminNeighbours.GET("", adminGetNeighbours(db))
+			adminNeighbours.GET("/:id", adminGetNeighbour(db))
+			adminNeighbours.POST("", adminCreateNeighbour(db, neighbourCrypto))
+			adminNeighbours.PUT("/:id", adminUpdateNeighbour(db, neighbourCrypto))
+			adminNeighbours.DELETE("/:id", adminDeleteNeighbour(db))
+		}
+
+		// Federated search across all neighbour servers — admin only
+		admin.POST("/federation/search", adminOnlyMiddleware(), adminFederationSearch(db, neighbourCrypto))
+		// Download a book from a neighbour and import it locally — admin only
+		admin.POST("/federation/import", adminOnlyMiddleware(), adminFederationImport(db, neighbourCrypto))
+		// Test connectivity to a neighbour server (login + ping) — admin only
+		admin.POST("/federation/test", adminOnlyMiddleware(), adminFederationTest(db, neighbourCrypto))
+
 		// Suggestions management (editor+)
 		admin.GET("/suggestions", adminListSuggestions(db))
 		admin.POST("/suggestions", adminCreateSuggestions(db))
@@ -894,7 +940,7 @@ func main() {
 
 	// Serve static files with cache-busting headers for JS
 	r.Use(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/static/js/") || strings.HasPrefix(c.Request.URL.Path, "/static/css/") || c.Request.URL.Path == "/" || c.Request.URL.Path == "/admin" || c.Request.URL.Path == "/service-worker.js" {
+		if strings.HasPrefix(c.Request.URL.Path, "/static/js/") || strings.HasPrefix(c.Request.URL.Path, "/static/css/") || c.Request.URL.Path == "/" || c.Request.URL.Path == "/admin" || c.Request.URL.Path == "/administer" || c.Request.URL.Path == "/service-worker.js" {
 			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 			c.Header("Pragma", "no-cache")
 			c.Header("Expires", "0")
@@ -924,8 +970,15 @@ func main() {
     <span class="mobile-top-spacer"></span>
     <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
 </div>`
+	mobileTopBarAdminister := `<div class="mobile-top-bar">
+    <a href="/admin" class="mobile-back-btn" title="Назад к управлению">←</a>
+    <span class="mobile-top-title">Администрирование</span>
+    <span class="mobile-top-spacer"></span>
+    <button class="mobile-user-btn" id="mobileUserBtn" title="Пользователь">☰</button>
+</div>`
 	serveIndex := serveTemplate("./templates/index.html", "index.html", mobileTopBarIndex)
 	serveAdmin := serveTemplate("./templates/admin.html", "admin.html", mobileTopBarAdmin)
+	serveAdminister := serveTemplate("./templates/admin_users.html", "admin_users.html", mobileTopBarAdminister)
 	// isMobilePlatform checks if the request comes from a mobile app
 	isMobilePlatform := func(c *gin.Context) bool {
 		if c.GetHeader("X-Platform") == "android" {
@@ -939,6 +992,9 @@ func main() {
 	})
 	r.GET("/admin", func(c *gin.Context) {
 		serveAdmin(c, isMobilePlatform(c))
+	})
+	r.GET("/administer", func(c *gin.Context) {
+		serveAdminister(c, isMobilePlatform(c))
 	})
 	r.GET("/shelf/", getShelfPage(db))
 
@@ -954,27 +1010,27 @@ func main() {
 	// HTTPS (TLS) is terminated by nginx — no TLS server in Go.
 	// If you need direct HTTPS without nginx, uncomment the block below.
 	/*
-	tlsCertFile := "./certres/server.crt"
-	tlsKeyFile := "./certres/server.key"
-	if _, err := os.Stat(tlsCertFile); err == nil {
-		tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
-		log.Printf("Starting HTTPS on %s\n", tlsAddr)
-		go func() {
-			tlsConfig := &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			}
-			server := &http.Server{
-				Addr:      tlsAddr,
-				Handler:   r.Handler(),
-				TLSConfig: tlsConfig,
-			}
-			if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
-				log.Printf("HTTPS server error: %v\n", err)
-			}
-		}()
-	} else {
-		log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
-	}
+		tlsCertFile := "./certres/server.crt"
+		tlsKeyFile := "./certres/server.key"
+		if _, err := os.Stat(tlsCertFile); err == nil {
+			tlsAddr := fmt.Sprintf("%s:9443", cfg.Server.Bind)
+			log.Printf("Starting HTTPS on %s\n", tlsAddr)
+			go func() {
+				tlsConfig := &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+				server := &http.Server{
+					Addr:      tlsAddr,
+					Handler:   r.Handler(),
+					TLSConfig: tlsConfig,
+				}
+				if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
+					log.Printf("HTTPS server error: %v\n", err)
+				}
+			}()
+		} else {
+			log.Printf("TLS cert not found at %s, HTTPS disabled\n", tlsCertFile)
+		}
 	*/
 
 	log.Printf("Starting HTTP on %s\n", addr)
@@ -1099,9 +1155,9 @@ func getBooks(db *sql.DB) gin.HandlerFunc {
 		allowedSorts := map[string]string{
 			"original_title":    "original_title",
 			"upload_date":       "upload_date",
-			"authors":          "authors",
+			"authors":           "authors",
 			"available_formats": "available_formats",
-			"year":             "NULLIF(year, 0)",
+			"year":              "NULLIF(year, 0)",
 		}
 		sortCol, ok := allowedSorts[sortBy]
 		if !ok {
@@ -1361,10 +1417,10 @@ func searchBooks(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"total": total,
-			"limit": limit,
+			"total":  total,
+			"limit":  limit,
 			"offset": offset,
-			"books": books,
+			"books":  books,
 		})
 	}
 }
@@ -1829,9 +1885,9 @@ type AuthorWithBooks struct {
 
 // WorkWithEditions represents a work with its editions
 type WorkWithEditions struct {
-	ID            int                 `json:"id"`
-	OriginalTitle string              `json:"original_title"`
-	Year          *int                `json:"year"`
+	ID            int                  `json:"id"`
+	OriginalTitle string               `json:"original_title"`
+	Year          *int                 `json:"year"`
 	Editions      []EditionWithFormats `json:"editions"`
 }
 
@@ -1991,39 +2047,39 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 				WHERE wc.person_id = $1 AND wc.role = 'author'
 			`
 
-			workArgs := []interface{}{author.ID}
-			workArgNum := 2
+				workArgs := []interface{}{author.ID}
+				workArgNum := 2
 
-			if bookFilter != "" {
-				worksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", workArgNum)
-				workArgs = append(workArgs, "%"+normalizeQuery(bookFilter)+"%")
-				workArgNum++
-			}
+				if bookFilter != "" {
+					worksQuery += fmt.Sprintf(" AND w.lower_original_title LIKE $%d", workArgNum)
+					workArgs = append(workArgs, "%"+normalizeQuery(bookFilter)+"%")
+					workArgNum++
+				}
 
-			worksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
+				worksQuery += " GROUP BY w.id, w.original_title ORDER BY w.original_title"
 
-			workRows, err := db.Query(worksQuery, workArgs...)
-			if err != nil {
-				internalError(c, err)
-				return
-			}
-
-			works := make([]WorkWithEditions, 0)
-			for workRows.Next() {
-				var work WorkWithEditions
-				var year sql.NullInt64
-				if err := workRows.Scan(&work.ID, &work.OriginalTitle, &year); err != nil {
-					workRows.Close()
+				workRows, err := db.Query(worksQuery, workArgs...)
+				if err != nil {
 					internalError(c, err)
 					return
 				}
-				if year.Valid && year.Int64 != 0 {
-					yearInt := int(year.Int64)
-					work.Year = &yearInt
-				}
 
-				// Get editions for this work
-				editionQuery := `
+				works := make([]WorkWithEditions, 0)
+				for workRows.Next() {
+					var work WorkWithEditions
+					var year sql.NullInt64
+					if err := workRows.Scan(&work.ID, &work.OriginalTitle, &year); err != nil {
+						workRows.Close()
+						internalError(c, err)
+						return
+					}
+					if year.Valid && year.Int64 != 0 {
+						yearInt := int(year.Int64)
+						work.Year = &yearInt
+					}
+
+					// Get editions for this work
+					editionQuery := `
 					SELECT
 						e.id,
 						COALESCE(e.title, w.original_title) as title,
@@ -2036,36 +2092,36 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 					ORDER BY e.year NULLS LAST, e.title
 				`
 
-				editionRows, err := db.Query(editionQuery, work.ID)
-				if err != nil {
-					workRows.Close()
-					internalError(c, err)
-					return
-				}
-
-				editions := make([]EditionWithFormats, 0)
-				for editionRows.Next() {
-					var edition EditionWithFormats
-					var eYear sql.NullInt64
-					var onShelf bool
-					var uploadDate sql.NullString
-					if err := editionRows.Scan(&edition.ID, &edition.Title, &eYear, &onShelf, &uploadDate); err != nil {
-						editionRows.Close()
+					editionRows, err := db.Query(editionQuery, work.ID)
+					if err != nil {
 						workRows.Close()
 						internalError(c, err)
 						return
 					}
-					if eYear.Valid && eYear.Int64 != 0 {
-						eYearInt := int(eYear.Int64)
-						edition.Year = &eYearInt
-					}
-					edition.OnShelf = onShelf
-					if uploadDate.Valid {
-						edition.UploadDate = uploadDate.String
-					}
 
-					// Get formats for this edition
-					formatQuery := `
+					editions := make([]EditionWithFormats, 0)
+					for editionRows.Next() {
+						var edition EditionWithFormats
+						var eYear sql.NullInt64
+						var onShelf bool
+						var uploadDate sql.NullString
+						if err := editionRows.Scan(&edition.ID, &edition.Title, &eYear, &onShelf, &uploadDate); err != nil {
+							editionRows.Close()
+							workRows.Close()
+							internalError(c, err)
+							return
+						}
+						if eYear.Valid && eYear.Int64 != 0 {
+							eYearInt := int(eYear.Int64)
+							edition.Year = &eYearInt
+						}
+						edition.OnShelf = onShelf
+						if uploadDate.Valid {
+							edition.UploadDate = uploadDate.String
+						}
+
+						// Get formats for this edition
+						formatQuery := `
 						SELECT
 							f.name,
 							ef.file_path
@@ -2074,62 +2130,62 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 						WHERE ef.edition_id = $1
 					`
 
-					formatRows, err := db.Query(formatQuery, edition.ID)
-					if err != nil {
-						editionRows.Close()
-						workRows.Close()
-						internalError(c, err)
-						return
-					}
+						formatRows, err := db.Query(formatQuery, edition.ID)
+						if err != nil {
+							editionRows.Close()
+							workRows.Close()
+							internalError(c, err)
+							return
+						}
 
-					var formats []FormatInfo
-					for formatRows.Next() {
-						var format FormatInfo
-						if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
+						var formats []FormatInfo
+						for formatRows.Next() {
+							var format FormatInfo
+							if err := formatRows.Scan(&format.FormatName, &format.FilePath); err != nil {
+								formatRows.Close()
+								editionRows.Close()
+								workRows.Close()
+								internalError(c, err)
+								return
+							}
+							formats = append(formats, format)
+						}
+						if err := formatRows.Err(); err != nil {
 							formatRows.Close()
 							editionRows.Close()
 							workRows.Close()
 							internalError(c, err)
 							return
 						}
-						formats = append(formats, format)
-					}
-					if err := formatRows.Err(); err != nil {
 						formatRows.Close()
+
+						edition.Formats = formats
+						editions = append(editions, edition)
+					}
+					if err := editionRows.Err(); err != nil {
 						editionRows.Close()
 						workRows.Close()
 						internalError(c, err)
 						return
 					}
-					formatRows.Close()
-
-					edition.Formats = formats
-					editions = append(editions, edition)
-				}
-				if err := editionRows.Err(); err != nil {
 					editionRows.Close()
+
+					work.Editions = editions
+					works = append(works, work)
+				}
+				if err := workRows.Err(); err != nil {
 					workRows.Close()
 					internalError(c, err)
 					return
 				}
-				editionRows.Close()
-
-				work.Editions = editions
-				works = append(works, work)
-			}
-			if err := workRows.Err(); err != nil {
 				workRows.Close()
-				internalError(c, err)
-				return
-			}
-			workRows.Close()
 
-			if works == nil {
-				works = []WorkWithEditions{}
+				if works == nil {
+					works = []WorkWithEditions{}
+				}
+				author.Works = works
+				authors = append(authors, author)
 			}
-			author.Works = works
-			authors = append(authors, author)
-		}
 		}
 
 		if err = rows.Err(); err != nil {
@@ -2138,11 +2194,11 @@ func getAuthors(db *sql.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"authors":       authors,
-			"total":         total,
-			"page":          page,
-			"limit":         limit,
-			"total_works":   totalWorks,
+			"authors":        authors,
+			"total":          total,
+			"page":           page,
+			"limit":          limit,
+			"total_works":    totalWorks,
 			"total_editions": totalEditions,
 		})
 	}
@@ -2289,48 +2345,48 @@ type UpdatePersonRequest struct {
 
 // ExtendedBookData represents the full book data with all related information
 type ExtendedBookData struct {
-	Work *WorkData `json:"work"`
-	Edition *EditionData `json:"edition"`
-	Authors []AuthorData `json:"authors"`
-	Genres []GenreData `json:"genres"`
-	Files []FileData `json:"files"`
-	Tags []TagData `json:"tags"`
-	TOC []TOCEntryData `json:"toc"`
+	Work    *WorkData      `json:"work"`
+	Edition *EditionData   `json:"edition"`
+	Authors []AuthorData   `json:"authors"`
+	Genres  []GenreData    `json:"genres"`
+	Files   []FileData     `json:"files"`
+	Tags    []TagData      `json:"tags"`
+	TOC     []TOCEntryData `json:"toc"`
 }
 
 // WorkData represents the work table fields
 type WorkData struct {
-	ID               int             `json:"id"`
-	OriginalTitle    string          `json:"original_title"`
-	OriginalLanguage sql.NullString  `json:"original_language"`
-	FirstPublished   sql.NullInt64   `json:"first_published"`
-	WorkType         sql.NullString  `json:"work_type"`
-	Annotation       sql.NullString  `json:"annotation"`
-	WordCount        sql.NullInt64   `json:"word_count"`
+	ID               int            `json:"id"`
+	OriginalTitle    string         `json:"original_title"`
+	OriginalLanguage sql.NullString `json:"original_language"`
+	FirstPublished   sql.NullInt64  `json:"first_published"`
+	WorkType         sql.NullString `json:"work_type"`
+	Annotation       sql.NullString `json:"annotation"`
+	WordCount        sql.NullInt64  `json:"word_count"`
 }
 
 // EditionData represents the edition table fields
 type EditionData struct {
-	ID            int             `json:"id"`
-	Title         string          `json:"title"`
-	Language      sql.NullString  `json:"language"`
-	ISBN          sql.NullString  `json:"isbn"`
-	EAN           sql.NullString  `json:"ean"`
-	UDC           sql.NullString  `json:"udc"`
-	BBK           sql.NullString  `json:"bbk"`
-	Publisher     sql.NullString  `json:"publisher"`
-	Year          sql.NullInt64   `json:"year"`
-	City          sql.NullString  `json:"city"`
-	Pages         sql.NullInt64   `json:"pages"`
-	Series        sql.NullString  `json:"series"`
-	SeriesNumber  sql.NullString  `json:"series_number"`
-	Annotation    sql.NullString  `json:"annotation"`
-	Source        sql.NullString  `json:"source"`
-	IsComplete    bool            `json:"is_complete"`
-	Quality       sql.NullString  `json:"quality"`
-	UploadDate    string          `json:"upload_date"`
-	UploadedBy    *int            `json:"uploaded_by,omitempty"`
-	UploadedByUsername *string     `json:"uploaded_by_username,omitempty"`
+	ID                 int            `json:"id"`
+	Title              string         `json:"title"`
+	Language           sql.NullString `json:"language"`
+	ISBN               sql.NullString `json:"isbn"`
+	EAN                sql.NullString `json:"ean"`
+	UDC                sql.NullString `json:"udc"`
+	BBK                sql.NullString `json:"bbk"`
+	Publisher          sql.NullString `json:"publisher"`
+	Year               sql.NullInt64  `json:"year"`
+	City               sql.NullString `json:"city"`
+	Pages              sql.NullInt64  `json:"pages"`
+	Series             sql.NullString `json:"series"`
+	SeriesNumber       sql.NullString `json:"series_number"`
+	Annotation         sql.NullString `json:"annotation"`
+	Source             sql.NullString `json:"source"`
+	IsComplete         bool           `json:"is_complete"`
+	Quality            sql.NullString `json:"quality"`
+	UploadDate         string         `json:"upload_date"`
+	UploadedBy         *int           `json:"uploaded_by,omitempty"`
+	UploadedByUsername *string        `json:"uploaded_by_username,omitempty"`
 }
 
 // AuthorData represents an author with role
@@ -2362,14 +2418,14 @@ type GenreWithAuthors struct {
 
 // FileData represents an edition file
 type FileData struct {
-	ID           int             `json:"id"`
-	FormatID     int             `json:"format_id"`
-	FormatName   string          `json:"format_name"`
-	FilePath     string          `json:"file_path"`
-	FileSize     sql.NullInt64   `json:"file_size"`
-	PageCount    sql.NullInt64   `json:"page_count"`
-	HasOCR       bool            `json:"has_ocr"`
-	IsPrimary    bool            `json:"is_primary"`
+	ID         int           `json:"id"`
+	FormatID   int           `json:"format_id"`
+	FormatName string        `json:"format_name"`
+	FilePath   string        `json:"file_path"`
+	FileSize   sql.NullInt64 `json:"file_size"`
+	PageCount  sql.NullInt64 `json:"page_count"`
+	HasOCR     bool          `json:"has_ocr"`
+	IsPrimary  bool          `json:"is_primary"`
 }
 
 // TagData represents a tag
@@ -2382,21 +2438,21 @@ type TagData struct {
 
 // TOCEntryData represents a table of contents entry
 type TOCEntryData struct {
-	ID        int             `json:"id"`
-	ParentID  sql.NullInt64  `json:"parent_id"`
-	Level     int            `json:"level"`
-	Title     string         `json:"title"`
-	Position  sql.NullInt64  `json:"position"`
-	SortOrder int            `json:"sort_order"`
+	ID        int           `json:"id"`
+	ParentID  sql.NullInt64 `json:"parent_id"`
+	Level     int           `json:"level"`
+	Title     string        `json:"title"`
+	Position  sql.NullInt64 `json:"position"`
+	SortOrder int           `json:"sort_order"`
 }
 
 // UpdateBookExtendedRequest represents the request for updating extended book data
 type UpdateBookExtendedRequest struct {
-	Work     map[string]interface{} `json:"work"`
-	Edition  map[string]interface{} `json:"edition"`
-	Authors  []AuthorUpdateData     `json:"authors"`
-	Genres   []int                  `json:"genres"`
-	Tags     []int                  `json:"tags"`
+	Work    map[string]interface{} `json:"work"`
+	Edition map[string]interface{} `json:"edition"`
+	Authors []AuthorUpdateData     `json:"authors"`
+	Genres  []int                  `json:"genres"`
+	Tags    []int                  `json:"tags"`
 }
 
 // WorkUpdateData represents work fields to update
@@ -2431,7 +2487,7 @@ type EditionUpdateData struct {
 
 // AuthorUpdateData represents author data to add/update
 type AuthorUpdateData struct {
-	ID        int    `json:"id,omitempty"`        // existing person ID
+	ID        int    `json:"id,omitempty"` // existing person ID
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Role      string `json:"role"` // author, translator, editor, etc.
@@ -3334,9 +3390,9 @@ func getPerson(db *sql.DB) gin.HandlerFunc {
 
 // LanguageData represents a language
 type LanguageData struct {
-	Code        string `json:"code"`
-	Name        string `json:"name"`
-	NativeName  string `json:"native_name"`
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	NativeName string `json:"native_name"`
 }
 
 // getLanguages returns all languages
@@ -3365,15 +3421,15 @@ func getLanguages(db *sql.DB) gin.HandlerFunc {
 
 // ImportBookFile handles single file upload
 type importFileResult struct {
-	title      string
-	authors    []string
-	workID     int
-	editionID  int
-	filePath   string
-	hashStr    string
-	bookInfo   *utils.FB2Book
-	llmResult  *utils.LLMResult
-	parseErr   error
+	title     string
+	authors   []string
+	workID    int
+	editionID int
+	filePath  string
+	hashStr   string
+	bookInfo  *utils.FB2Book
+	llmResult *utils.LLMResult
+	parseErr  error
 }
 
 type duplicateInfo struct {
@@ -3585,14 +3641,14 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 	if err != nil {
 		return nil, fmt.Errorf("db begin: %w", err)
 	}
-		defer func() {
-			if err != nil {
-				tx.Rollback()
-				os.Remove(destPath)
-			} else {
-				tx.Commit()
-			}
-		}()
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+			os.Remove(destPath)
+		} else {
+			tx.Commit()
+		}
+	}()
 
 	langCode := "eng"
 	if bookInfo != nil && bookInfo.Lang != "" {
@@ -4030,7 +4086,7 @@ func logImportError(filename, hash, errorMsg string, cfg ...*config.Config) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "[%s] File: %s, Hash: %s, Error: %s\n", 
+	fmt.Fprintf(f, "[%s] File: %s, Hash: %s, Error: %s\n",
 		time.Now().Format("2006-01-02 15:04:05"), filename, hash, errorMsg)
 }
 
@@ -4598,12 +4654,12 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
 		defer rows.Close()
 
 		type ShelfBook struct {
-			ID          int
-			Authors     string
-			Title       string
-			FilePath    string
-			FileSize    int64
-			Token       string
+			ID       int
+			Authors  string
+			Title    string
+			FilePath string
+			FileSize int64
+			Token    string
 		}
 
 		var books []ShelfBook
@@ -4652,11 +4708,11 @@ func getShelfPage(db *sql.DB) gin.HandlerFunc {
         <h1>📚 Общая полка</h1>
         <p>Книг на полке: ` + fmt.Sprintf("%d", len(books)) + `</p>
         ` + func() string {
-            if len(books) > 0 {
-                return `<button id="clearShelfBtn" class="btn btn-danger" onclick="clearShelf()">Очистить полку</button>`
-            }
-            return ""
-        }() + `
+			if len(books) > 0 {
+				return `<button id="clearShelfBtn" class="btn btn-danger" onclick="clearShelf()">Очистить полку</button>`
+			}
+			return ""
+		}() + `
         
         <table class="shelf-table">
             <thead>
@@ -4778,7 +4834,7 @@ func getAppConfig() gin.HandlerFunc {
 			prompt = "Преобразуй к формату Автор - Название произведения следующий текст: \n"
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"enable_delete":     cfg.Server.EnableDelete,
+			"enable_delete":      cfg.Server.EnableDelete,
 			"llm_prompt_convert": prompt,
 		})
 	}

@@ -491,6 +491,57 @@ docker run -d --name library-nginx --net=host --restart unless-stopped \
 Symptom that the compose-based config is mounted: nginx exits with
 `host not found in upstream "app"` in `docker logs library-nginx`.
 
+### Federation setup (2nd instance + dual-site nginx)
+
+A second app instance (`library-app2`) runs in host-net mode on **9092**
+against database **library2** in the same PostgreSQL cluster. It is launched
+from the same `library-app:latest` image with `config2.toml` mounted as
+`/config.toml` and its own `bookarch2/tempfld2/logs2/backup2/apk2` dirs
+mounted at the matching container paths. `config2.toml` must set
+`port = 9092`, `name = "library2"` and a distinct `jwt_secret`.
+
+`nginx-federation.conf` (mounted on `library-nginx`, host-net) serves two
+sites with two self-signed certs from `certres/site_a/` and `certres/site_b/`:
+
+| Port | Backend | Cert |
+|------|---------|------|
+| 443  | app1 `127.0.0.1:9091` | site_a |
+| 444  | app1 `127.0.0.1:9091` | site_a |
+| 445  | app2 `127.0.0.1:9092` | site_b |
+
+**Federated search**: admin presses «Поиск по федерации» on the «Запросы»
+tab of `/admin`. `POST /api/v1/admin/federation/search` (admin only) walks
+every `api_neighbours` row, decrypts the stored password (`NeighbourCrypto`),
+logs in on the neighbour (JWT, role `server`), and forwards the search to
+`POST /api/v1/server/search`. The neighbour's `server_cert` is added to the
+TLS trust pool (self-signed) and `client_cert` (combined cert+key PEM) is
+used for mutual TLS. Response: `{neighbours, results:[{neighbour_id, url,
+error?, total, books:[{work_id, edition_id, author, title, year, formats}]}]}`.
+With `?stop_on_first=1` neighbours are queried sequentially and the search
+stops at the first neighbour that returns at least one book (used by the UI
+form). An unavailable/erroring neighbour is reported as `error` in its result
+entry and the search **continues** with the remaining neighbours (tested by
+`TestFederationSearchContinuesAfterError`). The form («Поиск по федерации»
+modal) runs the search only when the «Искать» button is pressed (not on Enter),
+uses a wide modal that does not close on an outside click, places the «Искать»
+button below the author/title/limit fields, and renders a flat table
+`УРЛ сервера | Книга | Автор | [Загрузить]`.
+
+**Federated download + import**: each result row's «Загрузить» button calls
+`POST /api/v1/admin/federation/import` (admin only) with `{neighbour_id,
+edition_id}`. The handler logs in on the neighbour (same TLS trust), downloads
+`GET /api/v1/server/download/:id` (server-role; reuses `downloadBook`, serves
+the stored single-format archive as `.zip`), and feeds the bytes into the
+standard `importFile` pipeline (content-hash duplicate detection, FB2/EPUB
+metadata or LLM recognition). Response mirrors `/api/v1/import/file`
+(`{duplicate?, message, work_id, edition_id, file_path, title, authors,
+parsed?}`).
+
+To federate two instances: register/login a `server`-role account on each,
+then add a neighbour on each pointing at the other's HTTPS endpoint with that
+account's credentials and the other site's self-signed cert as `server_cert`
+(see `src/federation.go`).
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -642,6 +693,47 @@ timeout = 60    # Seconds
 - *(none)*
 
 ### Done (latest)
+- **Кнопка «Тест» на вкладке «Серверы» (`/administer`) + API проверки подключения**:
+  - Бэкенд `src/federation.go`: `adminFederationTest` (`POST /api/v1/admin/federation/test`, admin only, `{neighbour_id}`) — та же роль, что у импорта книг из федерации (`adminOnlyMiddleware`). Загружает запись `api_neighbours`, логинится на соседе сохранёнными логином/паролем через `loginToNeighbour` (mTLS-клиент, расшифровка `NeighbourCrypto`) и шлёт тестовое сообщение `GET /api/v1/server/ping`. Успех → 200 `{ok:true}`. Любая ошибка (дешифровка, подключение, не-200 от соседа) логируется в лог сервера (`[FEDERATION TEST] ... FAILED: ...`) и возвращается как **HTTP 502** с `{ok:false, error}`; несуществующий сосед → 404; маршрут в `src/main.go` рядом с `federation/search`/`federation/import`.
+  - Фронтенд `static/js/admin.js` + `static/css/admin.css` + `templates/admin_users.html`: в строке каждого сервера на вкладке «Серверы» добавлена кнопка «Тест» (`test-neighbour`, делегирование кликов); `testNeighbour(id, btn)` асинхронно вызывает endpoint и меняет состояние кнопки: успех → зелёная (`.test-ok`) с текстом «Тест: Ок», ошибка → красная (`.test-fail`) с текстом «Тест: fail».
+  - Тест `TestFederationTest` (`src/main_test.go`): mock-сосед с новым `/api/v1/server/ping`-хендлером (счётчик `pingHits` в `fedMock`); успех (200, ping ровно 1 раз), недоступный сосед `http://127.0.0.1:1` → 502 с `ok:false`, несуществующий сосед → 404, editor → 403.
+  - Live E2E: app1 (9091) против живого app2 (id=13, `https://127.0.0.1:445`) → `{"ok":true}` HTTP 200; мёртвый сосед (невалидный зашифрованный пароль) → HTTP 502 + строка `[FEDERATION TEST] ... FAILED: Не удалось расшифровать пароль...` в `docker logs library-app`; временный сосед удалён, БД чистая.
+  - Проверено: `go test -count=1 ./src/` зелёный, `node --check static/js/admin.js` OK, APK-ассеты (`admin_users.html`, `admin.js`, `admin.css`) синхронизированы, бинарь/образ пересобраны, `library-app` (9091) перезапущен, 9091/9092/443/444/445 → 200, контейнеры оставлены запущенными.
+- **Импорт книги из федерации с сохранением удалённых ID + конфликт-модалка «Перезаписать / Создать новую / Отменить»**:
+  - Бэкенд `src/server_api.go`: новый `GET /api/v1/server/metadata/:id` (роль server) отдаёт автор/произведение/издание/файлы с удалёнными ID (`fedBookMetadata`); маршрут в `src/main.go` (serverGrp). Исправлен баг «converting NULL to string is unsupported» — все nullable-колонки editions/works обёрнуты в `COALESCE` (метаданные изданий с NULL ISBN/языком/издательством больше не дают 500). Новый тест `TestServerMetadataAPINullFields` (издание со всеми NULL-полями + файл с NULL size/hash, 404 на отсутствующее).
+  - Бэкенд `src/federation.go`: `adminFederationImport` (`POST /api/v1/admin/federation/import`, admin only, `{neighbour_id, edition_id, mode}`) полностью переписан — не `importFile`, а собственный конвейер: fetch metadata → download zip (`/server/download/:id`) → `fedAnalyzeBook` (DetectZipContent → формат/формат ID/внутренний sha256) → `findDuplicateByHash` → `analyzeFedConflicts` → `fedCreateLocal`/`fedOverwriteLocal`. Режимы: `""` (импорт, при конфликте → **HTTP 409** с `conflict/remote/conflicts/found`), `overwrite` (замена строк с удалёнными ID), `create_new` (свежие ID, переиспользует работу по заголовку+авторам и автора через нечёткий поиск). Хелперы: `fedWriteArchive` (однофайловый zip с внутренним расширением), `fedRelPath`, `fedSyncSequence`, `fedIsbn`/`fedLanguageCode` (проверка уникальности), `fedInsertContributors`/`fedInsertGenres`.
+  - Исправлен UNIQUE(`file_hash`) коллапс: overwrite/create_new книги, чьё содержимое уже есть локально (напр. create_new затем overwrite того же издания), падал с 23505. Новый `fedStorableHash(tx, hash, editionID)` — если хэш уже принадлежит другому изданию, копия сохраняется с NULL-хэшем.
+  - Исправлена семантика overwrite для авторов: `fedInsertContributors` в режиме !newIDs теперь сначала ищет персону, занимающую удалённый ID, и **заменяет её данные** (иначе конфликт автора оставался неразрешённым после overwrite); только потом fuzzy-поиск, потом INSERT с удалённым ID.
+  - Фронтенд: `templates/admin.html` модалка `#fedConflictModal` (таблица remote/work/edition ID, блок `found`, кнопки «Перезаписать»/«Создать новую»/«Отменить»), `static/js/admin.js` — `federationImport(…, mode)`: при 409+conflict показывает модалку, `fedConflictResolve(mode)` повторяет импорт; статусы `overwritten/created_new/created/дубликат/ошибка`. CSS `.fed-conflict-*`.
+  - Тесты `src/main_test.go`: `TestFederationImport` обновлён (удалённые ID author/work/edition сохраняются, дубликат, невалидный сосед, editor→403); `TestFederationImportConflict` — 409 без изменений, create_new (новые ID, fuzzy-автор, старые строки целы), overwrite при занятом хэше (NULL-hash) + **замена персоны с удалённым ID**; `newFedMockNeighbourMeta` для метаданных с явными ID.
+  - Live E2E (nginx 444→app1, 445→app2): metadata по HTTPS работает (был 500); импорт «Понедельник…» → `duplicate:true`; конфликтная книга (удалённые ID 900001 на обоих серверах) → 409 с `found`, create_new → новые work/edition + архив, overwrite → замена строк и персоны + NULL-hash. Тестовые данные и файлы вычищены с обеих БД, последовательности восстановлены.
+  - **Инфраструктура**: найден и исправлен баг развёртывания app2 — `config2.toml` использует host-имена каталогов (`bookarch2/tempfld2/logs2`), а контейнер монтировал их в `/bookarch:/tempfld:/logs`, поэтому `/server/download` на app2 всегда отдавал 404 «File not found on disk». Монтирования переведены на `/bookarch2:/tempfld2:/logs2:/backup2` (совпадают с именами из конфига). Проверено: `go test -count=1 ./src/` зелёный, 9091/9092/443/444/445 → 200, контейнеры и nginx оставлены запущенными.
+- **Кнопка «Искать» в форме федерации перенесена под поля «Автор»/«Название»/«Максимум результатов» + подтверждено продолжение поиска при недоступном соседе**:
+  - Фронтенд `static/js/admin.js` (`openFederationSearchModal`): блок с кнопкой «Искать» перемещён из-под строки «Название или автор» в самый низ формы — под `.fed-extra` (поля «Автор (уточнение)», «Название (уточнение)», «Максимум результатов с сервера»), перед `#fedResults`. Порядок в DOM проверен jsdom'ом (fedQuery → fedAuthor → fedTitle → fedLimit → fedSearchBtn → fedResults).
+  - Поведение «недоступный сосед не прерывает поиск» уже было реализовано в `adminFederationSearch` (`src/federation.go`): при `stop_on_first=1` соседи обходятся последовательно, ошибка/недоступность соседа записывается в `result.error` и поиск продолжается, остановка — только при первом соседе с `len(books)>0` (в параллельном режиме ошибки обрабатываются по каждому соседу отдельно).
+  - Новый тест `TestFederationSearchContinuesAfterError` (`src/main_test.go`): первый сосед недоступен (`http://127.0.0.1:1`, connection refused, URL сортируется первым), второй — рабочий мок; проверено: `results` содержит 2 записи (ошибка + книга), рабочий сосед опрошен ровно 1 раз, поиск остановился после находки.
+  - Live E2E: в БД library временно добавлен мёртвый сосед `http://127.0.0.1:1` → `stop_on_first=1` поиск «Понедельник» вернул `error: ...connection refused` для мёртвого и книгу «Понедельник начинается в субботу» с app2 (445); мёртвый сосед удалён, БД в исходном состоянии. `go test -count=1 ./src/` зелёный, `node --check` OK, APK-ассеты (`admin.js`) синхронизированы, бинарь/образ пересобраны, `library-app` (9091) и `library-app2` (9092) перезапущены (200), nginx 444/445 → 401, контейнеры оставлены запущенными.
+- **Вернута кнопка «Закрыть» в форму «Поиск по федерации» + устранена ошибка при «Искать»**:
+  - Кнопка «Закрыть»: в `openFederationSearchModal` (`static/js/admin.js`) футер модалки больше не скрывается целиком — скрывается только submit-кнопка, кнопка «Отмена» переименовывается в «Закрыть» и остаётся видимой. `openAdminModal` теперь всегда восстанавливает футер в исходное состояние (submit виден, текст «Сохранить»), чтобы последующие модалки не наследовали скрытый футер.
+  - Enter в поле запроса больше не перезагружает страницу: `adminForm.onsubmit` в режиме федерации установлен в `function(e){ e.preventDefault(); }` (раньше скрытый submit-кнопка была «default button» формы — Enter давал полную перезагрузку GET-запросом).
+  - Ошибка при «Искать» — красный блок `.fed-error` `http://192.168.95.200:9091/ — Не удалось подключиться... EOF` из-за нерабочего тестового соседа (id=3, username `test`, хост блокируется шлюзом с политикой deny → POST login даёт EOF). Сосед удалён из БД library; поиск теперь возвращает только таблицу результатов без блока ошибок.
+  - Диагностика: эндпоинт `/api/v1/admin/federation/search?limit=…&stop_on_first=1` проверен curl'ом (2.5s); полный клиентский путь воспроизведён в jsdom (`templates/admin.html` + реальный `static/js/admin.js` + Node fetch с browser-style URL-резолвом против живого сервера 9091) — результаты рендерятся корректно, ошибок JS нет; `node --check static/js/admin.js` OK, `go test -count=1 ./src/` зелёный.
+  - Удалён мусорный файл `src_android/app/src/main/assets/www/static/css/admin.js` (старая копия admin.js, ошибочно скопированная в каталог css; ничем не референсится). APK-ассеты (`admin.js`, `admin.css`, `admin.html`) синхронизированы. Бинарь пересобран, образ `library-app:latest` пересоздан, `library-app` (9091) и `library-app2` (9092) перезапущены (200), nginx 444/445 → 401, оба контейнера и nginx оставлены запущенными.
+- **Доработка формы «Поиск по федерации» + скачивание/импорт книги с соседа**:
+  - Бэкенд `src/federation.go`: `adminFederationImport` (`POST /api/v1/admin/federation/import`, admin only, `{neighbour_id, edition_id}`) — логинится на соседе (server-роль, тот же TLS trust pool через `loginToNeighbour`, вынесен из `queryNeighbour`), скачивает `GET /api/v1/server/download/:id`, байты отдаёт в штатный `importFile` (дубликат по content-hash, метаданные FB2/EPUB или LLM). Ответ как у `/api/v1/import/file` (`{duplicate?, message, work_id, edition_id, file_path, title, authors, parsed?}`).
+  - Бэкенд: `serverGrp.GET("/download/:id", downloadBook(db))` (`src/main.go`) — переиспользует `downloadBook` и отдаёт соседу хранимый архив как `.zip` под server-ролью.
+  - Бэкенд: `stop_on_first=1` в `adminFederationSearch` — последовательный обход соседей с остановкой на первом, вернувшем книги; параллельный режим сохранён.
+  - Фронтенд `static/js/admin.js` + `static/css/admin.css`: модалка стала широкой (`rl-modal-wide`) и не закрывается кликом мимо (`rl-modal-locked`), кнопка «Искать» под строкой запроса (поиск только по клику, не по Enter, футер скрыт), результаты — плоская таблица `УРЛ сервера | Книга | Автор | [Загрузить]` (`renderFederationResults`/`federationImport`), статусы импорта (ок/дубликат/ошибка) под кнопкой.
+  - Тесты `src/main_test.go`: `TestFederationImport` (мок-сосед с login+download, импорт FB2 из ZIP, повторный импорт → duplicate, 404 по неверному соседу, editor → 403, очистка), `TestFederationSearchStopOnFirst` (2 мока, запрос только первого сервера, `searchHits==1`); хелперы `newFedMockNeighbour`/`makeFB2Zip`/`backupNeighbours`/`cleanupImportedBook`.
+  - E2E на живых инстансах: app1 (9091) `stop_on_first=1` по «Понедельник» → ошибка недоступного соседа id=3 + находка на app2 (445); импорт «Понедельник» из app2 в app1 → `duplicate:true`; импорт «Беседы с учениками» (Гурджиев, FB2, edition 850) из app1 в app2 → создан `bookarch2/00001/Besedy_s_uchenikami.zip` (work 4), повторный импорт → duplicate; тестовые данные вычищены (книга, персона, файл). `go test -count=1 ./src/` зелёный, `node --check` OK, APK-ассеты (`static/js/admin.js`, `static/css/admin.css`) синхронизированы, оба контейнера и nginx перезапущены и оставлены запущенными.
+- **Кнопка «Поиск по федерации» + инфраструктура из 2 инстансов**: 
+  - Бэкенд `src/federation.go`: `POST /api/v1/admin/federation/search` (admin only) — перебирает `api_neighbours`, расшифровывает пароль (`NeighbourCrypto`), логинится на соседе (JWT, роль `server`), шлёт `POST /api/v1/server/search`. TLS: `server_cert` соседа добавляется в trust pool (самоподписанный), `client_cert` (combined PEM cert+key) — для mutual TLS. Ответ `{neighbours, results:[{neighbour_id, url, error?, total, books:[{work_id, edition_id, author, title, year, formats}]}]}`, параллельность 3, таймаут 30с, `books` всегда массив.
+  - Фронтенд: кнопка «Поиск по федерации» на вкладке «Запросы» `/admin` (`templates/admin.html`), модалка с полями query/author/title/limit и рендер результатов по соседям (`static/js/admin.js`: `setupFederationSearch`/`openFederationSearchModal`/`renderFederationResults`), CSS `.fed-block`/`.fed-header`/`.fed-error` в `admin.css`. Для роли editor кнопка скрыта (admin only).
+  - Тест `TestFederationSearch` в `main_test.go`: мок-сосед (httptest) с login+search, проверка пустой/заполненной таблицы соседей, editor → 403; соседи из живой БД бэкапятся/восстанавливаются.
+  - Инфраструктура: вторая БД `library2` в том же кластере (bootstraп на хосте бинарником с `config2.toml`, где есть pg_dump для бэкапов миграций), контейнер `library-app2` на host-net порту 9092 (тот же образ `library-app:latest`, монтирование `config2.toml` + `bookarch2/tempfld2/logs2/backup2/apk2`), `config2.toml` (port=9092, dbname=library2, отдельный jwt_secret).
+  - nginx: `nginx-federation.conf` — два сайта с разными самоподписанными сертификатами `certres/site_a/` (CN=library-site-a) и `certres/site_b/` (CN=library-site-b): 443/444 → app1 (9091), 445 → app2 (9092); HTTP 80 → 301 HTTPS; форвард `X-Platform`.
+  - Интеграционное тестирование E2E: app1→app2 по `https://127.0.0.1:445` (книга «Понедельник начинается в субботу», Стругацкие, FB2) и app2→app1 по `https://127.0.0.1:444` (2 книги «Беседы…») — вход на соседа с ролью server через самоподписанный сертификат работает в обе стороны; вариант без совпадений возвращает `books: []`. Учётные записи для теста: `fed_admin1/fed_admin2` (admin, пароль `fed-admin-pass`) и `fed_server1/fed_server2` (server, `fed-server-pass`) на соответствующих БД; сосед на app1 → app2 (id=13), на app2 → app1 (id=1).
+  - Проверено: `go test -count=1 ./src/` зелёный, `node --check` OK, APK-ассеты (`admin.html`, `admin.js`, `admin.css`) синхронизированы, все эндпоинты отвечают (80→301, 443/444/445→401, 9091/9092→200), оба контейнера и nginx оставлены запущенными.
 - **Favicon и иконка APK на основе `tmp/book.svg`**: SVG — «стоящая книга» (Inkscape, viewBox 0 0 841.89 595.28, встроенный BMP-«обложка» + векторные тёмные контуры #1b1918, видимый арт 613x1066 на прозрачном фоне). Установлены `librsvg2-bin` (`rsvg-convert`) и `imagemagick` (через `apt`; `pip`/pypi недоступен 403, npm ок). Из арта собраны: (1) `static/favicon.ico` — многоразмерный ICO 16/32/48/64 на белом фоне, арт на 82%; (2) `static/favicon.svg` — квадрат 64x64 с встроенным PNG base64 (браузеры отдают предпочтение SVG); (3) легаси-иконки `mipmap-*dpi/ic_launcher.png` 48/72/96/144/192; (4) адаптивные иконки API 26+: новые `mipmap-*dpi/ic_launcher_fg.png` 108/162/216/324/432 (арт на 55% — в безопасной зоне), `drawable/ic_launcher_foreground.xml` переведён на `<bitmap android:src="@mipmap/ic_launcher_fg">`, `ic_launcher_background.xml` залит белым (#ffffff) вместо #3a3a3a. Все favicon-файлы синхронизированы в APK-ассеты (`assets/www/` и `assets/www/static/`). Проверено: `go test ./src/...` зелёный, `identify` по всем mipmap верен, сервер отдаёт `/static/favicon.ico` 200 (13094 b) и `/static/favicon.svg` 200 (2940 b) через https.
 - **Исправлен пропущенный слой в иконках**: встроенный BMP-«обложка» в `tmp/book.svg` имел alpha=0 у всех 156 792 пикселей (файл 564x278, 32bpp BGRA, все байты alpha нулевые) — rsvg-convert рендерил его как полностью прозрачный, поэтому на иконках была только тёмная векторная «стоящая книга» без изображения книги на фоне. Исправление: декодирован BMP, alpha принудительно выставлен в 255, переупакован в PNG base64 и подставлен в SVG (`book_fixed`), рендер стал 872x1066 (включая обложку). Все иконки перегенерированы из исправленного рендера: `static/favicon.ico` (24358 b), `static/favicon.svg` (4252 b), все `mipmap-*` и `ic_launcher_fg`. Синхронизировано в APK-ассеты. Проверено ASCII-визуализацией: на иконке видны и обложка (рисунок открытой книги), и векторный силуэт; `go test ./src/...` зелёный; сервер отдаёт новые файлы 200.
 - **Восстановлен доступ к серверу**: nginx-контейнер `library-nginx` упал с `host not found in upstream "app"` — конфиг `nginx.conf` проксирует на docker-compose имя `app:8080`, а standalone-приложение работает на host-сети на порту 9091. Создан `nginx-standalone.conf` (proxy на `127.0.0.1:9091`, форвард `X-Platform`) и nginx перезапущен в `--net=host`. Проверено: `https://localhost/` → 200, HTTP → 301 HTTPS, логин через HTTPS OK, `/admin` → 200, детекция android через прокси работает, `rlCreateFromTextBtn` отдаётся.

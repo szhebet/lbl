@@ -15,8 +15,8 @@
         <h1 style="margin-bottom:20px">Управление</h1>
 
         <div class="admin-tabs">
-            <button class="admin-tab active" data-tab="users" data-short="П">Пользователи</button>
-            <button class="admin-tab" data-tab="authors" data-short="А">Авторы</button>
+            <a href="/administer" class="admin-nav-link" data-short="П" title="Администрирование">Администрирование</a>
+            <button class="admin-tab active" data-tab="authors" data-short="А">Авторы</button>
             <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
             <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
             <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
@@ -26,28 +26,7 @@
             <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
         </div>
 
-        <div id="tab-users" class="admin-content active">
-            <div class="admin-toolbar">
-                <button id="addUserBtn" class="btn">+ Создать пользователя</button>
-                <input type="text" class="filter-input" id="filter-users" placeholder="Фильтр: имя, email, роль...">
-            </div>
-            <div class="pagination" id="usersPaginationTop"></div>
-            <table class="admin-table" id="table-users">
-                <thead><tr>
-                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
-                    <th data-sort="username">Имя пользователя<span class="sort-arrow"></span></th>
-                    <th data-sort="email">Email<span class="sort-arrow"></span></th>
-                    <th data-sort="role">Роль<span class="sort-arrow"></span></th>
-                    <th data-sort="parent_names">Родитель<span class="sort-arrow"></span></th>
-                    <th data-sort="created_at">Создан<span class="sort-arrow"></span></th>
-                    <th class="actions">Действия</th>
-                </tr></thead>
-                <tbody id="usersTableBody"></tbody>
-            </table>
-            <div class="pagination" id="usersPagination"></div>
-        </div>
-
-        <div id="tab-authors" class="admin-content">
+        <div id="tab-authors" class="admin-content active">
             <div class="admin-toolbar">
                 <button id="addAuthorBtn" class="btn">+ Создать автора</button>
                 <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним...">
@@ -142,6 +121,7 @@
                     <option value="yes">Скрытые: Да</option>
                     <option value="all">Скрытые: Все</option>
                 </select>
+                <button class="btn" id="federationSearchBtn" title="Найти книги в каталогах соседних серверов (вкладка «Серверы» в Администрировании)">Поиск 1й круг</button>
             </div>
             <div id="suggestionsTableContainer"><div class="loading">Загрузка...</div></div>
         </div>
@@ -323,6 +303,24 @@
                 </div>
             </form>
             <div id="suggestImportResult" class="upload-result"></div>
+        </div>
+    </div>
+
+    <div id="fedConflictModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="fedConflictTitle">Конфликт идентификаторов</h2>
+                <button class="modal-close" onclick="closeFedConflictModal()">&times;</button>
+            </div>
+            <div id="fedConflictBody" class="modal-body">
+                <div id="fedConflictMessage" class="fed-conflict-message"></div>
+                <div id="fedConflictFound" class="fed-conflict-found"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" id="fedConflictOverwriteBtn" onclick="fedConflictResolve('overwrite')">Перезаписать</button>
+                <button type="button" class="btn" id="fedConflictCreateBtn" onclick="fedConflictResolve('create_new')">Создать новую</button>
+                <button type="button" class="btn btn-secondary" onclick="closeFedConflictModal()">Отменить</button>
+            </div>
         </div>
     </div>
 

@@ -2,6 +2,8 @@
 .admin-tab { padding: 10px 20px; border: none; background: transparent; cursor: pointer; font-size: 15px; border-radius: 6px; color: #666; transition: all 0.3s ease; }
 .admin-tab:hover { background: #e0e0e0; }
 .admin-tab.active { background: #3498db; color: #fff; }
+.admin-nav-link { padding: 10px 20px; border: none; background: transparent; cursor: pointer; font-size: 15px; border-radius: 6px; color: #3498db; text-decoration: none; display: inline-flex; align-items: center; transition: all 0.3s ease; }
+.admin-nav-link:hover { background: #e0e0e0; }
 .admin-content { display: none; }
 .admin-content.active { display: block; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -44,6 +46,16 @@
 .rl-text-work { width: 90px; }
 .rl-text-empty { color: #999; font-style: italic; }
 #adminModal.rl-modal-wide .modal-content { max-width: 1100px; width: 95%; }
+#adminModal.rl-modal-extra-wide .modal-content { max-width: 1500px; width: 96%; }
+#adminModal.rl-modal-extra-wide .modal-body { overflow-y: auto; }
+.fed-results-scroll { max-height: 50vh; overflow-y: auto; border: 1px solid #eee; border-radius: 4px; }
+.fed-result-num { width: 40px; text-align: center; color: #888; }
+.fed-conflict-message { margin-bottom: 10px; }
+.fed-conflict-message table { margin-top: 8px; }
+.fed-conflict-message table td:first-child { font-weight: 600; width: 220px; color: #555; }
+.fed-conflict-collisions { margin-top: 8px; color: #c0392b; font-size: 13px; }
+.fed-conflict-found-box { background: #fdf3e7; border: 1px solid #f5cba7; border-radius: 4px; padding: 8px 10px; margin-top: 6px; font-size: 13px; }
+#fedConflictModal .modal-content { max-width: 640px; width: 94%; }
 .rl-text-result-table th, .rl-text-result-table td { cursor: default; }
 .rl-text-author-cell { position: relative; }
 .rl-text-author-cell .rl-text-author-input { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
@@ -61,6 +73,7 @@
 .badge-role { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ecf0f1; color: #555; }
 .badge-role.admin { background: #e74c3c; color: #fff; }
 .badge-role.editor { background: #3498db; color: #fff; }
+.badge-role.server { background: #16a085; color: #fff; }
 .admin-tab[data-tab="import"] { background: #27ae60; color: #fff; font-weight: 600; }
 .admin-tab[data-tab="import"]:hover { background: #219a52; }
 .admin-tab[data-tab="import"].active { background: #3498db; color: #fff; }
@@ -166,4 +179,65 @@
     color: #888;
     font-style: italic;
     padding: 20px;
+}
+.fed-block {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: #f9f9f9;
+}
+.fed-header {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+.fed-error {
+    color: #c0392b;
+    font-weight: 600;
+    margin-left: 6px;
+}
+.fed-block .admin-table {
+    margin: 0;
+    background: #fff;
+}
+.fed-extra {
+    margin-top: 8px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.fed-extra .form-group {
+    margin-bottom: 8px;
+}
+.fed-result-table {
+    margin-top: 12px;
+    width: 100%;
+}
+.fed-result-table th:last-child {
+    width: 110px;
+}
+.fed-errors {
+    margin-top: 10px;
+}
+.fed-import-status {
+    font-size: 13px;
+    margin-top: 4px;
+}
+.fed-import-ok {
+    color: #27ae60;
+}
+.fed-import-dup {
+    color: #b7950b;
+}
+.fed-import-error {
+    color: #c0392b;
+}
+.btn.test-ok {
+    background: #27ae60;
+    color: #fff;
+}
+.btn.test-fail {
+    background: #c0392b;
+    color: #fff;
 }

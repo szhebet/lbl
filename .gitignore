@@ -12,7 +12,7 @@ library_app
 .env
 task.txt
 nohup.out
-temp*
+tempfld
 tmp
 
 # Backup files
@@ -41,4 +41,12 @@ certres/*.der
 certres/*.srl
 certres/android.keystore
 *.pem
+certres/fed/
 
+#test deployment
+apk2/
+backup2/
+bookarch2/
+config2.toml
+nginx-federation.conf
+.opencode/

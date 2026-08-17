@@ -174,6 +174,19 @@ func adminOnlyMiddleware() gin.HandlerFunc {
 	}
 }
 
+// serverOnlyMiddleware restricts a route group to machine accounts with the
+// "server" role (peer-library servers exchanging search requests).
+func serverOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("role")
+		if role != "server" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Доступ только для роли server"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func getUserBook(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, _ := c.Get("user_id")
@@ -213,9 +226,9 @@ func setUserBook(db *sql.DB) gin.HandlerFunc {
 		}
 		editionID := c.Param("edition_id")
 		var req struct {
-			Status   string  `json:"status"`
-			Review   *string `json:"review"`
-			Rating   *int    `json:"rating"`
+			Status string  `json:"status"`
+			Review *string `json:"review"`
+			Rating *int    `json:"rating"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -521,28 +534,28 @@ func createReadListItem(db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-	if req.Listname == "" {
-		req.Listname = "default"
-	}
-	if !validReadListStatuses[req.Status] {
-		req.Status = "Не заполнено"
-	}
-	if !validLookingFor[req.LookingFor] {
-		req.LookingFor = "Нет"
-	}
+		if req.Listname == "" {
+			req.Listname = "default"
+		}
+		if !validReadListStatuses[req.Status] {
+			req.Status = "Не заполнено"
+		}
+		if !validLookingFor[req.LookingFor] {
+			req.LookingFor = "Нет"
+		}
 
-	// Default priority: max priority of non-deleted, non-finished items + 1
-	if req.Priority <= 0 {
-		var maxPriority int
-		db.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM read_list WHERE user_id = $1 AND deleted = false AND status != 'Прочитано'", uid).Scan(&maxPriority)
-		req.Priority = maxPriority + 1
-	}
+		// Default priority: max priority of non-deleted, non-finished items + 1
+		if req.Priority <= 0 {
+			var maxPriority int
+			db.QueryRow("SELECT COALESCE(MAX(priority), 0) FROM read_list WHERE user_id = $1 AND deleted = false AND status != 'Прочитано'", uid).Scan(&maxPriority)
+			req.Priority = maxPriority + 1
+		}
 
-	// Use client-provided UUID or generate one on server
-	itemID := req.ID
-	if itemID == "" {
-		itemID = mustGenerateUUID()
-	}
+		// Use client-provided UUID or generate one on server
+		itemID := req.ID
+		if itemID == "" {
+			itemID = mustGenerateUUID()
+		}
 
 		var item ReadListItem
 		var editionID sql.NullInt64

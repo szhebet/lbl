@@ -43,7 +43,7 @@ function shouldCache(url) {
 
 function isNavigation(url) {
   var p = url.pathname;
-  return p === '/' || p === '' || p === '/admin' || p === '/admin/';
+  return p === '/' || p === '' || p === '/admin' || p === '/admin/' || p === '/administer' || p === '/administer/';
 }
 
 self.addEventListener('fetch', function(e) {
