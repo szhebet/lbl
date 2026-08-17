@@ -613,11 +613,44 @@ body.android .admin-tab.active::before {
     display: none;
 }
 
+body.android .admin-nav-link {
+    font-size: 0;
+    line-height: 0;
+    padding: 8px 10px;
+    flex: 1 1 auto;
+    text-align: center;
+    min-height: 44px;
+    color: #3498db;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+body.android .admin-nav-link::before {
+    content: attr(data-short);
+    font-size: 13px;
+    line-height: normal;
+    font-weight: 600;
+}
+
 /* Reading programs tab is not shown inside the Android app */
 body.android .admin-tab[data-tab="readlists"] {
     display: none;
 }
 body.android #tab-readlists {
+    display: none;
+}
+
+/* Peer-servers tab is not shown inside the Android app */
+body.android .admin-tab[data-tab="neighbours"] {
+    display: none;
+}
+body.android #tab-neighbours {
+    display: none;
+}
+
+/* Federated search ("Поиск 1й круг") is web-only – hidden inside the Android app */
+body.android #federationSearchBtn {
     display: none;
 }
 

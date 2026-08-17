@@ -1,18 +1,27 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"bytes"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,10 +104,10 @@ func TestGetBooks(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var response struct {
-		Total  int            `json:"total"`
-		Limit  int         `json:"limit"`
-		Offset string         `json:"offset"`
-		Books  []BookDetails  `json:"books"`
+		Total  int           `json:"total"`
+		Limit  int           `json:"limit"`
+		Offset string        `json:"offset"`
+		Books  []BookDetails `json:"books"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
@@ -198,7 +207,7 @@ func TestGetBook(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  int        `json:"limit"`
+		Limit  int           `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
@@ -245,13 +254,13 @@ func TestCreateBook(t *testing.T) {
 
 	// Create first book
 	newBook1 := CreateBookRequest{
-		Title:       "Test Book Part 1",
-		Author:      "Multi Author",
-		ISBN:        "1234567890123",
+		Title:         "Test Book Part 1",
+		Author:        "Multi Author",
+		ISBN:          "1234567890123",
 		PublishedYear: 2023,
-		Genre:       "Test",
-		Description: "First test book created via API",
-		Language:    "eng",
+		Genre:         "Test",
+		Description:   "First test book created via API",
+		Language:      "eng",
 	}
 
 	bookJSON1, _ := json.Marshal(newBook1)
@@ -271,13 +280,13 @@ func TestCreateBook(t *testing.T) {
 
 	// Create second book with SAME author - should reuse existing author
 	newBook2 := CreateBookRequest{
-		Title:       "Test Book Part 2",
-		Author:      "Multi Author",
-		ISBN:        "1234567890124",
+		Title:         "Test Book Part 2",
+		Author:        "Multi Author",
+		ISBN:          "1234567890124",
 		PublishedYear: 2024,
-		Genre:       "Test",
-		Description: "Second test book created via API",
-		Language:    "eng",
+		Genre:         "Test",
+		Description:   "Second test book created via API",
+		Language:      "eng",
 	}
 
 	bookJSON2, _ := json.Marshal(newBook2)
@@ -329,13 +338,13 @@ func TestUpdateBook(t *testing.T) {
 
 	// First, create a book to update
 	newBook := CreateBookRequest{
-		Title:       "Book to Update",
-		Author:      "Updater",
-		ISBN:        "9876543210987",
+		Title:         "Book to Update",
+		Author:        "Updater",
+		ISBN:          "9876543210987",
 		PublishedYear: 2022,
-		Genre:       "Update Test",
-		Description: "A book that will be updated",
-		Language:    "eng",
+		Genre:         "Update Test",
+		Description:   "A book that will be updated",
+		Language:      "eng",
 	}
 
 	bookJSON, _ := json.Marshal(newBook)
@@ -401,13 +410,13 @@ func TestDeleteBook(t *testing.T) {
 
 	// First, create a book to delete
 	newBook := CreateBookRequest{
-		Title:       "Book to Delete",
-		Author:      "Deleter",
-		ISBN:        "1111111111111",
+		Title:         "Book to Delete",
+		Author:        "Deleter",
+		ISBN:          "1111111111111",
 		PublishedYear: 2021,
-		Genre:       "Delete Test",
-		Description: "A book that will be deleted",
-		Language:    "eng",
+		Genre:         "Delete Test",
+		Description:   "A book that will be deleted",
+		Language:      "eng",
 	}
 
 	bookJSON, _ := json.Marshal(newBook)
@@ -460,9 +469,9 @@ func TestUpdateBookExtended(t *testing.T) {
 
 	// Create a test book first
 	newBook := CreateBookRequest{
-		Title:       "Original Title",
-		Author:      "Original Author",
-		Language:    "eng",
+		Title:    "Original Title",
+		Author:   "Original Author",
+		Language: "eng",
 	}
 	bookJSON, _ := json.Marshal(newBook)
 	req, _ := http.NewRequest("POST", "/api/v1/books", nil)
@@ -484,9 +493,9 @@ func TestUpdateBookExtended(t *testing.T) {
 			"original_title": "Updated Title",
 		},
 		"edition": map[string]interface{}{},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON1, _ := json.Marshal(updateReq1)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -507,11 +516,11 @@ func TestUpdateBookExtended(t *testing.T) {
 
 	// Test 2: Update year (edition)
 	updateReq2 := map[string]interface{}{
-		"work":     map[string]interface{}{},
+		"work":    map[string]interface{}{},
 		"edition": map[string]interface{}{"year": 2025},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON2, _ := json.Marshal(updateReq2)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -536,9 +545,9 @@ func TestUpdateBookExtended(t *testing.T) {
 			"annotation": "New annotation text",
 		},
 		"edition": map[string]interface{}{},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON3, _ := json.Marshal(updateReq3)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -570,11 +579,11 @@ func TestUpdateBookExtended(t *testing.T) {
 	assert.NoError(t, err)
 
 	updateReq4 := map[string]interface{}{
-		"work":     map[string]interface{}{},
-		"edition":  map[string]interface{}{},
-		"authors":  []map[string]interface{}{{"id": newAuthorID, "role": "author"}},
-		"genres":   []int{},
-		"tags":     []int{},
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{{"id": newAuthorID, "role": "author"}},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON4, _ := json.Marshal(updateReq4)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -638,10 +647,10 @@ func TestUpdateBookExtendedPreservesUniqueFields(t *testing.T) {
 		"work": map[string]interface{}{
 			"original_title": "Updated Title Only",
 		},
-		"edition":  map[string]interface{}{},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON, _ := json.Marshal(updateReq)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -709,10 +718,10 @@ func TestUpdateBookExtendedWithEmptyUniqueFields(t *testing.T) {
 		"work": map[string]interface{}{
 			"original_title": "Updated Title Empty ISBN",
 		},
-		"edition":  map[string]interface{}{},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"edition": map[string]interface{}{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON, _ := json.Marshal(updateReq)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -786,11 +795,11 @@ func TestUpdateBookExtendedDuplicateISBN(t *testing.T) {
 
 	// Try to set same ISBN on book2 - should fail
 	updateReq := map[string]interface{}{
-		"work":     map[string]interface{}{},
-		"edition":  map[string]interface{}{"isbn": isbnValue},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"work":    map[string]interface{}{},
+		"edition": map[string]interface{}{"isbn": isbnValue},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON, _ := json.Marshal(updateReq)
 	req, _ := http.NewRequest("PUT", "/books/"+strconv.Itoa(book2.EditionID)+"/extended", nil)
@@ -844,9 +853,9 @@ func TestUpdateBookExtendedTitleChange(t *testing.T) {
 		"edition": map[string]interface{}{
 			"title": "New Edition Title",
 		},
-		"authors":  []map[string]interface{}{},
-		"genres":   []int{},
-		"tags":     []int{},
+		"authors": []map[string]interface{}{},
+		"genres":  []int{},
+		"tags":    []int{},
 	}
 	updateJSON, _ := json.Marshal(updateReq)
 	req, _ = http.NewRequest("PUT", "/books/"+strconv.Itoa(editionID)+"/extended", nil)
@@ -1074,7 +1083,7 @@ func TestSearchBooks(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  int        `json:"limit"`
+		Limit  int           `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
@@ -1100,7 +1109,7 @@ func TestSearchBooksWithFilters(t *testing.T) {
 
 	var response struct {
 		Total  int           `json:"total"`
-		Limit  int        `json:"limit"`
+		Limit  int           `json:"limit"`
 		Offset string        `json:"offset"`
 		Books  []BookDetails `json:"books"`
 	}
@@ -1262,11 +1271,11 @@ func TestGetAuthors(t *testing.T) {
 
 	var response struct {
 		Authors       []AuthorWithBooks `json:"authors"`
-		Total         int              `json:"total"`
-		Page          int              `json:"page"`
-		Limit         int              `json:"limit"`
-		TotalWorks    int              `json:"total_works"`
-		TotalEditions int              `json:"total_editions"`
+		Total         int               `json:"total"`
+		Page          int               `json:"page"`
+		Limit         int               `json:"limit"`
+		TotalWorks    int               `json:"total_works"`
+		TotalEditions int               `json:"total_editions"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(t, err)
@@ -3142,7 +3151,7 @@ func TestReadListSyncConflictServerNewer(t *testing.T) {
 	require.Equal(t, http.StatusConflict, w3.Code, "stale update must return 409")
 
 	var conflictResp struct {
-		Error      string       `json:"error"`
+		Error      string        `json:"error"`
 		ServerItem *ReadListItem `json:"server_item"`
 	}
 	err = json.Unmarshal(w3.Body.Bytes(), &conflictResp)
@@ -3286,7 +3295,7 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 
 	var listResp struct {
 		Total int              `json:"total"`
-		Items []SuggestionItem  `json:"items"`
+		Items []SuggestionItem `json:"items"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &listResp)
 	require.NoError(t, err)
@@ -3296,9 +3305,15 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 	found2 := false
 	found3 := false
 	for _, item := range listResp.Items {
-		if item.ReadListID == rlID1 { found1 = true }
-		if item.ReadListID == rlID2 { found2 = true }
-		if item.ReadListID == rlID3 { found3 = true }
+		if item.ReadListID == rlID1 {
+			found1 = true
+		}
+		if item.ReadListID == rlID2 {
+			found2 = true
+		}
+		if item.ReadListID == rlID3 {
+			found3 = true
+		}
 	}
 	assert.True(t, found1, "rlID1 should appear (looking_for = 'Да, локально')")
 	assert.True(t, found2, "rlID2 should appear (looking_for = 'Да, по федерации')")
@@ -3332,8 +3347,12 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 	found1 = false
 	found2 = false
 	for _, item := range listResp.Items {
-		if item.ReadListID == rlID1 { found1 = true }
-		if item.ReadListID == rlID2 { found2 = true }
+		if item.ReadListID == rlID1 {
+			found1 = true
+		}
+		if item.ReadListID == rlID2 {
+			found2 = true
+		}
 	}
 	assert.False(t, found1, "rlID1 should NOT appear after hide (hidden=no)")
 	assert.True(t, found2, "rlID2 should still appear")
@@ -3360,7 +3379,9 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 				assert.True(t, *item.SuggHidden, "rlID1 should be hidden")
 			}
 		}
-		if item.ReadListID == rlID2 { found2 = true }
+		if item.ReadListID == rlID2 {
+			found2 = true
+		}
 	}
 	assert.True(t, found1, "rlID1 should appear (hidden=yes)")
 	assert.False(t, found2, "rlID2 should NOT appear (hidden=yes)")
@@ -3378,8 +3399,12 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 	found1 = false
 	found2 = false
 	for _, item := range listResp.Items {
-		if item.ReadListID == rlID1 { found1 = true }
-		if item.ReadListID == rlID2 { found2 = true }
+		if item.ReadListID == rlID1 {
+			found1 = true
+		}
+		if item.ReadListID == rlID2 {
+			found2 = true
+		}
 	}
 	assert.True(t, found1, "rlID1 should appear (hidden=all)")
 	assert.True(t, found2, "rlID2 should appear (hidden=all)")
@@ -3421,3 +3446,1457 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(listResp.Items), "no hidden items after deleting the only suggestion")
 }
+
+func TestNeighboursCRUD(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create a test admin user
+	uname := "nbr_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+
+	adminToken := generateToken(adminID, uname, "admin")
+	require.NotEmpty(t, adminToken)
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	// Register the admin group exactly like main.go does.
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		adminNeighbours := admin.Group("/neighbours")
+		adminNeighbours.Use(adminOnlyMiddleware())
+		{
+			adminNeighbours.GET("", adminGetNeighbours(db))
+			adminNeighbours.GET("/:id", adminGetNeighbour(db))
+			adminNeighbours.POST("", adminCreateNeighbour(db, nc))
+			adminNeighbours.PUT("/:id", adminUpdateNeighbour(db, nc))
+			adminNeighbours.DELETE("/:id", adminDeleteNeighbour(db))
+		}
+	}
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// ── Create ──
+	createBody := map[string]string{
+		"url":         "https://peer.example.com",
+		"server_cert": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+		"client_cert": "-----BEGIN CERTIFICATE-----\nCLI\n-----END CERTIFICATE-----",
+		"username":    "syncuser",
+		"password":    "s3cr3t-pass",
+	}
+	bodyJSON, _ := json.Marshal(createBody)
+	req, _ := http.NewRequest("POST", "/api/v1/admin/neighbours", bytes.NewReader(bodyJSON))
+	auth(req)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, "create failed: %s", w.Body.String())
+
+	var created struct {
+		ID int `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.Greater(t, created.ID, 0)
+	defer db.Exec("DELETE FROM api_neighbours WHERE id = $1", created.ID)
+
+	// Verify password stored encrypted (different from plaintext, decryptable).
+	var enc string
+	err = db.QueryRow(`SELECT password_encrypted FROM api_neighbours WHERE id = $1`, created.ID).Scan(&enc)
+	require.NoError(t, err)
+	assert.NotEqual(t, "s3cr3t-pass", enc, "password must be encrypted at rest")
+	plain, err := nc.Decrypt(enc)
+	require.NoError(t, err)
+	assert.Equal(t, "s3cr3t-pass", plain)
+
+	// ── GET: has_password=true, no password/cert leak beyond certs ──
+	req, _ = http.NewRequest("GET", "/api/v1/admin/neighbours", nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var list []Neighbour
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	var found *Neighbour
+	for i := range list {
+		if list[i].ID == created.ID {
+			found = &list[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "created neighbour must appear in GET list")
+	assert.Equal(t, "https://peer.example.com", found.URL)
+	assert.Equal(t, "syncuser", found.Username)
+	assert.True(t, found.HasPassword)
+	assert.Contains(t, found.ServerCert, "BEGIN CERTIFICATE")
+	assert.NotContains(t, w.Body.String(), "s3cr3t-pass", "plaintext password must not appear in response")
+	assert.NotContains(t, w.Body.String(), "password_encrypted")
+
+	// ── GET single: prefills the edit form, no password leak ──
+	req, _ = http.NewRequest("GET", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "get one failed: %s", w.Body.String())
+	var one Neighbour
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &one))
+	assert.Equal(t, created.ID, one.ID)
+	assert.Equal(t, "https://peer.example.com", one.URL)
+	assert.Equal(t, "syncuser", one.Username)
+	assert.True(t, one.HasPassword)
+	assert.Contains(t, one.ServerCert, "BEGIN CERTIFICATE")
+	assert.Contains(t, one.ClientCert, "BEGIN CERTIFICATE")
+	assert.NotContains(t, w.Body.String(), "s3cr3t-pass", "plaintext password must not leak on GET single")
+
+	// GET single of a missing id → 404
+	req, _ = http.NewRequest("GET", "/api/v1/admin/neighbours/9999999", nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	// ── PUT: change password + url ──
+	updateBody := map[string]interface{}{
+		"url":            "https://peer2.example.com",
+		"username":       "syncuser2",
+		"password":       "new-pass-42",
+		"clear_password": false,
+	}
+	bodyJSON, _ = json.Marshal(updateBody)
+	req, _ = http.NewRequest("PUT", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), bytes.NewReader(bodyJSON))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "update failed: %s", w.Body.String())
+
+	err = db.QueryRow(`SELECT password_encrypted FROM api_neighbours WHERE id = $1`, created.ID).Scan(&enc)
+	require.NoError(t, err)
+	plain, err = nc.Decrypt(enc)
+	require.NoError(t, err)
+	assert.Equal(t, "new-pass-42", plain)
+
+	// ── PUT: clear_password removes the password ──
+	clearBody := map[string]interface{}{
+		"url":            "https://peer2.example.com",
+		"clear_password": true,
+	}
+	bodyJSON, _ = json.Marshal(clearBody)
+	req, _ = http.NewRequest("PUT", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), bytes.NewReader(bodyJSON))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	err = db.QueryRow(`SELECT password_encrypted FROM api_neighbours WHERE id = $1`, created.ID).Scan(&enc)
+	require.NoError(t, err)
+	assert.Equal(t, "", enc, "clear_password must wipe the stored password")
+
+	// ── DELETE ──
+	req, _ = http.NewRequest("DELETE", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var cnt int
+	err = db.QueryRow(`SELECT COUNT(*) FROM api_neighbours WHERE id = $1`, created.ID).Scan(&cnt)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cnt)
+}
+
+func TestNeighboursAdminOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Editor (not admin) must be rejected by adminOnlyMiddleware.
+	uname := "nbr_editor_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var editorID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'editor') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&editorID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", editorID)
+
+	editorToken := generateToken(editorID, uname, "editor")
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "editor")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		adminNeighbours := admin.Group("/neighbours")
+		adminNeighbours.Use(adminOnlyMiddleware())
+		{
+			adminNeighbours.GET("", adminGetNeighbours(db))
+		}
+	}
+
+	req, _ := http.NewRequest("GET", "/api/v1/admin/neighbours", nil)
+	req.Header.Set("Authorization", "Bearer "+editorToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRegisterServerRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Registration with role=server must create a server account and return a
+	// token whose claims carry the server role.
+	uname := "srv_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	regBody := map[string]string{
+		"username": uname,
+		"password": "secret123",
+		"role":     "server",
+	}
+	bodyJSON, _ := json.Marshal(regBody)
+	req, _ := http.NewRequest("POST", "/api/v1/auth/register", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+	r.POST("/api/v1/auth/register", createUser(db))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, "register failed: %s", w.Body.String())
+
+	var resp AuthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "server", resp.User.Role)
+	require.NotEmpty(t, resp.Token)
+	claims, err := validateToken(resp.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "server", claims["role"])
+
+	// Cleanup
+	db.Exec("DELETE FROM users WHERE username = $1", uname)
+
+	// editor/admin must NOT be self-registrable.
+	for _, bad := range []string{"editor", "admin"} {
+		badBody, _ := json.Marshal(map[string]string{
+			"username": uname + "_" + bad, "password": "secret123", "role": bad,
+		})
+		req2, _ := http.NewRequest("POST", "/api/v1/auth/register", bytes.NewReader(badBody))
+		req2.Header.Set("Content-Type", "application/json")
+		w2 := httptest.NewRecorder()
+		r.ServeHTTP(w2, req2)
+		require.Equal(t, http.StatusBadRequest, w2.Code, "role %s must not be self-registrable", bad)
+	}
+}
+
+func TestServerSearchAPIAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Create a server-role account.
+	uname := "srv_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var srvID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'server') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&srvID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", srvID)
+
+	// Create a viewer account (must be rejected).
+	vname := "vw_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var viewerID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'viewer') RETURNING id`,
+		vname, "$2a$10$dummyhash").Scan(&viewerID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", viewerID)
+
+	srvToken := generateToken(srvID, uname, "server")
+	viewerToken := generateToken(viewerID, vname, "viewer")
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+	srv := r.Group("/api/v1/server")
+	srv.Use(requireAuthMiddleware(), serverOnlyMiddleware())
+	{
+		srv.GET("/ping", serverPing())
+		srv.POST("/search", serverSearchBooks(db))
+	}
+
+	// Ping with server role → 200.
+	req, _ := http.NewRequest("GET", "/api/v1/server/ping", nil)
+	req.Header.Set("Authorization", "Bearer "+srvToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var pingResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &pingResp))
+	assert.Equal(t, true, pingResp["ok"])
+
+	// Ping with viewer role → 403.
+	req, _ = http.NewRequest("GET", "/api/v1/server/ping", nil)
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code)
+
+	// Ping without token → 401.
+	req, _ = http.NewRequest("GET", "/api/v1/server/ping", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// Search with an empty body → 400.
+	req, _ = http.NewRequest("POST", "/api/v1/server/search", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+srvToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Search with a title that definitely exists in the test library.
+	req, _ = http.NewRequest("POST", "/api/v1/server/search",
+		bytes.NewReader([]byte(`{"title":"Test Book"}`)))
+	req.Header.Set("Authorization", "Bearer "+srvToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "search failed: %s", w.Body.String())
+
+	var searchResp struct {
+		Total int          `json:"total"`
+		Books []ServerBook `json:"books"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &searchResp))
+	require.GreaterOrEqual(t, searchResp.Total, 1, "expected at least one match")
+	for _, b := range searchResp.Books {
+		assert.NotEmpty(t, b.Title)
+		assert.Greater(t, b.EditionID, 0)
+	}
+}
+
+// TestServerMetadataAPINullFields covers a regression where serverBookMetadata
+// failed with "converting NULL to string is unsupported" whenever an edition
+// had NULL metadata columns (isbn, language, publisher, …) or a file with
+// NULL file_size/file_hash.
+func TestServerMetadataAPINullFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Work + edition with most metadata left NULL, file with NULL size/hash.
+	var workID, editionID, fileID, personID int
+	require.NoError(t, db.QueryRow(
+		`INSERT INTO works (original_title) VALUES ('Книга с NULL-полями') RETURNING id`).Scan(&workID))
+	require.NoError(t, db.QueryRow(
+		`INSERT INTO editions (work_id, title) VALUES ($1, 'Издание с NULL') RETURNING id`, workID).Scan(&editionID))
+	require.NoError(t, db.QueryRow(
+		`INSERT INTO persons (last_name) VALUES ('Фамилия') RETURNING id`).Scan(&personID))
+	_, err := db.Exec(`INSERT INTO work_contributors (work_id, person_id, role) VALUES ($1, $2, 'author')`, workID, personID)
+	require.NoError(t, err)
+	require.NoError(t, db.QueryRow(
+		`INSERT INTO edition_files (edition_id, format_id, file_path)
+		 VALUES ($1, 1, '/tmp/nonexistent.fb2') RETURNING id`, editionID).Scan(&fileID))
+	defer func() {
+		db.Exec(`DELETE FROM edition_files WHERE id = $1`, fileID)
+		db.Exec(`DELETE FROM work_contributors WHERE work_id = $1`, workID)
+		db.Exec(`DELETE FROM editions WHERE id = $1`, editionID)
+		db.Exec(`DELETE FROM works WHERE id = $1`, workID)
+		db.Exec(`DELETE FROM persons WHERE id = $1`, personID)
+	}()
+
+	// Server-role account.
+	uname := "srv_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var srvID int
+	require.NoError(t, db.QueryRow(
+		`INSERT INTO users (username, password_hash, role)
+		 VALUES ($1, $2, 'server') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&srvID))
+	defer db.Exec("DELETE FROM users WHERE id = $1", srvID)
+	srvToken := generateToken(srvID, uname, "server")
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Next()
+	})
+	srv := r.Group("/api/v1/server")
+	srv.Use(requireAuthMiddleware(), serverOnlyMiddleware())
+	srv.GET("/metadata/:id", serverBookMetadata(db))
+
+	req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/server/metadata/%d", editionID), nil)
+	req.Header.Set("Authorization", "Bearer "+srvToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "metadata failed: %s", w.Body.String())
+
+	var meta fedBookMetadata
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &meta))
+	assert.Equal(t, editionID, meta.Edition.ID)
+	assert.Equal(t, workID, meta.Edition.WorkID)
+	assert.Equal(t, "Издание с NULL", meta.Edition.Title)
+	// All NULL columns must come back as empty strings, not JSON null.
+	assert.Empty(t, meta.Edition.ISBN)
+	assert.Empty(t, meta.Edition.Language)
+	assert.Empty(t, meta.Edition.Publisher)
+	assert.Empty(t, meta.Edition.Series)
+	assert.Nil(t, meta.Edition.Year)
+	assert.Equal(t, "Книга с NULL-полями", meta.Work.OriginalTitle)
+	require.Len(t, meta.Authors, 1)
+	assert.Equal(t, personID, meta.Authors[0].ID)
+	assert.Equal(t, "Фамилия", meta.Authors[0].LastName)
+	require.Len(t, meta.Files, 1)
+	assert.Equal(t, fileID, meta.Files[0].ID)
+	assert.Equal(t, int64(0), meta.Files[0].FileSize)
+	assert.Empty(t, meta.Files[0].FileHash)
+
+	// Non-existent edition → 404.
+	req, _ = http.NewRequest("GET", "/api/v1/server/metadata/999999999", nil)
+	req.Header.Set("Authorization", "Bearer "+srvToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func testSelfSignedCert(t *testing.T) string {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestFederationSearch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Admin token for the calling server.
+	uname := "fed_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	// Mock neighbour server that speaks the peer API.
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			var lr LoginRequest
+			json.NewDecoder(r.Body).Decode(&lr)
+			if lr.Username != "peeruser" || lr.Password != "peerpass" {
+				http.Error(w, `{"error":"bad creds"}`, http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"token": "peer-jwt",
+				"user":  map[string]interface{}{"username": "peeruser", "role": "server"},
+			})
+		case "/api/v1/server/search":
+			if r.Header.Get("Authorization") != "Bearer peer-jwt" {
+				http.Error(w, `{"error":"no auth"}`, http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"total": 1,
+				"books": []ServerBook{{WorkID: 5, EditionID: 9, Author: "Mock Author", Title: "Mock Book", Year: 2001, Formats: []string{"FB2"}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mock.Close()
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	// Snapshot existing neighbours and clear the table so the live neighbour
+	// (http://192.168.95.200:9091/) does not participate in this test.
+	backupRows, err := db.Query(
+		`SELECT id, url, COALESCE(server_cert,''), COALESCE(client_cert,''), COALESCE(username,''), COALESCE(password_encrypted,'')
+		 FROM api_neighbours`)
+	require.NoError(t, err)
+	type nBackup struct {
+		id         int
+		url        string
+		serverCert string
+		clientCert string
+		username   string
+		enc        string
+	}
+	var backups []nBackup
+	for backupRows.Next() {
+		var b nBackup
+		require.NoError(t, backupRows.Scan(&b.id, &b.url, &b.serverCert, &b.clientCert, &b.username, &b.enc))
+		backups = append(backups, b)
+	}
+	backupRows.Close()
+	_, err = db.Exec(`DELETE FROM api_neighbours`)
+	require.NoError(t, err)
+	restore := func() {
+		for _, b := range backups {
+			db.Exec(`INSERT INTO api_neighbours (id, url, server_cert, client_cert, username, password_encrypted)
+				VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET
+				url=$2, server_cert=$3, client_cert=$4, username=$5, password_encrypted=$6`,
+				b.id, b.url, b.serverCert, b.clientCert, b.username, b.enc)
+		}
+	}
+	defer restore()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/search", adminOnlyMiddleware(), adminFederationSearch(db, nc))
+	}
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// With zero neighbours → neighbours: 0, empty results.
+	req, _ := http.NewRequest("POST", "/api/v1/admin/federation/search",
+		bytes.NewReader([]byte(`{"title":"Mock"}`)))
+	auth(req)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var empty struct {
+		Neighbours int                `json:"neighbours"`
+		Results    []FederationResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &empty))
+	assert.Equal(t, 0, empty.Neighbours)
+	assert.Empty(t, empty.Results)
+
+	// Add a neighbour pointing at the mock server (password stored encrypted).
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var nid int
+	err = db.QueryRow(`
+		INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		mock.URL, testSelfSignedCert(t), "", "peeruser", encPass).Scan(&nid)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM api_neighbours WHERE id = $1", nid)
+
+	// Empty search body → 400.
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/search", bytes.NewReader([]byte(`{}`)))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Valid search → mock neighbour returns one book.
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/search?limit=20",
+		bytes.NewReader([]byte(`{"title":"Mock"}`)))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "federation search failed: %s", w.Body.String())
+
+	var resp struct {
+		Neighbours int                `json:"neighbours"`
+		Results    []FederationResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 1, resp.Neighbours)
+	require.Len(t, resp.Results, 1)
+	res := resp.Results[0]
+	assert.Equal(t, nid, res.NeighbourID)
+	assert.Empty(t, res.Error)
+	assert.Equal(t, 1, res.Total)
+	require.Len(t, res.Books, 1)
+	assert.Equal(t, "Mock Book", res.Books[0].Title)
+	assert.Equal(t, "Mock Author", res.Books[0].Author)
+
+	// Editor role must be rejected (admin-only route).
+	editorUname := "fed_editor_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var editorID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'editor') RETURNING id`,
+		editorUname, "$2a$10$dummyhash").Scan(&editorID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", editorID)
+	editorToken := generateToken(editorID, editorUname, "editor")
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/search",
+		bytes.NewReader([]byte(`{"title":"Mock"}`)))
+	req.Header.Set("Authorization", "Bearer "+editorToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code, "editor must not run federated search")
+}
+
+// ─── Federation: download + import, stop-on-first ─────────────
+
+// fedMock is a minimal neighbour that speaks the peer API and can serve a
+// downloadable book archive for import tests.
+type fedMock struct {
+	srv           *httptest.Server
+	searchHits    int32
+	downloadHits  int32
+	metadataHits  int32
+	pingHits      int32
+	metadataTitle string
+}
+
+func (m *fedMock) Close() { m.srv.Close() }
+
+func newFedMockNeighbour(title, author string, editionID int, bookData []byte) *fedMock {
+	// Default remote identifiers, large enough to never collide with the live
+	// library data used by the tests.
+	return newFedMockNeighbourMeta(title, author, editionID, 2_400_001, 2_400_002, bookData)
+}
+
+// newFedMockNeighbourMeta is like newFedMockNeighbour but exposes explicit
+// remote identifiers for work and author via the metadata endpoint.
+func newFedMockNeighbourMeta(title, author string, editionID, workID, authorID int, bookData []byte) *fedMock {
+	m := &fedMock{metadataTitle: title}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		var lr LoginRequest
+		json.NewDecoder(r.Body).Decode(&lr)
+		if lr.Username != "peeruser" || lr.Password != "peerpass" {
+			http.Error(w, `{"error":"bad creds"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"token": "peer-jwt",
+			"user":  map[string]interface{}{"username": "peeruser", "role": "server"},
+		})
+	})
+	mux.HandleFunc("/api/v1/server/ping", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer peer-jwt" {
+			http.Error(w, `{"error":"no auth"}`, http.StatusUnauthorized)
+			return
+		}
+		atomic.AddInt32(&m.pingHits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "server": "Home Library Manager", "api": "v1"})
+	})
+	mux.HandleFunc("/api/v1/server/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer peer-jwt" {
+			http.Error(w, `{"error":"no auth"}`, http.StatusUnauthorized)
+			return
+		}
+		atomic.AddInt32(&m.searchHits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"total": 1,
+			"books": []ServerBook{{WorkID: workID, EditionID: editionID, Author: author, Title: title, Year: 2020, Formats: []string{"FB2"}}},
+		})
+	})
+	mux.HandleFunc("/api/v1/server/metadata/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer peer-jwt" {
+			http.Error(w, `{"error":"no auth"}`, http.StatusUnauthorized)
+			return
+		}
+		atomic.AddInt32(&m.metadataHits, 1)
+		fn, ln := "", author
+		if fields := strings.Fields(author); len(fields) > 1 {
+			fn, ln = fields[0], strings.Join(fields[1:], " ")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(fedBookMetadata{
+			Work:    fedWorkMeta{ID: workID, OriginalTitle: title, OriginalLanguage: "rus", WorkType: "novel"},
+			Edition: fedEditionMeta{ID: editionID, WorkID: workID, Title: title, Language: "rus", IsComplete: true},
+			Authors: []fedAuthorMeta{{ID: authorID, FirstName: fn, LastName: ln, Role: "author"}},
+			Genres:  []fedGenreMeta{},
+			Files:   []fedFileMeta{},
+		})
+	})
+	mux.HandleFunc("/api/v1/server/download/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer peer-jwt" {
+			http.Error(w, `{"error":"no auth"}`, http.StatusUnauthorized)
+			return
+		}
+		atomic.AddInt32(&m.downloadHits, 1)
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="fed_book.zip"`)
+		w.Write(bookData)
+	})
+	m.srv = httptest.NewServer(mux)
+	return m
+}
+
+// makeFB2Zip wraps a minimal parseable FB2 into a single-entry zip, matching
+// how the library stores editions on disk.
+func makeFB2Zip(title, authorFirst, authorLast string) []byte {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	fw, _ := zw.Create("book.fb2")
+	fb2 := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<FictionBook>
+  <description>
+    <title-info>
+      <author><first-name>%s</first-name><last-name>%s</last-name></author>
+      <book-title>%s</book-title>
+      <lang>ru</lang>
+      <date>2020</date>
+    </title-info>
+  </description>
+  <body><section><title><p>Глава</p></title><p>Текст.</p></section></body>
+</FictionBook>`, authorFirst, authorLast, title)
+	fw.Write([]byte(fb2))
+	zw.Close()
+	return buf.Bytes()
+}
+
+// backupNeighbours snapshots api_neighbours, clears the table and returns a
+// restore func, so the live neighbours (http://192.168.95.200:9091/) never
+// participate in federation tests.
+func backupNeighbours(t *testing.T, db *sql.DB) func() {
+	rows, err := db.Query(`
+		SELECT id, url, COALESCE(server_cert,''), COALESCE(client_cert,''), COALESCE(username,''), COALESCE(password_encrypted,'')
+		FROM api_neighbours`)
+	require.NoError(t, err)
+	type nBackup struct {
+		id         int
+		url        string
+		serverCert string
+		clientCert string
+		username   string
+		enc        string
+	}
+	var backups []nBackup
+	for rows.Next() {
+		var b nBackup
+		require.NoError(t, rows.Scan(&b.id, &b.url, &b.serverCert, &b.clientCert, &b.username, &b.enc))
+		backups = append(backups, b)
+	}
+	rows.Close()
+	_, err = db.Exec(`DELETE FROM api_neighbours`)
+	require.NoError(t, err)
+	return func() {
+		for _, b := range backups {
+			db.Exec(`INSERT INTO api_neighbours (id, url, server_cert, client_cert, username, password_encrypted)
+				VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET
+				url=$2, server_cert=$3, client_cert=$4, username=$5, password_encrypted=$6`,
+				b.id, b.url, b.serverCert, b.clientCert, b.username, b.enc)
+		}
+	}
+}
+
+// cleanupImportedBook removes the DB rows created by a federation import and
+// restores the SERIAL sequences so the forced high identifiers used by the
+// tests do not leak into the live library data.
+func cleanupImportedBook(db *sql.DB, workID, editionID int) {
+	db.Exec(`DELETE FROM edition_files WHERE edition_id = $1`, editionID)
+	db.Exec(`DELETE FROM editions WHERE id = $1`, editionID)
+	db.Exec(`DELETE FROM work_contributors WHERE work_id = $1`, workID)
+	db.Exec(`DELETE FROM work_genres WHERE work_id = $1`, workID)
+	db.Exec(`DELETE FROM works WHERE id = $1`, workID)
+	db.Exec(`DELETE FROM persons p WHERE NOT EXISTS (SELECT 1 FROM work_contributors wc WHERE wc.person_id = p.id)`)
+	for _, t := range []string{"persons", "works", "editions", "genres"} {
+		db.Exec(fmt.Sprintf(`SELECT setval('%s_id_seq', GREATEST((SELECT COALESCE(MAX(id),1) FROM %s), 1))`, t, t))
+	}
+}
+
+func TestFederationImport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	uname := "fedimp_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	dir := t.TempDir()
+	testCfg := config.DefaultConfig()
+	testCfg.Directories.Bookarch = filepath.Join(dir, "bookarch")
+	testCfg.Directories.Temp = filepath.Join(dir, "temp")
+
+	mock := newFedMockNeighbour("Тестовая книга федерации", "Фед Федеративный", 2_300_007, makeFB2Zip("Тестовая книга федерации", "Фед", "Федеративный"))
+	defer mock.Close()
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	restore := backupNeighbours(t, db)
+	defer restore()
+
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var nid int
+	err = db.QueryRow(`
+		INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+		VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+		mock.srv.URL, encPass).Scan(&nid)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM api_neighbours WHERE id = $1", nid)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("config", testCfg)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/import", adminOnlyMiddleware(), adminFederationImport(db, nc))
+	}
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	body := `{"neighbour_id":` + strconv.Itoa(nid) + `,"edition_id":2300007}`
+	req, _ := http.NewRequest("POST", "/api/v1/admin/federation/import", bytes.NewReader([]byte(body)))
+	auth(req)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "import failed: %s", w.Body.String())
+
+	var resp struct {
+		Message    string `json:"message"`
+		Title      string `json:"title"`
+		Mode       string `json:"mode"`
+		Authors    string `json:"authors"`
+		WorkID     int    `json:"work_id"`
+		EditionID  int    `json:"edition_id"`
+		FileHash   string `json:"file_hash"`
+		Conflict   bool   `json:"conflict"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.False(t, resp.Conflict)
+	assert.Equal(t, "Тестовая книга федерации", resp.Title)
+	assert.Equal(t, "created", resp.Mode)
+	require.Greater(t, resp.WorkID, 0)
+	require.Greater(t, resp.EditionID, 0)
+
+	// The remote author was not present locally, so a new person must have been
+	// created with the SAME id as on the remote server.
+	var storedAuthorID int
+	err = db.QueryRow(`
+		SELECT wc.person_id FROM work_contributors wc WHERE wc.work_id=$1 AND wc.role='author'`, resp.WorkID).Scan(&storedAuthorID)
+	require.NoError(t, err)
+	assert.Equal(t, 2_400_002, storedAuthorID, "created author id must match the remote author id")
+
+	// The work and edition must carry the remote identifiers.
+	var storedWorkID, storedEditionID int
+	err = db.QueryRow("SELECT id FROM works WHERE id=$1", 2_400_001).Scan(&storedWorkID)
+	require.NoError(t, err)
+	assert.Equal(t, 2_400_001, storedWorkID)
+	err = db.QueryRow("SELECT id FROM editions WHERE id=$1", 2_300_007).Scan(&storedEditionID)
+	require.NoError(t, err)
+	assert.Equal(t, 2_300_007, storedEditionID)
+
+	var storedTitle string
+	err = db.QueryRow("SELECT title FROM editions WHERE id = $1", resp.EditionID).Scan(&storedTitle)
+	require.NoError(t, err)
+	assert.Equal(t, "Тестовая книга федерации", storedTitle)
+
+	// Re-import of the same file must report a duplicate (content-hash check).
+	req2, _ := http.NewRequest("POST", "/api/v1/admin/federation/import", bytes.NewReader([]byte(body)))
+	auth(req2)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code, "second import: %s", w2.Body.String())
+	var dupResp struct {
+		Duplicate bool `json:"duplicate"`
+	}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &dupResp))
+	assert.True(t, dupResp.Duplicate, "second import must report a duplicate")
+
+	// Bad neighbour id → 404.
+	req3, _ := http.NewRequest("POST", "/api/v1/admin/federation/import",
+		bytes.NewReader([]byte(`{"neighbour_id":999999,"edition_id":2300007}`)))
+	auth(req3)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+	require.Equal(t, http.StatusNotFound, w3.Code)
+
+	// Editor must be rejected (admin-only route).
+	editorUname := "fedimp_editor_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var editorID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'editor') RETURNING id`,
+		editorUname, "$2a$10$dummyhash").Scan(&editorID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", editorID)
+	editorToken := generateToken(editorID, editorUname, "editor")
+	req4, _ := http.NewRequest("POST", "/api/v1/admin/federation/import", bytes.NewReader([]byte(body)))
+	req4.Header.Set("Authorization", "Bearer "+editorToken)
+	req4.Header.Set("Content-Type", "application/json")
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, req4)
+	require.Equal(t, http.StatusForbidden, w4.Code)
+
+	cleanupImportedBook(db, resp.WorkID, resp.EditionID)
+}
+
+// TestFederationImportConflict covers the identifier-conflict resolution of the
+// federation import: an initial call must return 409 without touching the
+// library, "create_new" must generate fresh ids (author reused via fuzzy
+// match), and "overwrite" must replace the colliding rows keeping the remote
+// identifiers.
+func TestFederationImportConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	// Remote identifiers used by the mock metadata.
+	const (
+		authorID  = 2_500_001
+		workID    = 2_500_002
+		editionID = 2_500_003
+		title     = "Конфликтная книга федерации"
+		author    = "Колин Авторович"
+	)
+
+	// Pre-seed the local library with rows that occupy the same identifiers.
+	_, err := db.Exec(`
+		INSERT INTO persons (id, first_name, last_name) VALUES ($1, 'Колин', 'Авторович')`, authorID)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO works (id, original_title) VALUES ($1, 'Старая локальная работа')`, workID)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO editions (id, work_id, title) VALUES ($1, $2, 'Старая локальная книга')`, editionID, workID)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO edition_files (edition_id, format_id, file_path, file_size, file_hash, is_primary)
+		VALUES ($1, 1, 'bookarch/fake_old.zip', 10, 'fedtest_old_hash_0000000000000000000000000', true)`, editionID)
+	require.NoError(t, err)
+	defer cleanupImportedBook(db, workID, editionID)
+
+	uname := "fedconf_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	dir := t.TempDir()
+	testCfg := config.DefaultConfig()
+	testCfg.Directories.Bookarch = filepath.Join(dir, "bookarch")
+	testCfg.Directories.Temp = filepath.Join(dir, "temp")
+
+	mock := newFedMockNeighbourMeta(title, author, editionID, workID, authorID,
+		makeFB2Zip(title, "Колин", "Авторович"))
+	defer mock.Close()
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	restore := backupNeighbours(t, db)
+	defer restore()
+
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var nid int
+	err = db.QueryRow(`
+		INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+		VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+		mock.srv.URL, encPass).Scan(&nid)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM api_neighbours WHERE id = $1", nid)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("config", testCfg)
+		c.Set("role", "admin")
+		c.Set("user_id", adminID)
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/import", adminOnlyMiddleware(), adminFederationImport(db, nc))
+	}
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+	post := func(mode string, wantCode int) (string, int) {
+		body := `{"neighbour_id":` + strconv.Itoa(nid) + `,"edition_id":` + strconv.Itoa(editionID) +
+			`,"mode":"` + mode + `"}`
+		req, _ := http.NewRequest("POST", "/api/v1/admin/federation/import", bytes.NewReader([]byte(body)))
+		auth(req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, wantCode, w.Code, "body: %s", w.Body.String())
+		return w.Body.String(), w.Code
+	}
+	type importResp struct {
+		Mode      string `json:"mode"`
+		WorkID    int    `json:"work_id"`
+		EditionID int    `json:"edition_id"`
+		Conflict  bool   `json:"conflict"`
+		Found     struct {
+			EditionID int    `json:"edition_id"`
+			Title     string `json:"title"`
+		} `json:"found"`
+	}
+
+	// 1. Initial import → 409, nothing written to the library.
+	body, code := post("", http.StatusConflict)
+	require.Equal(t, http.StatusConflict, code)
+	var cResp importResp
+	require.NoError(t, json.Unmarshal([]byte(body), &cResp))
+	assert.True(t, cResp.Conflict)
+	assert.Equal(t, editionID, cResp.Found.EditionID)
+	assert.Equal(t, "Старая локальная книга", cResp.Found.Title)
+
+	// The local rows must be untouched after the 409.
+	var oldTitle string
+	err = db.QueryRow(`SELECT original_title FROM works WHERE id=$1`, workID).Scan(&oldTitle)
+	require.NoError(t, err)
+	assert.Equal(t, "Старая локальная работа", oldTitle)
+	err = db.QueryRow(`SELECT title FROM editions WHERE id=$1`, editionID).Scan(&oldTitle)
+	require.NoError(t, err)
+	assert.Equal(t, "Старая локальная книга", oldTitle)
+
+	// 2. create_new → fresh ids, author reused via fuzzy match, old rows intact.
+	body, _ = post("create_new", http.StatusOK)
+	var cnResp importResp
+	require.NoError(t, json.Unmarshal([]byte(body), &cnResp))
+	assert.Equal(t, "created_new", cnResp.Mode)
+	require.NotEqual(t, workID, cnResp.WorkID, "create_new must generate a new work id")
+	require.NotEqual(t, editionID, cnResp.EditionID, "create_new must generate a new edition id")
+	var newTitle string
+	err = db.QueryRow(`SELECT original_title FROM works WHERE id=$1`, cnResp.WorkID).Scan(&newTitle)
+	require.NoError(t, err)
+	assert.Equal(t, title, newTitle)
+	var personID int
+	err = db.QueryRow(`SELECT wc.person_id FROM work_contributors wc WHERE wc.work_id=$1 AND wc.role='author'`, cnResp.WorkID).Scan(&personID)
+	require.NoError(t, err)
+	assert.Equal(t, authorID, personID, "author must be fuzzy-matched and reused")
+	// Old rows still intact.
+	err = db.QueryRow(`SELECT original_title FROM works WHERE id=$1`, workID).Scan(&oldTitle)
+	require.NoError(t, err)
+	assert.Equal(t, "Старая локальная работа", oldTitle)
+	// NOTE: the create_new edition is intentionally NOT cleaned up yet — its
+	// file row holds the same content hash as the upcoming overwrite, which
+	// exercises the UNIQUE(file_hash) collision path.
+
+	// The person occupying the remote author id is now renamed locally. The
+	// overwrite must REPLACE it with the remote data (exact-id match first)
+	// rather than fuzzy-matching an unrelated person.
+	_, err = db.Exec(`UPDATE persons SET first_name='Псевдо', last_name='Авторчик' WHERE id=$1`, authorID)
+	require.NoError(t, err)
+
+	// 3. overwrite → same ids, data replaced with the remote one. The content
+	// hash is already held by the create_new edition, so the overwritten file
+	// must be stored WITHOUT a dedup hash instead of violating the constraint.
+	body, _ = post("overwrite", http.StatusOK)
+	var owResp importResp
+	require.NoError(t, json.Unmarshal([]byte(body), &owResp))
+	assert.Equal(t, "overwritten", owResp.Mode)
+	assert.Equal(t, workID, owResp.WorkID)
+	assert.Equal(t, editionID, owResp.EditionID)
+	err = db.QueryRow(`SELECT original_title FROM works WHERE id=$1`, workID).Scan(&newTitle)
+	require.NoError(t, err)
+	assert.Equal(t, title, newTitle)
+	err = db.QueryRow(`SELECT title FROM editions WHERE id=$1`, editionID).Scan(&newTitle)
+	require.NoError(t, err)
+	assert.Equal(t, title, newTitle)
+	personID = 0
+	err = db.QueryRow(`SELECT wc.person_id FROM work_contributors wc WHERE wc.work_id=$1 AND wc.role='author'`, workID).Scan(&personID)
+	require.NoError(t, err)
+	assert.Equal(t, authorID, personID, "overwrite must link the person occupying the remote id")
+	var fn, ln string
+	err = db.QueryRow(`SELECT first_name, last_name FROM persons WHERE id=$1`, authorID).Scan(&fn, &ln)
+	require.NoError(t, err)
+	assert.Equal(t, "Колин", fn, "overwrite must replace the conflicting person's data")
+	assert.Equal(t, "Авторович", ln)
+	// The hash must now be NULL because the create_new edition already holds it.
+	var hashPtr sql.NullString
+	err = db.QueryRow(`SELECT file_hash FROM edition_files WHERE edition_id=$1 AND is_primary=true`, editionID).Scan(&hashPtr)
+	require.NoError(t, err)
+	assert.False(t, hashPtr.Valid, "overwritten file must store a NULL hash when the content is already present locally")
+	// And the create_new edition must still own the hash.
+	var cnHash string
+	err = db.QueryRow(`SELECT file_hash FROM edition_files WHERE edition_id=$1 AND is_primary=true`, cnResp.EditionID).Scan(&cnHash)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cnHash)
+	cleanupImportedBook(db, cnResp.WorkID, cnResp.EditionID)
+}
+
+func TestFederationSearchStopOnFirst(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	uname := "fedstop_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	restore := backupNeighbours(t, db)
+	defer restore()
+
+	bookData := makeFB2Zip("Тест", "Фед", "Федеративный")
+	mockA := newFedMockNeighbour("Книга A", "Автор A", 1, bookData)
+	defer mockA.Close()
+	mockB := newFedMockNeighbour("Книга B", "Автор B", 2, bookData)
+	defer mockB.Close()
+
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var nids []int
+	for _, url := range []string{mockA.srv.URL, mockB.srv.URL} {
+		var id int
+		err = db.QueryRow(`
+			INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+			VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+			url, encPass).Scan(&id)
+		require.NoError(t, err)
+		nids = append(nids, id)
+	}
+	defer func() {
+		for _, id := range nids {
+			db.Exec("DELETE FROM api_neighbours WHERE id = $1", id)
+		}
+	}()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/search", adminOnlyMiddleware(), adminFederationSearch(db, nc))
+	}
+
+	req, _ := http.NewRequest("POST", "/api/v1/admin/federation/search?stop_on_first=1",
+		bytes.NewReader([]byte(`{"query":"Книга"}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "federation search failed: %s", w.Body.String())
+
+	var resp struct {
+		Neighbours int                `json:"neighbours"`
+		Results    []FederationResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 2, resp.Neighbours)
+	// The search must stop after the first neighbour that returned books,
+	// so only one neighbour is present in the results.
+	require.Len(t, resp.Results, 1)
+	assert.Empty(t, resp.Results[0].Error)
+	require.Len(t, resp.Results[0].Books, 1)
+	assert.Contains(t, []string{"Книга A", "Книга B"}, resp.Results[0].Books[0].Title)
+
+	// The second neighbour must not have been contacted at all.
+	totalHits := atomic.LoadInt32(&mockA.searchHits) + atomic.LoadInt32(&mockB.searchHits)
+	assert.Equal(t, int32(1), totalHits, "stop_on_first must not query more than one neighbour")
+}
+
+// TestFederationSearchContinuesAfterError verifies that an unavailable or
+// failing neighbour does not abort the search: the query continues with the
+// remaining neighbours and stops only when a neighbour returns books.
+func TestFederationSearchContinuesAfterError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	uname := "federr_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	restore := backupNeighbours(t, db)
+	defer restore()
+
+	bookData := makeFB2Zip("Тест", "Фед", "Федеративный")
+
+	// Neighbour 1 is down (connection refused). Port 1 is not listening, and
+	// its URL sorts before any ephemeral-port mock URL ("http://127.0.0.1:1"
+	// < "http://127.0.0.1:3xxxx"), so the failing neighbour is queried first.
+	downURL := "http://127.0.0.1:1"
+	mockOK := newFedMockNeighbour("Книга B", "Автор B", 2, bookData)
+	defer mockOK.Close()
+
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var nids []int
+	for _, url := range []string{downURL, mockOK.srv.URL} {
+		var id int
+		err = db.QueryRow(`
+			INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+			VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+			url, encPass).Scan(&id)
+		require.NoError(t, err)
+		nids = append(nids, id)
+	}
+	defer func() {
+		for _, id := range nids {
+			db.Exec("DELETE FROM api_neighbours WHERE id = $1", id)
+		}
+	}()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/search", adminOnlyMiddleware(), adminFederationSearch(db, nc))
+	}
+
+	req, _ := http.NewRequest("POST", "/api/v1/admin/federation/search",
+		bytes.NewReader([]byte(`{"query":"Книга"}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "federation search failed: %s", w.Body.String())
+
+	var resp struct {
+		Neighbours int                `json:"neighbours"`
+		Results    []FederationResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 2, resp.Neighbours)
+
+	// Parallel mode (no stop_on_first) does not randomize the traversal order,
+	// so the down neighbour (index 0) is reported as an error and the working
+	// one still returns its book — errors never abort the search.
+	require.Len(t, resp.Results, 2)
+	assert.NotEmpty(t, resp.Results[0].Error, "unavailable neighbour must be reported")
+	assert.Empty(t, resp.Results[1].Error)
+	require.Len(t, resp.Results[1].Books, 1)
+	assert.Equal(t, "Книга B", resp.Results[1].Books[0].Title)
+
+	// The working neighbour was still queried despite the failed one.
+	assert.Equal(t, int32(1), atomic.LoadInt32(&mockOK.searchHits),
+		"search must continue past the failed neighbour")
+}
+
+// TestFederationTest verifies the "Тест" connectivity button handler:
+// POST /api/v1/admin/federation/test logs in to the neighbour with the stored
+// credentials, sends a ping, returns ok on success, logs errors on failure,
+// and is admin-only.
+func TestFederationTest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	uname := "fedtest_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	var editorID int
+	err = db.QueryRow(`
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, 'editor') RETURNING id`,
+		uname+"_ed", "$2a$10$dummyhash").Scan(&editorID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", editorID)
+	editorToken := generateToken(editorID, uname+"_ed", "editor")
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	restore := backupNeighbours(t, db)
+	defer restore()
+
+	bookData := makeFB2Zip("Тест", "Фед", "Федеративный")
+	mock := newFedMockNeighbour("Книга", "Автор", 1, bookData)
+	defer mock.Close()
+
+	encPass, err := nc.Encrypt("peerpass")
+	require.NoError(t, err)
+	var okID, downID, missID int
+	// Working neighbour on the mock server.
+	err = db.QueryRow(`
+		INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+		VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+		mock.srv.URL, encPass).Scan(&okID)
+	require.NoError(t, err)
+	// Unreachable neighbour (connection refused on port 1).
+	err = db.QueryRow(`
+		INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
+		VALUES ($1, '', '', 'peeruser', $2) RETURNING id`,
+		"http://127.0.0.1:1", encPass).Scan(&downID)
+	require.NoError(t, err)
+	// Non-existent neighbour.
+	err = db.QueryRow(`SELECT COALESCE(MAX(id),0)+1 FROM api_neighbours`).Scan(&missID)
+	require.NoError(t, err)
+	defer func() {
+		db.Exec("DELETE FROM api_neighbours WHERE id IN ($1,$2)", okID, downID)
+	}()
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("db", db)
+		c.Set("role", "admin")
+		c.Next()
+	})
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	{
+		admin.POST("/federation/test", adminOnlyMiddleware(), adminFederationTest(db, nc))
+	}
+
+	// 1. Success against the working neighbour.
+	req, _ := http.NewRequest("POST", "/api/v1/admin/federation/test",
+		bytes.NewReader([]byte(`{"neighbour_id":`+strconv.Itoa(okID)+`}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "test failed: %s", w.Body.String())
+	var okResp struct {
+		Ok bool `json:"ok"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &okResp))
+	assert.True(t, okResp.Ok)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&mock.pingHits), "neighbour must receive exactly one ping")
+
+	// 2. Failure against the unreachable neighbour → 502, ok=false.
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/test",
+		bytes.NewReader([]byte(`{"neighbour_id":`+strconv.Itoa(downID)+`}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadGateway, w.Code, "unreachable neighbour must fail: %s", w.Body.String())
+	var failResp struct {
+		Ok    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &failResp))
+	assert.False(t, failResp.Ok)
+	assert.NotEmpty(t, failResp.Error)
+
+	// 3. Missing neighbour → 404.
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/test",
+		bytes.NewReader([]byte(`{"neighbour_id":`+strconv.Itoa(missID)+`}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	// 4. Role guard: editor is rejected even with a valid payload.
+	req, _ = http.NewRequest("POST", "/api/v1/admin/federation/test",
+		bytes.NewReader([]byte(`{"neighbour_id":`+strconv.Itoa(okID)+`}`)))
+	req.Header.Set("Authorization", "Bearer "+editorToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code, "editor must not run federation tests")
+
+	// 5. The working neighbour was contacted exactly once across all attempts.
+	assert.Equal(t, int32(1), atomic.LoadInt32(&mock.pingHits))
+}
+

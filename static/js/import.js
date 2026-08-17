@@ -123,6 +123,7 @@ function switchToImportTab() {
 function showImportProgress(dirPath, total) {
     switchToImportTab();
     var container = document.getElementById('importProgressArea') || document.getElementById('directoryResult');
+    if (!container) return;
     var panel = document.getElementById('importProgressPanel');
     if (!panel) {
         panel = document.createElement('div');

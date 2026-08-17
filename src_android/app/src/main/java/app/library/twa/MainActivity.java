@@ -119,6 +119,13 @@ public class MainActivity extends Activity {
         "    <span class=\"mobile-top-spacer\"></span>\n" +
         "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
         "</div>";
+    private static final String MOBILE_TOP_BAR_ADMINISTER =
+        "<div class=\"mobile-top-bar\">\n" +
+        "    <a href=\"/admin\" class=\"mobile-back-btn\" title=\"Назад к управлению\">←</a>\n" +
+        "    <span class=\"mobile-top-title\">Администрирование</span>\n" +
+        "    <span class=\"mobile-top-spacer\"></span>\n" +
+        "    <button class=\"mobile-user-btn\" id=\"mobileUserBtn\" title=\"Пользователь\">☰</button>\n" +
+        "</div>";
     private static final String ANDROID_JS =
         "<script>\n" +
         "(function(){\n" +
@@ -439,6 +446,10 @@ public class MainActivity extends Activity {
                 }
                 if ("/admin".equals(path)) {
                     WebResourceResponse res = serveAdminFromAssets();
+                    if (res != null) return res;
+                }
+                if ("/administer".equals(path)) {
+                    WebResourceResponse res = serveAdministerFromAssets();
                     if (res != null) return res;
                 }
                 // Serve static files from assets
@@ -1529,6 +1540,23 @@ public class MainActivity extends Activity {
             return new WebResourceResponse("text/html", "UTF-8", is);
         } catch (IOException e) {
             appendDebug("Failed to serve admin from assets: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private WebResourceResponse serveAdministerFromAssets() {
+        try {
+            String html = readAssetToString("www/admin_users.html");
+            html = html.replace("</head>", MOBILE_CSS_TAG + "\n</head>");
+            html = html.replace("<body>", ANDROID_BODY + "\n    " + MOBILE_TOP_BAR_ADMINISTER);
+            html = html.replace("</body>", ANDROID_JS + "\n</body>");
+            InputStream is = new ByteArrayInputStream(html.getBytes("UTF-8"));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                return new WebResourceResponse("text/html", "UTF-8", 200, "OK", null, is);
+            }
+            return new WebResourceResponse("text/html", "UTF-8", is);
+        } catch (IOException e) {
+            appendDebug("Failed to serve administer from assets: " + e.getMessage());
             return null;
         }
     }

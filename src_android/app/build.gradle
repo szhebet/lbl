@@ -5,29 +5,39 @@ if (file('../build-extras.gradle').exists()) {
     apply from: '../build-extras.gradle'
 }
 
+// Capture project-scoped extra properties at script top level where `ext`
+// unambiguously refers to the project's ExtraPropertiesExtension. Inside the
+// `android {}` block `ext` resolves against the AppExtension delegate, whose
+// own extra-properties extension shadows project.ext.
+def apkVersionCode = ext.has('apkVersionCode') ? ext.get('apkVersionCode') : 1
+def apkVersionName = ext.has('apkVersionName') ? ext.get('apkVersionName') : '1.0'
+def apkApplicationId = ext.has('apkApplicationId') ? ext.get('apkApplicationId') : 'app.library.twa'
+def apkCompileSdk = ext.has('apkCompileSdk') ? ext.get('apkCompileSdk') : 34
+def apkMinSdk = ext.has('apkMinSdk') ? ext.get('apkMinSdk') : 19
+def apkTargetSdk = ext.has('apkTargetSdk') ? ext.get('apkTargetSdk') : 34
+def apkKeystorePath = ext.has('apkKeystorePath') ? ext.get('apkKeystorePath') : file('../certres/android.keystore')
+def apkKeystorePassword = ext.has('apkKeystorePassword') ? ext.get('apkKeystorePassword') : 'android'
+def apkKeyAlias = ext.has('apkKeyAlias') ? ext.get('apkKeyAlias') : 'library-app'
+def apkKeyPassword = ext.has('apkKeyPassword') ? ext.get('apkKeyPassword') : 'android'
+
 android {
-    namespace ext.hasProperty('apkApplicationId') ? ext.apkApplicationId : 'app.library.twa'
-    compileSdk ext.hasProperty('apkCompileSdk') ? ext.apkCompileSdk : 34
+    namespace apkApplicationId
+    compileSdk apkCompileSdk
 
     defaultConfig {
-        applicationId ext.hasProperty('apkApplicationId') ? ext.apkApplicationId : 'app.library.twa'
-        minSdk ext.hasProperty('apkMinSdk') ? ext.apkMinSdk : 19
-        targetSdk ext.hasProperty('apkTargetSdk') ? ext.apkTargetSdk : 34
-        versionCode ext.hasProperty('apkVersionCode') ? ext.apkVersionCode : 1
-        versionName ext.hasProperty('apkVersionName') ? ext.apkVersionName : '1.0'
+        applicationId apkApplicationId
+        minSdk apkMinSdk
+        targetSdk apkTargetSdk
+        versionCode apkVersionCode
+        versionName apkVersionName
     }
 
     signingConfigs {
         release {
-            storeFile ext.hasProperty('apkKeystorePath')
-                    ? file(ext.apkKeystorePath)
-                    : file('../certres/android.keystore')
-            storePassword ext.hasProperty('apkKeystorePassword')
-                    ? ext.apkKeystorePassword : 'android'
-            keyAlias ext.hasProperty('apkKeyAlias')
-                    ? ext.apkKeyAlias : 'library-app'
-            keyPassword ext.hasProperty('apkKeyPassword')
-                    ? ext.apkKeyPassword : 'android'
+            storeFile apkKeystorePath
+            storePassword apkKeystorePassword
+            keyAlias apkKeyAlias
+            keyPassword apkKeyPassword
         }
     }
 

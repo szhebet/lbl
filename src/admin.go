@@ -134,8 +134,8 @@ func adminCreateUser(db *sql.DB) gin.HandlerFunc {
 		if req.Role == "" {
 			req.Role = "viewer"
 		}
-		if req.Role != "viewer" && req.Role != "editor" && req.Role != "admin" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin"})
+		if req.Role != "viewer" && req.Role != "editor" && req.Role != "admin" && req.Role != "server" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin, server"})
 			return
 		}
 		if len(req.Password) < minPasswordLength {
@@ -228,8 +228,8 @@ func adminUpdateUser(db *sql.DB) gin.HandlerFunc {
 			}
 		}
 		if req.Role != nil {
-			if *req.Role != "viewer" && *req.Role != "editor" && *req.Role != "admin" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin"})
+			if *req.Role != "viewer" && *req.Role != "editor" && *req.Role != "admin" && *req.Role != "server" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role. Allowed: viewer, editor, admin, server"})
 				return
 			}
 			_, err := db.Exec("UPDATE users SET role = $1 WHERE id = $2", *req.Role, id)
@@ -586,5 +586,3 @@ func adminGetTags(db *sql.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, tags)
 	}
 }
-
-

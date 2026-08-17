@@ -2458,7 +2458,7 @@ function renderReadlistTableDesktop(container, items) {
     html += '<th class="col-listname sortable" data-sort-by="listname">Список' + getReadlistSortIcon('listname') + '</th>';
     html += '<th class="col-status sortable" data-sort-by="status">Статус' + getReadlistSortIcon('status') + '</th>';
     html += '<th class="col-format">Формат</th>';
-    html += '<th class="col-shelf">Полка</th>';
+    html += '<th class="col-shelf sortable" data-sort-by="shelf">Полка' + getReadlistSortIcon('shelf') + '</th>';
     html += '<th class="col-actions">Действия</th></tr></thead><tbody>';
 
     items.forEach(function(item) {

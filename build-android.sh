@@ -80,6 +80,7 @@ cp static/favicon.* src_android/app/src/main/assets/www/static/ 2>/dev/null || t
 cp static/service-worker.js src_android/app/src/main/assets/www/ 2>/dev/null || true
 cp templates/index.html src_android/app/src/main/assets/www/
 cp templates/admin.html src_android/app/src/main/assets/www/
+cp templates/admin_users.html src_android/app/src/main/assets/www/
 echo "BUILD_$(date +%Y%m%d_%H%M%S)" > src_android/app/src/main/assets/www/VERSION
 echo "  $(ls static/css/*.css static/js/*.js | wc -l) files copied"
 

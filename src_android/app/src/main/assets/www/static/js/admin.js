@@ -12,7 +12,7 @@ async function checkAdminAccess() {
         document.body.innerHTML = '<div class="container"><h1>Доступ запрещён</h1><p>Необходимо авторизоваться.</p><a href="/" class="btn">На главную</a></div>';
         return false;
     }
-    if (authUser.role === 'viewer') {
+    if (authUser.role === 'viewer' || authUser.role === 'server') {
         document.body.innerHTML = '<div class="container"><h1>Доступ запрещён</h1><p>У вас недостаточно прав для доступа к администрированию.</p><a href="/" class="btn">На главную</a></div>';
         return false;
     }
@@ -31,6 +31,7 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         if (tab.dataset.tab === 'import') { checkImportStatus(); }
         if (tab.dataset.tab === 'suggestions') { loadSuggestions(); }
         if (tab.dataset.tab === 'readlists') { loadChildren(); loadListNames(); loadReadlists(); }
+        if (tab.dataset.tab === 'neighbours') { loadNeighbours(); }
     });
 });
 
@@ -43,18 +44,20 @@ function escapeHtml(text) {
 
 function openAdminModal(title, content) {
     var adminModal = document.getElementById('adminModal');
-    adminModal.classList.remove('rl-modal-wide', 'rl-modal-locked');
+    adminModal.classList.remove('rl-modal-wide', 'rl-modal-extra-wide', 'rl-modal-locked');
     document.getElementById('adminModalTitle').textContent = title;
     document.getElementById('adminModalBody').innerHTML = content;
     adminModal.style.display = 'flex';
     document.getElementById('adminForm').onsubmit = null;
+    var footer = document.getElementById('adminForm').querySelector('.modal-footer');
+    if (footer) footer.style.display = '';
     var submitBtn = document.getElementById('adminForm').querySelector('.modal-footer .btn[type="submit"]');
-    if (submitBtn) submitBtn.textContent = 'Сохранить';
+    if (submitBtn) { submitBtn.style.display = ''; submitBtn.textContent = 'Сохранить'; }
 }
 
 function closeAdminModal() {
     var adminModal = document.getElementById('adminModal');
-    adminModal.classList.remove('rl-modal-wide', 'rl-modal-locked');
+    adminModal.classList.remove('rl-modal-wide', 'rl-modal-extra-wide', 'rl-modal-locked');
     adminModal.style.display = 'none';
 }
 
@@ -71,11 +74,13 @@ var storeUsers = [];
 var storeAuthors = [];
 var storeGenres = [];
 var storeTags = [];
+var storeNeighbours = [];
 var sortState = {};
 const PAGE_SIZE = 50;
 var usersPage = 1;
 var genresPage = 1;
 var tagsPage = 1;
+var neighboursPage = 1;
 
 function getSortKey(tableId) { return sortState[tableId] ? sortState[tableId].key : 'id'; }
 function getSortDir(tableId) { return sortState[tableId] ? sortState[tableId].dir : 'asc'; }
@@ -170,7 +175,9 @@ function loadUsers() {
 function renderUsers() {
     var tbody = document.getElementById('usersTableBody');
     var pagEl = document.getElementById('usersPagination');
-    var filterText = document.getElementById('filter-users').value;
+    var filterEl = document.getElementById('filter-users');
+    if (!tbody || !filterEl) return;
+    var filterText = filterEl.value;
     var filtered = filterData(storeUsers, filterText, ['username', 'email', 'role', 'parent_names']);
     var sorted = sortData(filtered, getSortKey('table-users'), getSortDir('table-users'));
     var total = sorted.length;
@@ -194,6 +201,51 @@ function renderUsers() {
     var pagHtml = renderPagination(total, usersPage, totalPages, 'users');
     if (pagEl) pagEl.innerHTML = pagHtml;
     var pagTop = document.getElementById('usersPaginationTop');
+    if (pagTop) pagTop.innerHTML = pagHtml;
+}
+
+// ─── Peer servers (api_neighbours) ────────────────────────────
+
+function loadNeighbours() {
+    neighboursPage = 1;
+    api(API + '/neighbours').then(r => r.json()).then(list => {
+        storeNeighbours = list;
+        applyFilters();
+    });
+}
+
+function renderNeighbours() {
+    var tbody = document.getElementById('neighboursTableBody');
+    var pagEl = document.getElementById('neighboursPagination');
+    var filterEl = document.getElementById('filter-neighbours');
+    if (!tbody || !filterEl) return;
+    var filterText = filterEl.value;
+    var filtered = filterData(storeNeighbours, filterText, ['url', 'username', 'server_cert', 'client_cert']);
+    var sorted = sortData(filtered, getSortKey('table-neighbours'), getSortDir('table-neighbours'));
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (neighboursPage > totalPages) neighboursPage = totalPages;
+    var start = (neighboursPage - 1) * PAGE_SIZE;
+    var pageItems = sorted.slice(start, start + PAGE_SIZE);
+    renderTable(tbody, pageItems, function(n) {
+        var certs = [];
+        if (n.server_cert) certs.push('серверный');
+        if (n.client_cert) certs.push('клиентский');
+        return '<tr>' +
+            '<td>' + n.id + '</td>' +
+            '<td>' + escapeHtml(n.url) + '</td>' +
+            '<td>' + escapeHtml(n.username || '') + '</td>' +
+            '<td>' + (n.has_password ? 'задан' : '') + '</td>' +
+            '<td>' + escapeHtml(certs.join(', ')) + '</td>' +
+            '<td class="actions">' +
+            '<button class="btn btn-small edit-neighbour" data-id="' + n.id + '">✎</button> ' +
+            '<button class="btn btn-small btn-secondary test-neighbour" data-id="' + n.id + '">Тест</button> ' +
+            '<button class="btn btn-small btn-secondary delete-neighbour" data-id="' + n.id + '">Удалить</button>' +
+            '</td></tr>';
+    });
+    var pagHtml = renderPagination(total, neighboursPage, totalPages, 'neighbours');
+    if (pagEl) pagEl.innerHTML = pagHtml;
+    var pagTop = document.getElementById('neighboursPaginationTop');
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
@@ -371,6 +423,7 @@ function editUser(id) {
                     <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
                     <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor</option>
                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
+                    <option value="server" ${u.role === 'server' ? 'selected' : ''}>server</option>
                 </select>
             </div>
             <div class="form-group">
@@ -418,7 +471,8 @@ function deleteUser(id) {
     });
 }
 
-document.getElementById('addUserBtn').addEventListener('click', function() {
+var addUserBtn = document.getElementById('addUserBtn');
+if (addUserBtn) addUserBtn.addEventListener('click', function() {
     openAdminModal('Создать пользователя', `
         <div class="form-group">
             <label>Имя пользователя:</label>
@@ -438,6 +492,7 @@ document.getElementById('addUserBtn').addEventListener('click', function() {
                 <option value="viewer">viewer</option>
                 <option value="editor">editor</option>
                 <option value="admin">admin</option>
+                <option value="server">server</option>
             </select>
         </div>
         <div class="form-group">
@@ -475,6 +530,173 @@ document.getElementById('addUserBtn').addEventListener('click', function() {
     };
 });
 
+function editNeighbour(id) {
+    api(API + '/neighbours/' + id).then(r => r.json()).then(n => {
+        openAdminModal('Редактировать сервер #' + id, `
+            <div class="form-group">
+                <label>URL:</label>
+                <input type="text" id="f_url" value="${escapeHtml(n.url || '')}" required>
+            </div>
+            <div class="form-group">
+                <label>Имя пользователя:</label>
+                <input type="text" id="f_username" value="${escapeHtml(n.username || '')}">
+            </div>
+            <div class="form-group">
+                <label>Пароль (пусто — не менять):</label>
+                <input type="password" id="f_password" placeholder="${n.has_password ? 'Пароль задан' : 'Пароль не задан'}">
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="f_clear_password"> Очистить пароль</label>
+            </div>
+            <div class="form-group">
+                <label>Сертификат сервера соседа (.crt/PEM):</label>
+                <textarea id="f_server_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----...">${escapeHtml(n.server_cert || '')}</textarea>
+            </div>
+            <div class="form-group">
+                <label>Клиентский сертификат (.crt/PEM):</label>
+                <textarea id="f_client_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----...">${escapeHtml(n.client_cert || '')}</textarea>
+            </div>
+        `);
+        document.getElementById('adminForm').onsubmit = async function(e) {
+            e.preventDefault();
+            var body = {
+                url: document.getElementById('f_url').value,
+                username: document.getElementById('f_username').value,
+                server_cert: document.getElementById('f_server_cert').value,
+                client_cert: document.getElementById('f_client_cert').value,
+                clear_password: document.getElementById('f_clear_password').checked
+            };
+            var p = document.getElementById('f_password').value;
+            if (p) body.password = p;
+            var res = await api(API + '/neighbours/' + id, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (res.ok) { closeAdminModal(); loadNeighbours(); }
+            else { var d = await res.json(); alert(d.error || 'Error'); }
+        };
+    });
+}
+
+function deleteNeighbour(id) {
+    if (!confirm('Удалить сервер #' + id + '?')) return;
+    api(API + '/neighbours/' + id, {method: 'DELETE'}).then(r => {
+        if (r.ok || r.status === 204) loadNeighbours();
+        else r.json().then(d => alert(d.error || 'Error'));
+    });
+}
+
+async function testNeighbour(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    var ok = false;
+    try {
+        var res = await api(API + '/federation/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ neighbour_id: id })
+        });
+        var data = {};
+        try { data = await res.json(); } catch (e) {}
+        ok = res.ok && data.ok;
+    } catch (err) {
+        ok = false;
+    }
+    setTestNeighbourButton(btn, ok);
+    return ok;
+}
+
+function setTestNeighbourButton(btn, ok) {
+    if (!btn) return;
+    btn.disabled = false;
+    if (ok) {
+        btn.className = 'btn btn-small test-neighbour test-ok';
+        btn.textContent = 'Тест: Ок';
+    } else {
+        btn.className = 'btn btn-small test-neighbour test-fail';
+        btn.textContent = 'Тест: fail';
+    }
+}
+
+function getNeighboursPageItems() {
+    var filterEl = document.getElementById('filter-neighbours');
+    var filterText = filterEl ? filterEl.value : '';
+    var filtered = filterData(storeNeighbours || [], filterText, ['url', 'username', 'server_cert', 'client_cert']);
+    var sorted = sortData(filtered, getSortKey('table-neighbours'), getSortDir('table-neighbours'));
+    var total = sorted.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    var page = Math.min(neighboursPage, totalPages);
+    var start = (page - 1) * PAGE_SIZE;
+    return sorted.slice(start, start + PAGE_SIZE);
+}
+
+async function testAllNeighbours() {
+    var items = getNeighboursPageItems();
+    if (!items.length) {
+        alert('На текущей странице нет серверов для тестирования.');
+        return;
+    }
+    var btnAll = document.getElementById('testAllNeighboursBtn');
+    if (btnAll) btnAll.disabled = true;
+    var results = { ok: 0, fail: 0 };
+    for (var i = 0; i < items.length; i++) {
+        var n = items[i];
+        var rowBtn = document.querySelector('.test-neighbour[data-id="' + n.id + '"]');
+        if (rowBtn) { rowBtn.disabled = true; rowBtn.textContent = '...'; }
+        var ok = await testNeighbour(n.id, rowBtn);
+        if (ok) results.ok++; else results.fail++;
+    }
+    if (btnAll) btnAll.disabled = false;
+    alert('Тестирование завершено.\nУспешно: ' + results.ok + ', ошибок: ' + results.fail + '.');
+}
+
+var addNeighbourBtn = document.getElementById('addNeighbourBtn');
+if (addNeighbourBtn) addNeighbourBtn.addEventListener('click', function() {
+    openAdminModal('Добавить сервер', `
+        <div class="form-group">
+            <label>URL:</label>
+            <input type="text" id="f_url" required>
+        </div>
+        <div class="form-group">
+            <label>Имя пользователя:</label>
+            <input type="text" id="f_username">
+        </div>
+        <div class="form-group">
+            <label>Пароль:</label>
+            <input type="password" id="f_password">
+        </div>
+        <div class="form-group">
+            <label>Сертификат сервера соседа (.crt/PEM):</label>
+            <textarea id="f_server_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----..."></textarea>
+        </div>
+        <div class="form-group">
+            <label>Клиентский сертификат (.crt/PEM):</label>
+            <textarea id="f_client_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----..."></textarea>
+        </div>
+    `);
+    document.getElementById('adminForm').onsubmit = async function(e) {
+        e.preventDefault();
+        var body = {
+            url: document.getElementById('f_url').value,
+            username: document.getElementById('f_username').value,
+            server_cert: document.getElementById('f_server_cert').value,
+            client_cert: document.getElementById('f_client_cert').value
+        };
+        var p = document.getElementById('f_password').value;
+        if (p) body.password = p;
+        var res = await api(API + '/neighbours', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) { closeAdminModal(); loadNeighbours(); }
+        else { var d = await res.json(); alert(d.error || 'Error'); }
+    };
+});
+
+var testAllNeighboursBtn = document.getElementById('testAllNeighboursBtn');
+if (testAllNeighboursBtn) testAllNeighboursBtn.addEventListener('click', testAllNeighbours);
+
 function loadAuthors() {
     authorsPage = 1;
     api(API + '/persons').then(r => r.json()).then(persons => {
@@ -486,7 +708,9 @@ function loadAuthors() {
 function renderAuthors() {
     var tbody = document.getElementById('authorsTableBody');
     var pagEl = document.getElementById('authorsPagination');
-    var filterText = document.getElementById('filter-authors').value;
+    var filterEl = document.getElementById('filter-authors');
+    if (!tbody || !filterEl) return;
+    var filterText = filterEl.value;
     var filtered = filterData(storeAuthors, filterText, ['first_name', 'last_name', 'middle_name', 'pseudonym']);
     var sorted = sortData(filtered, getSortKey('table-authors'), getSortDir('table-authors'));
     var total = sorted.length;
@@ -513,7 +737,8 @@ function renderAuthors() {
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
-document.getElementById('addAuthorBtn').addEventListener('click', function() {
+var addAuthorBtn = document.getElementById('addAuthorBtn');
+if (addAuthorBtn) addAuthorBtn.addEventListener('click', function() {
     openAdminModal('Создать автора', `
         <div class="form-group">
             <label>Фамилия:</label>
@@ -647,7 +872,9 @@ function loadGenres() {
 function renderGenres() {
     var tbody = document.getElementById('genresTableBody');
     var pagEl = document.getElementById('genresPagination');
-    var filterText = document.getElementById('filter-genres').value;
+    var filterEl = document.getElementById('filter-genres');
+    if (!tbody || !filterEl) return;
+    var filterText = filterEl.value;
     var filtered = filterData(storeGenres, filterText, ['name', 'ru_name', 'parent_name', 'description']);
     var sorted = sortData(filtered, getSortKey('table-genres'), getSortDir('table-genres'));
     var total = sorted.length;
@@ -674,7 +901,8 @@ function renderGenres() {
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
-document.getElementById('addGenreBtn').addEventListener('click', function() {
+var addGenreBtn = document.getElementById('addGenreBtn');
+if (addGenreBtn) addGenreBtn.addEventListener('click', function() {
     api(API + '/genres').then(r => r.json()).then(allGenres => {
         var options = '<option value="">Нет родителя</option>' +
             allGenres.map(g => '<option value="' + g.id + '">' + escapeHtml(g.name) + '</option>').join('');
@@ -785,7 +1013,9 @@ function renderTableWithPostProcess(tbody, rows, rowFn, postFn) {
 function renderTags() {
     var tbody = document.getElementById('tagsTableBody');
     var pagEl = document.getElementById('tagsPagination');
-    var filterText = document.getElementById('filter-tags').value;
+    var filterEl = document.getElementById('filter-tags');
+    if (!tbody || !filterEl) return;
+    var filterText = filterEl.value;
     var filtered = filterData(storeTags, filterText, ['name', 'description', 'color']);
     var sorted = sortData(filtered, getSortKey('table-tags'), getSortDir('table-tags'));
     var total = sorted.length;
@@ -814,7 +1044,8 @@ function renderTags() {
     if (pagTop) pagTop.innerHTML = pagHtml;
 }
 
-document.getElementById('addTagBtn').addEventListener('click', function() {
+var addTagBtn = document.getElementById('addTagBtn');
+if (addTagBtn) addTagBtn.addEventListener('click', function() {
     openAdminModal('Создать тег', `
         <div class="form-group">
             <label>Название:</label>
@@ -891,6 +1122,7 @@ function deleteTag(id) {
 
 function applyFilters() {
     if (currentRole === 'admin') renderUsers();
+    renderNeighbours();
     renderAuthors();
     renderGenres();
     renderTags();
@@ -912,6 +1144,7 @@ setupFilterInput('filter-users', function() { usersPage = 1; applyFilters(); });
 setupFilterInput('filter-authors', function() { authorsPage = 1; applyFilters(); });
 setupFilterInput('filter-genres', function() { genresPage = 1; applyFilters(); });
 setupFilterInput('filter-tags', function() { tagsPage = 1; applyFilters(); });
+setupFilterInput('filter-neighbours', function() { neighboursPage = 1; applyFilters(); });
 
 setupFilterInput('bookAuthorFilter', function() { booksPage = 1; loadBooks(); });
 setupFilterInput('bookTitleFilter', function() { booksPage = 1; loadBooks(); });
@@ -947,6 +1180,7 @@ document.addEventListener('click', function(e) {
         else if (tab === 'authors') { authorsPage = page; renderAuthors(); }
         else if (tab === 'genres') { genresPage = page; renderGenres(); }
         else if (tab === 'tags') { tagsPage = page; renderTags(); }
+        else if (tab === 'neighbours') { neighboursPage = page; renderNeighbours(); }
         else if (tab === 'readlists') { readlistsPage = page; loadReadlists(); }
         return;
     }
@@ -973,6 +1207,12 @@ document.addEventListener('click', function(e) {
         deleteReadlist(target.dataset.id);
     } else if (target.classList.contains('rl-shelf-star')) {
         toggleReadlistShelf(target);
+    } else if (target.classList.contains('edit-neighbour')) {
+        editNeighbour(parseInt(target.dataset.id));
+    } else if (target.classList.contains('test-neighbour')) {
+        testNeighbour(parseInt(target.dataset.id), target);
+    } else if (target.classList.contains('delete-neighbour')) {
+        deleteNeighbour(parseInt(target.dataset.id));
     }
 });
 
@@ -1102,6 +1342,241 @@ function closeSuggestModal() {
 function closeSuggestImportModal() {
     document.getElementById('suggestImportModal').style.display = 'none';
     document.getElementById('suggestImportResult').innerHTML = '';
+}
+
+// ─── Federated search across neighbour servers ────────────────
+
+function setupFederationSearch() {
+    var btn = document.getElementById('federationSearchBtn');
+    if (!btn) return;
+    if (currentRole !== 'admin') {
+        btn.style.display = 'none';
+        return;
+    }
+    btn.addEventListener('click', openFederationSearchModal);
+}
+
+function openFederationSearchModal() {
+    openAdminModal('Поиск 1й круг', `
+        <p style="font-size:13px;color:#666">Поиск выполняется по каталогам соседних серверов, добавленных на вкладке «Серверы» (Администрирование). Если книга найдена на одном из серверов, поиск по остальным прекращается.</p>
+        <div class="form-group"><label>Название или автор:</label>
+            <input type="text" class="filter-input" id="fedQuery" placeholder="Беседы с Богом"></div>
+        <div class="fed-extra">
+            <div class="form-group"><label>Автор (уточнение):</label>
+                <input type="text" class="filter-input" id="fedAuthor" placeholder="Уолш"></div>
+            <div class="form-group"><label>Название (уточнение):</label>
+                <input type="text" class="filter-input" id="fedTitle" placeholder="Беседы"></div>
+            <div class="form-group"><label>Максимум результатов с сервера:</label>
+                <input type="number" class="filter-input" id="fedLimit" value="20" min="1" max="100" style="width:100px"></div>
+        </div>
+        <div class="form-group">
+            <button type="button" class="btn" id="fedSearchBtn">Искать</button>
+        </div>
+        <div class="fed-results-scroll"><div id="fedResults"></div></div>`);
+    var adminModal = document.getElementById('adminModal');
+    adminModal.classList.add('rl-modal-extra-wide', 'rl-modal-locked');
+    var footer = document.getElementById('adminForm').querySelector('.modal-footer');
+    if (footer) {
+        var submitBtn = footer.querySelector('.btn[type="submit"]');
+        if (submitBtn) submitBtn.style.display = 'none';
+        var cancelBtn = footer.querySelector('.btn-secondary');
+        if (cancelBtn) cancelBtn.textContent = 'Закрыть';
+    }
+    document.getElementById('adminForm').onsubmit = function(e) { e.preventDefault(); };
+    document.getElementById('fedSearchBtn').addEventListener('click', doFederationSearch);
+    document.getElementById('fedResults').addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-fed-import]');
+        if (btn) federationImport(parseInt(btn.dataset.neighbour, 10), parseInt(btn.dataset.edition, 10), btn);
+    });
+}
+
+async function doFederationSearch() {
+    var resultsEl = document.getElementById('fedResults');
+    var query = document.getElementById('fedQuery').value.trim();
+    var author = document.getElementById('fedAuthor').value.trim();
+    var title = document.getElementById('fedTitle').value.trim();
+    if (!query && !author && !title) {
+        resultsEl.innerHTML = '<div class="error">Укажите хотя бы одно поле поиска.</div>';
+        return;
+    }
+    var limit = parseInt(document.getElementById('fedLimit').value, 10) || 20;
+    resultsEl.innerHTML = '<div class="loading">Поиск по соседним серверам...</div>';
+    try {
+        var res = await api(API + '/federation/search?limit=' + limit + '&stop_on_first=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query, author: author, title: title })
+        });
+        var data = await res.json();
+        if (!res.ok) {
+            resultsEl.innerHTML = '<div class="error">' + escapeHtml(data.error || 'Ошибка') + '</div>';
+            return;
+        }
+        renderFederationResults(resultsEl, data);
+    } catch(err) {
+        resultsEl.innerHTML = '<div class="error">Ошибка: ' + escapeHtml(err.message) + '</div>';
+    }
+}
+
+function renderFederationResults(el, data) {
+    var results = data.results || [];
+    if (!data.neighbours) {
+        el.innerHTML = '<p class="no-results">Не добавлено ни одного соседнего сервера. Добавьте их на вкладке «Серверы» в Администрировании.</p>';
+        return;
+    }
+    var errors = [];
+    var rows = '';
+    var found = 0;
+    for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        if (r.error) {
+            errors.push(escapeHtml(r.url) + ' — ' + escapeHtml(r.error));
+            continue;
+        }
+        for (var j = 0; j < (r.books || []).length; j++) {
+            var b = r.books[j];
+            found++;
+            rows += '<tr>' +
+                '<td class="fed-result-num">' + found + '</td>' +
+                '<td>' + escapeHtml(r.url) + '</td>' +
+                '<td>' + escapeHtml(b.title) + '</td>' +
+                '<td>' + escapeHtml(b.author) + '</td>' +
+                '<td><button type="button" class="btn btn-small" data-fed-import="1" ' +
+                'data-neighbour="' + r.neighbour_id + '" data-edition="' + b.edition_id + '">Загрузить</button></td>' +
+                '</tr>';
+        }
+    }
+    if (found === 0) {
+        var html = '<p class="no-results">Книга не найдена ни на одном из серверов.</p>';
+        if (errors.length) html += renderFederationErrors(errors);
+        el.innerHTML = html;
+        return;
+    }
+    var html = '<table class="admin-table fed-result-table"><thead><tr>' +
+        '<th class="fed-result-num">#</th><th>УРЛ сервера</th><th>Книга</th><th>Автор</th><th></th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>';
+    if (errors.length) html += renderFederationErrors(errors);
+    el.innerHTML = html;
+}
+
+function renderFederationErrors(errors) {
+    var html = '<div class="fed-errors">';
+    for (var i = 0; i < errors.length; i++) html += '<div class="fed-error">' + errors[i] + '</div>';
+    html += '</div>';
+    return html;
+}
+
+var fedConflictState = null;
+
+async function federationImport(neighbourID, editionID, btn, mode) {
+    mode = mode || '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Загрузка...';
+    }
+    var status = document.createElement('div');
+    status.className = 'fed-import-status';
+    if (btn && btn.parentNode) btn.parentNode.appendChild(status);
+    try {
+        var res = await api(API + '/federation/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ neighbour_id: neighbourID, edition_id: editionID, mode: mode })
+        });
+        var data = await res.json();
+        if (res.status === 409 && data.conflict) {
+            if (status.parentNode) status.parentNode.removeChild(status);
+            if (btn) {
+                btn.textContent = 'Загрузить';
+                btn.disabled = false;
+            }
+            openFedConflictModal(neighbourID, editionID, data, btn);
+            return;
+        }
+        if (!res.ok) {
+            status.className = 'fed-import-status fed-import-error';
+            status.textContent = 'Ошибка: ' + escapeHtml(data.error || res.status);
+            if (btn) { btn.textContent = 'Загрузить'; btn.disabled = false; }
+            return;
+        }
+        if (data.duplicate) {
+            status.className = 'fed-import-status fed-import-dup';
+            status.textContent = escapeHtml(data.message || 'Книга уже существует');
+        } else {
+            status.className = 'fed-import-status fed-import-ok';
+            var action = data.mode === 'overwritten' ? 'Перезаписано: ' :
+                (data.mode === 'created_new' ? 'Создано новое: ' : 'Импортировано: ');
+            status.textContent = action + escapeHtml(data.title || '') +
+                (data.authors && data.authors.length ? ' — ' + escapeHtml(data.authors) : '');
+        }
+        if (btn) btn.textContent = 'Готово';
+    } catch(err) {
+        status.className = 'fed-import-status fed-import-error';
+        status.textContent = 'Ошибка: ' + escapeHtml(err.message);
+        if (btn) {
+            btn.textContent = 'Загрузить';
+            btn.disabled = false;
+        }
+    }
+}
+
+function openFedConflictModal(neighbourID, editionID, data, btn) {
+    fedConflictState = { neighbourID: neighbourID, editionID: editionID, btn: btn || null };
+    var message = document.getElementById('fedConflictMessage');
+    var foundEl = document.getElementById('fedConflictFound');
+    var remote = data.remote || {};
+    var html = '<p>На домашнем сервере уже есть записи с такими же идентификаторами.</p>' +
+        '<table class="admin-table"><tbody>' +
+        '<tr><td>Книга на удалённом сервере</td><td>' + escapeHtml(remote.title || '') +
+        (remote.author ? ' — ' + escapeHtml(remote.author) : '') + '</td></tr>' +
+        '<tr><td>ID произведения (work)</td><td>' + escapeHtml(String(remote.work_id)) + '</td></tr>' +
+        '<tr><td>ID издания (edition)</td><td>' + escapeHtml(String(remote.edition_id)) + '</td></tr>' +
+        '</tbody></table>';
+    var c = data.conflicts || {};
+    var collisions = [];
+    if (c.authors && c.authors.length) collisions.push('автор с ID ' + c.authors.join(', '));
+    if (c.work) collisions.push('произведение (work) с ID ' + escapeHtml(String(remote.work_id)));
+    if (c.edition) collisions.push('издание (edition) с ID ' + escapeHtml(String(remote.edition_id)));
+    if (collisions.length) html += '<p class="fed-conflict-collisions">Конфликтуют: ' + collisions.join(', ') + '.</p>';
+    message.innerHTML = html;
+
+    var found = data.found;
+    if (found) {
+        foundEl.innerHTML = '<div class="fed-conflict-found-box">' +
+            '<strong>Найдено на домашнем сервере:</strong> ' +
+            escapeHtml((found.author ? found.author + ' — ' : '') + found.title) +
+            ' (ID издания ' + escapeHtml(String(found.edition_id)) + ')' +
+            '</div>';
+    } else {
+        foundEl.innerHTML = '';
+    }
+
+    document.getElementById('fedConflictModal').style.display = 'block';
+}
+
+function closeFedConflictModal() {
+    document.getElementById('fedConflictModal').style.display = 'none';
+    if (fedConflictState && fedConflictState.btn) {
+        fedConflictState.btn.textContent = 'Загрузить';
+        fedConflictState.btn.disabled = false;
+    }
+    fedConflictState = null;
+}
+
+async function fedConflictResolve(mode) {
+    if (!fedConflictState) return;
+    var state = fedConflictState;
+    var nb = document.getElementById('fedConflictOverwriteBtn');
+    var cb = document.getElementById('fedConflictCreateBtn');
+    nb.disabled = true;
+    cb.disabled = true;
+    document.getElementById('fedConflictModal').style.display = 'none';
+    fedConflictState = null;
+    // Re-run import with the chosen mode; the status appears under the
+    // originating row's button.
+    await federationImport(state.neighbourID, state.editionID, state.btn, mode);
+    nb.disabled = false;
+    cb.disabled = false;
 }
 
 async function openSuggestModal(readListId) {
@@ -2806,45 +3281,55 @@ function bulkStatusReadlists() {
     };
 }
 
-document.addEventListener('DOMContentLoaded', async function() {
-    if (!await checkAdminAccess()) return;
-
-    if (currentRole !== 'admin') {
-        var usersTab = document.querySelector('.admin-tab[data-tab="users"]');
-        if (usersTab) usersTab.remove();
-        var usersContent = document.getElementById('tab-users');
-        if (usersContent) usersContent.remove();
-        var firstTab = document.querySelector('.admin-tab');
-        if (firstTab) { firstTab.classList.add('active'); document.getElementById('tab-' + firstTab.dataset.tab).classList.add('active'); }
-        loadAuthors();
-        loadBooks();
-        loadGenres();
-        loadTags();
-        setupSuggestionsFilters();
-        setupReadlistsFilters();
-        setupReadlistsSorting();
-        return;
-    }
-
-    setupSorting('table-users');
-    setupSorting('table-authors');
-    setupSorting('table-genres');
-    setupSorting('table-tags');
-    loadUsers();
-    loadAuthors();
-    loadGenres();
-    loadTags();
-    setupSuggestionsFilters();
-    setupReadlistsFilters();
-    setupReadlistsSorting();
-    document.getElementById('adminBackLink').addEventListener('click', function(e) {
+function bindAdminBackLink() {
+    var backLink = document.getElementById('adminBackLink');
+    if (!backLink) return;
+    backLink.addEventListener('click', function(e) {
         e.preventDefault();
         if (window.history.length > 1) {
             window.history.back();
         } else if (document.referrer) {
             window.location.href = document.referrer;
         } else {
-            window.location.href = '/';
+            window.location.href = this.getAttribute('data-back') || '/';
         }
     });
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
+    if (!await checkAdminAccess()) return;
+
+    // Page "Администрирование" (/administer) — users management, admin only
+    if (document.getElementById('tab-users')) {
+        if (currentRole !== 'admin') {
+            document.body.innerHTML = '<div class="container"><h1>Доступ запрещён</h1>' +
+                '<p>Только администратор может управлять пользователями.</p>' +
+                '<a href="/admin" class="btn">К управлению</a></div>';
+            return;
+        }
+        setupSorting('table-users');
+        setupSorting('table-neighbours');
+        loadUsers();
+        loadNeighbours();
+        bindAdminBackLink();
+        return;
+    }
+
+    // Page "Управление" (/admin) — catalog management (editor + admin)
+    if (currentRole !== 'admin') {
+        var adminNav = document.querySelector('.admin-nav-link');
+        if (adminNav) adminNav.remove();
+    }
+    setupSorting('table-authors');
+    setupSorting('table-genres');
+    setupSorting('table-tags');
+    loadAuthors();
+    loadBooks();
+    loadGenres();
+    loadTags();
+    setupSuggestionsFilters();
+    setupFederationSearch();
+    setupReadlistsFilters();
+    setupReadlistsSorting();
+    bindAdminBackLink();
 });
