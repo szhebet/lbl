@@ -2,7 +2,22 @@ const API_BASE = '/api/v1';
 let enableDelete = false;
 
 function triggerDownload(url) {
-    window.location.href = url;
+    // The download route is hit by a plain navigation that only carries
+    // cookies, so first re-issue the HttpOnly session_token cookie from our
+    // current JWT (Authorization header), then navigate. This avoids putting
+    // the token in the URL (a production security concern).
+    syncSessionCookie().then(function () {
+        window.location.href = url;
+    });
+}
+
+function syncSessionCookie() {
+    var token = localStorage.getItem('auth_token');
+    if (!token) return Promise.resolve();
+    return fetch(API_BASE + '/auth/session-cookie', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function () {}).catch(function () {});
 }
 let authorsPage = 1;
 let booksPage = 1;

@@ -16,6 +16,7 @@ type Config struct {
 	Directories DirectoriesConfig `toml:"directories"`
 	Database   DatabaseConfig   `toml:"database"`
 	LLM        LLMConfig        `toml:"llm"`
+	Federation FederationConfig `toml:"federation"`
 }
 
 type ServerConfig struct {
@@ -25,6 +26,7 @@ type ServerConfig struct {
 	LogLevel     string `toml:"log_level"`
 	JWTSecret    string `toml:"jwt_secret"`
 	TokenTTL     int    `toml:"token_ttl"` // hours; 0 = no expiration
+	PublicURL    string `toml:"public_url"`
 }
 
 type DirectoriesConfig struct {
@@ -57,6 +59,21 @@ type LLMConfig struct {
 	Timeout      int    `toml:"timeout"`
 }
 
+// FederationConfig controls the background distribution of user book requests
+// to the registered peer library servers (api_neighbours).
+type FederationConfig struct {
+	// Enabled turns the background distributor on/off.
+	Enabled bool `toml:"enabled"`
+	// PushIntervalSec is how often the background loop wakes to deliver requests.
+	PushIntervalSec int `toml:"push_interval_sec"`
+	// RetryIntervalSec is the time between delivery attempts to an unreachable
+	// neighbour.
+	RetryIntervalSec int `toml:"retry_interval_sec"`
+	// RetryWindowSec is how long an undelivered request is retried before the
+	// distributor gives up on that neighbour for it.
+	RetryWindowSec int `toml:"retry_window_sec"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -87,6 +104,12 @@ func DefaultConfig() *Config {
 			Prompt2:      "по цитате нескольких страниц определи ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
 			PromptConvert: "Преобразуй к формату Автор - Название произведения следующий текст: \n",
 			Timeout:      60,
+		},
+		Federation: FederationConfig{
+			Enabled:          true,
+			PushIntervalSec:  300,
+			RetryIntervalSec: 60,
+			RetryWindowSec:   3600,
 		},
 	}
 }
@@ -151,6 +174,9 @@ func applyEnv(cfg *Config) {
 		if p, err := strconv.Atoi(v); err == nil {
 			cfg.Server.TokenTTL = p
 		}
+	}
+	if v := os.Getenv("LIBAPP_PUBLIC_URL"); v != "" {
+		cfg.Server.PublicURL = v
 	}
 
 	if v := os.Getenv("LIBAPP_DIR_BOOKARCH"); v != "" {
@@ -228,6 +254,25 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LIBAPP_LLM_PROMPT_CONVERT"); v != "" {
 		cfg.LLM.PromptConvert = v
+	}
+
+	if v := os.Getenv("LIBAPP_FED_ENABLED"); v != "" {
+		cfg.Federation.Enabled = v == "true" || v == "1" || v == "yes"
+	}
+	if v := os.Getenv("LIBAPP_FED_PUSH_INTERVAL_SEC"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.PushIntervalSec = p
+		}
+	}
+	if v := os.Getenv("LIBAPP_FED_RETRY_INTERVAL_SEC"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.RetryIntervalSec = p
+		}
+	}
+	if v := os.Getenv("LIBAPP_FED_RETRY_WINDOW_SEC"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.Federation.RetryWindowSec = p
+		}
 	}
 }
 

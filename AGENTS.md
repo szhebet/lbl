@@ -50,7 +50,7 @@ lbl/
 │   ├── export.go     # Export/import handlers
 │   ├── main_test.go  # Tests
 │   ├── schema.sql    # Embedded DB schema (go:embed)
-│   ├── migration_{1.1,2.0,2.1,2.2,2.3,2.4,2.5}.sql
+│   ├── migration_{1.1,2.0,2.1,2.2,2.3,2.4,2.5,5.2,5.3,5.4,5.5,5.6}.sql
 │   ├── config/
 │   │   └── config.go # TOML config struct, Load(), DefaultConfig()
 │   └── utils/
@@ -121,11 +121,12 @@ See `config.toml.example` for all options.
 
 | Section | Fields | Description |
 |---------|--------|-------------|
-| `[server]` | `port`, `bind`, `enable_delete`, `log_level` | HTTP server settings |
+| `[server]` | `port`, `bind`, `enable_delete`, `log_level`, `public_url` | HTTP server settings |
 | `[server]` | `jwt_secret`, `token_ttl` | JWT secret key (auto-generated if empty), token TTL in hours |
 | `[directories]` | `bookarch`, `temp`, `logs`, `templates`, `static` | File system paths |
 | `[database]` | `host`, `port`, `name`, `user`, `password`, `sslmode`, `pgdata` (all-in-one) | PostgreSQL connection |
-| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `timeout` | LLM endpoint settings |
+| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `prompt_convert`, `timeout` | LLM endpoint settings |
+| `[federation]` | `enabled`, `push_interval_sec`, `retry_interval_sec`, `retry_window_sec` | Background distribution of user book requests to peer servers |
 
 ### Environment Variable Overrides
 
@@ -138,19 +139,22 @@ See `config.toml.example` for all options.
 | `LIBAPP_BIND` | server.bind |
 | `LIBAPP_ENABLE_DELETE` | server.enable_delete |
 | `LIBAPP_LOG_LEVEL` | server.log_level |
+| `LIBAPP_PUBLIC_URL` | server.public_url |
 | `LIBAPP_DIR_*` | directories.* |
 | `LIBAPP_DB_*` | database.* |
 | `LIBAPP_LLM_*` | llm.* |
+| `LIBAPP_FED_*` | federation.* |
 
 ### Config Sections
 
 | Section | Fields | Description |
 |---------|--------|-------------|
-| `[server]` | `port`, `bind`, `enable_delete`, `log_level` | HTTP server settings |
+| `[server]` | `port`, `bind`, `enable_delete`, `log_level`, `public_url` | HTTP server settings |
 | `[server]` | `jwt_secret`, `token_ttl` | JWT secret key (auto-generated if empty), token TTL in hours |
 | `[directories]` | `bookarch`, `temp`, `logs`, `templates`, `static`, `backup` | File system paths |
 | `[database]` | `host`, `port`, `name`, `user`, `password`, `sslmode`, `pgdata` (all-in-one) | PostgreSQL connection |
-| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `timeout` | LLM endpoint settings |
+| `[llm]` | `base_url`, `model`, `token`, `prompt`, `prompt2`, `prompt_convert`, `timeout` | LLM endpoint settings |
+| `[federation]` | `enabled`, `push_interval_sec`, `retry_interval_sec`, `retry_window_sec` | Background distribution of user book requests to peer servers |
 
 ## API Endpoints
 
@@ -542,6 +546,192 @@ then add a neighbour on each pointing at the other's HTTPS endpoint with that
 account's credentials and the other site's self-signed cert as `server_cert`
 (see `src/federation.go`).
 
+**Federated request distribution**: a background goroutine
+(`fedRequestsDistributor` in `src/fed_requests.go`, started in `main()`) wakes
+every `[federation] push_interval_sec` seconds and pushes **admin-approved**
+requests to every `api_neighbours` row via `POST /api/v1/server/requests/push`
+(server-role), which stores them in `fed_incoming_requests` and ACKs with
+`{received:n}`.
+
+User requests are NEVER sent automatically. A `read_list` row with
+`looking_for != 'Нет'` becomes eligible only after the admin presses
+**«Запросить по федерации»** on the «Запросы» tab of `/admin`. That button
+calls `POST /api/v1/admin/fed/outgoing` (admin only, `{read_list_id}`), which
+copies the request into the `fed_outgoing_requests` staging table (one row per
+request, `status='approved'`). The distributor reads EXCLUSIVELY from that
+table — it never scans raw `read_list` rows. Admin endpoints:
+`GET /api/v1/admin/fed/outgoing` (list), `DELETE /api/v1/admin/fed/outgoing/:id`
+(revoke approval and cancel the request's pending/failed outbox rows).
+
+Delivery state is persisted in `fed_request_outbox` (one row per neighbour per
+message, keyed by the request `uid`). A message is pushed to a server only
+once: once delivered, its outbox row has status `delivered` and is never
+resent. An unreachable neighbour is retried every `retry_interval_sec` for up
+to `retry_window_sec`, then given up (status `failed`, `next_retry_at = NULL`).
+Outbox rows whose request is not (or no longer) admin-approved are marked
+`cancelled`.
+
+**UID-based delivery accounting (migration 5.2):** every approved request
+carries a UUID `uid` (column on `fed_outgoing_requests`, default
+`gen_random_uuid()`). The batch sent to a peer includes the `uid`, and the peer
+stores it on `fed_incoming_requests`. Identification is by `(source_url, uid)`
+(UNIQUE index, so the same message from the same source is stored once). The
+receiving endpoint `POST /api/v1/server/requests/push` answers
+`{received, exists}` — messages the peer already had (same uid) are counted in
+`exists` and NOT written again; `received` counts newly-stored messages. The
+sending distributor treats either receipt as delivered and does not resend
+(only `pending`/`failed` outbox rows are ever re-pushed). `fed_request_outbox`
+also carries the `uid` for per-delivery bookkeeping.
+
+**Stable read_list_id propagation (migration 5.3):** the request `uid` is
+regenerated whenever an approved request is revoked and re-approved, so linking
+an offered book back to the originating user request by uid alone is unreliable
+(a peer may hold a stale incoming row with an old uid). Therefore every pushed
+batch now also carries the request's stable `read_list_id`, stored on
+`fed_incoming_requests` (new column, migration 5.3). The offer returns it, and
+the receiver links `read_list.book_id` directly by it (uid is used only as a
+fallback for older peers). This fixes both "the offered book was not linked to
+the request" and "push never reached the peer" failures.
+
+**Outbox dedup matches its UNIQUE index:** `fed_request_outbox` has a UNIQUE
+index on `(neighbour_id, bookname, author)` — one delivery row per requested
+title per neighbour. The distributor's `syncOutbox` population must dedup on
+that key too; deduping by `uid` alone lets two approved requests sharing the
+same title collide on INSERT and abort the whole delivery pass (nothing is ever
+pushed). The batch row for a delivered title carries the uid/read_list_id of
+whichever approved request first populated its outbox row.
+
+A manual pass can be triggered with
+`POST /api/v1/admin/fed/push-now` (admin only). Incoming requests from peers
+are listed on the «Управление» page (`/admin`) in the admin-only
+**«Запросы соседей»** tab: `GET /api/v1/admin/fed/requests` (admin only) lists
+them, `POST /api/v1/admin/fed/requests/:id/status` (`{status:
+new|done|hidden}`) updates one, and `DELETE /api/v1/admin/fed/requests/:id`
+removes one entirely. Settings: `LIBAPP_FED_ENABLED`,
+`LIBAPP_FED_PUSH_INTERVAL_SEC`, `LIBAPP_FED_RETRY_INTERVAL_SEC`,
+`LIBAPP_FED_RETRY_WINDOW_SEC`.
+
+**Book offer («Предложить книгу», reference/pull model):** on the «Запросы
+соседей» tab each incoming request has a «Предложить книгу» button
+(`feed-req-offer`) that opens a picker of local books (`openFedOfferModal`).
+Submitting calls `POST /api/v1/admin/federation/offer` (admin only,
+`{incoming_request_id, edition_id}`). The handler finds the requesting server
+by matching the incoming request's `source_url` against `api_neighbours.url`,
+builds local author/work/edition metadata (`loadLocalBookMetadata`) and sends a
+JSON *reference* `POST /api/v1/server/book/offer` (server-role, mTLS via
+`loginToNeighbour`) containing `{source_url, uid, read_list_id, edition_id,
+work_id, metadata}` — NOT the file bytes. On success the incoming request is
+marked `done`.
+
+The receiving `serverOfferBook(db, nc)` resolves the request's `uid` back to
+the requester's `fed_outgoing_requests.read_list_id` (the user request) and:
+1. If a local edition owns the offered book's **content hash** (identity —
+   `offeredFileHash(meta.Files)` → `findEditionIDByHash`) → link it to the
+   request, reply `{ok:true, duplicate:true}` (no error). Duplicate matching
+   is by hash, NEVER by the remote numeric `edition_id`: each server assigns
+   its own auto-increment ids, so a remote id can collide with a different
+   local book and linking it would be wrong (regression: `TestServerOfferBookEditionIDCollision`).
+2. Otherwise pull the book from the offering server (fetch metadata via
+   `/server/metadata/:id` + download `/server/download/:id`, using the
+   neighbour entry that matches `source_url`). If a copy already exists by
+   content hash (`findDuplicateByHash` → `findEditionIDByHash`) → link that
+   existing edition and reply `duplicate:true`.
+3. Otherwise import via `fedCreateLocal(..., allowNewIDs=false)` (falling back
+   to fresh ids on an author/work/edition id collision), link it to the request.
+
+`linkOfferToReadList` sets `read_list.book_id = edition` directly by the
+offer's `read_list_id` (falling back to resolving the `uid`) and touches
+`updated_at`, so the delivered book appears in the user's request on the
+requesting server. The whole offer never produces a "duplicate error" — a book
+already present is simply linked to the request. The `public_url` each offer
+advertises must equal the URL the *other* side has in its `api_neighbours` so
+the requester can pull back correctly. Covered by `TestServerOfferBook` and
+`TestAdminFederationOffer`.
+
+**Offer book + delivery status (migration 5.4):** `fed_incoming_requests`
+gains `offered_edition_id`, `offered_title`, `offered_authors`,
+`delivery_status`, `delivery_error`, `delivered_at`. `adminFederationOffer`
+(sender) records the outcome after sending: on the receiver's OK/duplicate
+(`ok:true`, 200) → `delivery_status='delivered'` + `delivered_at`; on any
+error → `delivery_status='failed'` + `delivery_error` (message includes the
+receiver's HTTP code). The admin list `GET /api/v1/admin/fed/requests` returns
+these fields. UI (`static/js/admin.js` + `admin.css`): the «Запросы соседей»
+table shows a «Предложено» column (offered title/author + status badge); the
+«Предложить книгу» modal when the request already has an offer shows the
+book + status read-only (button disabled) instead of the book picker. Current
+DB version is `5.4`.
+
+**Stable cross-server UID identity (migration 5.5):** `works`, `persons` and
+`editions` each gain a stable `uid` column (`UUID NOT NULL UNIQUE DEFAULT
+gen_random_uuid()`, backfilled on migration). Local integer PKs and all their
+FKs are unchanged — the `uid` exists only to give each entity an unambiguous
+identity across servers, eliminating numeric auto-increment id collisions in
+federation. The server-to-server metadata wire now carries `uid` on
+`fedWorkMeta`/`fedEditionMeta`/`fedAuthorMeta` (both `/server/metadata/:id` and
+`loadLocalBookMetadata`). Matching on the receiving side is by `uid` first:
+`serverOfferBook` links a local edition by `findEditionByUID` before falling
+back to content-hash; `fedInsertWork`/`fedInsertEdition`/
+`fedInsertContributors` reuse a local row that already carries the remote `uid`
+and stamp the remote `uid` (`COALESCE($n, gen_random_uuid())`) on newly-created
+rows, so re-imports and re-offers match unambiguously. New regression test
+`TestServerOfferBookUID`: same edition uid already local → link (duplicate, no
+pull); same integer id but DIFFERENT uid → treated as distinct and pulled.
+Current DB version is `5.5`.
+
+**Request fulfillment + download auth fix (5.6):**
+- **Download no longer fails on a stale cookie (no token in URL).**
+  `/api/v1/books/:id/download` is registered WITHOUT `requireAuthMiddleware` and
+  self-authenticates, accepting (in order) an already-authenticated context
+  (server role group), an `Authorization: Bearer` header, or the `session_token`
+  cookie. The SPA's `triggerDownload()` first calls
+  `POST /api/v1/auth/session-cookie` (`write` group, authed) with its current JWT
+  as a Bearer header; that handler (`syncSessionCookie`, `src/auth.go`) re-issues
+  the fresh HttpOnly `session_token` cookie (role/username pulled from the DB),
+  and only then does the SPA navigate to the download URL — so the browser sends
+  a valid cookie and no token ever appears in the URL (a production requirement:
+  the server is public on the internet). Previously the SPA appended `?token=` to
+  the download URL — this was removed. `downloadBook` still serves the server-role
+  group the same way.
+- **«книга получена» status.** When a remote server processes a request and sends
+  a book back (`/api/v1/server/book/offer`), the requester's approved
+  `fed_outgoing_requests` row is marked `fulfilled_at` + `fulfilled_by_url`
+  (`linkOfferToReadList`). The admin «Запросы» tab (`/suggestions`) surfaces this:
+  the matching `fed_deliveries` entry's `state` becomes `fulfilled` and the
+  «Серверы доставки» column renders it in blue («книга получена»). The «Предложить
+  книгу» modal (`/suggestions/readlist/:id` now returns `{items, delivered}`)
+  shows a read-only block with the book received from the remote server.
+  Current DB version is `5.6`.
+
+**Re-offer + per-server delivery column on the «Запросы» tab:**
+- The «Предложить книгу» button on «Запросы соседей» is always clickable (not
+  disabled after an offer). `openFedOfferModal` shows the current offer + status
+  read-only at the top but always keeps the book picker, so an admin can offer a
+  different book or re-offer.
+- `adminListSuggestions` (`/suggestions`) returns `fed_deliveries` per request: a
+  JSON array of `{url, state, error}` for each neighbour, where `state` is
+  `delivered` (outbox status `delivered`), `sent` (outbox `pending`, or `failed`
+  still being retried) or `error` (outbox `failed` with `next_retry_at` NULL).
+  It is a correlated subquery matching `fed_request_outbox` by
+  `(bookname, author)` joined to `api_neighbours`, excluding `cancelled` rows.
+- The Suggestions card renders delivery as a second column «Серверы доставки» —
+  one line per server with a color dot (green=delivered, yellow=sent, red=error,
+  `title` shows `last_error`). The column renders only on approved requests
+  (`fed_outgoing`, `static/js/admin.js` `fedDeliveryMarker`); the card gets
+  `.has-delivery` (flex, `max-height:240px; overflow-y:auto`) so many servers do
+  not break the layout.
+- Root cause of "запросы не долетают": `fed_request_outbox` has a UNIQUE
+  `(neighbour_id, bookname, author)` index, so multiple approved requests sharing
+  the same title collapse into a single outbox row and a single delivery on the
+  peer. Distinct titles always deliver (verified E2E 9091→9092: fresh request
+  arrives as status `new`). Re-pressing «Запросить по федерации» regenerates
+  the `uid` (`gen_random_uuid()` on `ON CONFLICT` upsert), so peers treat it as
+  a new message even if an older-uid copy exists — it re-delivers instead of
+  being deduped. Delivery is otherwise driven by the background distributor's
+  `push_interval_sec` (default 5m) tick, so a freshly-approved request can take
+  up to 5 minutes to appear. To eliminate that wait, `approveFederationRequest`
+  (`static/js/admin.js`) now fires `POST /api/v1/admin/fed/push-now` right
+  after a successful approval so the request is pushed immediately.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -582,7 +772,7 @@ Tests require PostgreSQL (`DATABASE_URL` env var or config.toml).
 - Database auto-created if not exists
 - Key tables: `users`, `persons`, `works`, `editions`, `edition_files`, `genres`, `edition_genres`, `tags`, `edition_tags`, `shelf`, `reading_status`, `settings`, `user_devices`, `user_books`, `read_list`, `refresh_tokens`
 - Indices for search: GIN trgm on `lower_fio`, `lower_original_title`, `lower_title`
-- DB version tracked in `db_version` table; current version: `2.5`
+- DB version tracked in `db_version` table; current version: `5.6`
 
 ## LLM Config
 

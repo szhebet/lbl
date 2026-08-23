@@ -113,6 +113,7 @@ ON CONFLICT (code) DO NOTHING;
 -- Произведение (абстрактная «книга как идея»)
 CREATE TABLE IF NOT EXISTS works (
     id                SERIAL PRIMARY KEY,
+    uid               UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,  -- стабильный кросс-серверный идентификатор
     original_title    TEXT NOT NULL,
     original_language VARCHAR(3) REFERENCES languages(code),
     first_published   INTEGER,                -- год первой публикации
@@ -129,6 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_works_lower_title ON works USING gin (lower_origi
 -- Персоны (авторы, переводчики, редакторы и т.д.)
 CREATE TABLE IF NOT EXISTS persons (
     id          SERIAL PRIMARY KEY,
+    uid         UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,  -- стабильный кросс-серверный идентификатор
     first_name  TEXT,
     middle_name TEXT,
     last_name   TEXT NOT NULL,
@@ -183,6 +185,7 @@ CREATE TABLE IF NOT EXISTS work_genres (
 -- Издание (конкретная книга в конкретном языке, переводе, оформлении)
 CREATE TABLE IF NOT EXISTS editions (
     id            SERIAL PRIMARY KEY,
+    uid           UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,  -- стабильный кросс-серверный идентификатор
     work_id       INTEGER NOT NULL REFERENCES works(id) ON DELETE CASCADE,
     
     -- Идентификаторы

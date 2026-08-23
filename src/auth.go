@@ -187,6 +187,43 @@ func refreshToken(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// syncSessionCookie re-issues the HttpOnly session_token cookie from the
+// current, already-authenticated JWT (set by requireAuthMiddleware). The SPA
+// calls this right before navigating to a download URL so the browser sends a
+// fresh cookie on the download request — this fixes stale-cookie 401s WITHOUT
+// ever placing the token in the URL.
+func syncSessionCookie(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid, _ := c.Get("user_id")
+		userID, _ := uid.(int)
+		username, _ := c.Get("username")
+		uname, _ := username.(string)
+		role, _ := c.Get("role")
+		r, _ := role.(string)
+		if userID <= 0 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
+			return
+		}
+		// Pull current username/role from the DB to keep the cookie claims fresh
+		// even if the profile was edited since login.
+		var dbUname string
+		var dbRole string
+		db.QueryRow("SELECT username, role FROM users WHERE id = $1", userID).Scan(&dbUname, &dbRole)
+		if dbUname == "" {
+			dbUname = uname
+		}
+		if dbRole == "" {
+			dbRole = r
+		}
+		if dbRole == "" {
+			dbRole = "viewer"
+		}
+		token := generateToken(userID, dbUname, dbRole)
+		setSessionCookie(c, token, tokenTTL)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
 func createUser(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req LoginRequest

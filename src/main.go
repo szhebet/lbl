@@ -95,7 +95,28 @@ var embeddedMigration48 string
 //go:embed migration_4.9.sql
 var embeddedMigration49 string
 
-const currentDBVersion = "4.9"
+//go:embed migration_5.0.sql
+var embeddedMigration50 string
+
+//go:embed migration_5.1.sql
+var embeddedMigration51 string
+
+//go:embed migration_5.2.sql
+var embeddedMigration52 string
+
+//go:embed migration_5.3.sql
+var embeddedMigration53 string
+
+//go:embed migration_5.4.sql
+var embeddedMigration54 string
+
+//go:embed migration_5.5.sql
+var embeddedMigration55 string
+
+//go:embed migration_5.6.sql
+var embeddedMigration56 string
+
+const currentDBVersion = "5.6"
 
 type migration struct {
 	Version     string
@@ -203,6 +224,41 @@ var migrations = []migration{
 		Version:     "4.9",
 		Description: "Add api_neighbours table (peer library servers)",
 		SQL:         stripSchema(embeddedMigration49),
+	},
+	{
+		Version:     "5.0",
+		Description: "Federated book-request distribution (incoming requests + outbox)",
+		SQL:         stripSchema(embeddedMigration50),
+	},
+	{
+		Version:     "5.1",
+		Description: "Approved outbound book-request staging (fed_outgoing_requests)",
+		SQL:         stripSchema(embeddedMigration51),
+	},
+	{
+		Version:     "5.2",
+		Description: "UID-based delivery accounting for federated requests",
+		SQL:         stripSchema(embeddedMigration52),
+	},
+	{
+		Version:     "5.3",
+		Description: "Stable read_list_id on inbound federated requests",
+		SQL:         stripSchema(embeddedMigration53),
+	},
+	{
+		Version:     "5.4",
+		Description: "Offered book + delivery status on inbound federated requests",
+		SQL:         stripSchema(embeddedMigration54),
+	},
+	{
+		Version:     "5.5",
+		Description: "Stable cross-server UID identity on works/persons/editions",
+		SQL:         stripSchema(embeddedMigration55),
+	},
+	{
+		Version:     "5.6",
+		Description: "Record fulfilled federated requests (received book + source)",
+		SQL:         stripSchema(embeddedMigration56),
 	},
 }
 
@@ -738,6 +794,9 @@ func main() {
 		log.Fatal("Failed to initialize neighbour password encryption: ", err)
 	}
 
+	fedDistributor := newFedRequestsDistributor(db, neighbourCrypto, &cfg.Federation, cfg.Server.PublicURL)
+	fedDistributor.Start()
+
 	initJWTSecret(cfg.Server.JWTSecret)
 	initTokenTTL(cfg.Server.TokenTTL)
 
@@ -791,6 +850,16 @@ func main() {
 		public.GET("/shelf/download/:token", downloadShelf(db))
 	}
 
+	// Book download self-authenticates (Accept: Bearer header or session_token
+	// cookie) because the SPA downloads via plain navigation. The SPA refreshes
+	// the HttpOnly session cookie via /auth/session-cookie right before
+	// navigating here, so a stale cookie cannot cause a spurious 401 — and no
+	// token is ever placed in the URL.
+	dl := r.Group("/api/v1")
+	{
+		dl.GET("/books/:id/download", downloadBook(db))
+	}
+
 	// Peer-library federation API (role: server) — called by neighbouring
 	// library servers to search the catalog.
 	serverGrp := r.Group("/api/v1/server")
@@ -804,6 +873,10 @@ func main() {
 		// Reuses downloadBook: serves the stored archive (a single-format ZIP)
 		// of the requested edition so a federating peer can import it.
 		serverGrp.GET("/download/:id", downloadBook(db))
+		// Receives a batch of user book requests pushed by a peer server and
+		// confirms receipt.
+		serverGrp.POST("/requests/push", serverReceiveRequestPush(db))
+		serverGrp.POST("/book/offer", serverOfferBook(db, neighbourCrypto))
 	}
 
 	// Read-only routes (require auth)
@@ -816,7 +889,6 @@ func main() {
 		api.GET("/books/search", searchBooks(db))
 		api.GET("/books/:id", getBook(db))
 		api.GET("/books/:id/extended", getBookExtended(db))
-		api.GET("/books/:id/download", downloadBook(db))
 		api.GET("/authors", getAuthors(db))
 		api.GET("/authors/:id/works", getAuthorWorks(db))
 		api.GET("/genres", getGenres(db))
@@ -872,6 +944,10 @@ func main() {
 		write.POST("/user/readlist", createReadListItem(db))
 		write.GET("/user/readlist/names", getReadListNames(db))
 		write.GET("/user/readlist/:id", getReadListItem(db))
+
+		// Re-issues the HttpOnly session_token cookie from the current JWT so a
+		// plain-navigation download sends a fresh cookie (no token in URL).
+		write.POST("/auth/session-cookie", syncSessionCookie(db))
 		write.PUT("/user/readlist/:id", updateReadListItem(db))
 		write.DELETE("/user/readlist/:id", deleteReadListItem(db))
 	}
@@ -914,8 +990,18 @@ func main() {
 		admin.POST("/federation/search", adminOnlyMiddleware(), adminFederationSearch(db, neighbourCrypto))
 		// Download a book from a neighbour and import it locally — admin only
 		admin.POST("/federation/import", adminOnlyMiddleware(), adminFederationImport(db, neighbourCrypto))
+		admin.POST("/federation/offer", adminOnlyMiddleware(), adminFederationOffer(db, neighbourCrypto))
 		// Test connectivity to a neighbour server (login + ping) — admin only
 		admin.POST("/federation/test", adminOnlyMiddleware(), adminFederationTest(db, neighbourCrypto))
+
+		// Federated book-request distribution — admin only
+		admin.GET("/fed/requests", adminOnlyMiddleware(), adminFedListRequests(db))
+		admin.POST("/fed/requests/:id/status", adminOnlyMiddleware(), adminFedSetRequestStatus(db))
+		admin.DELETE("/fed/requests/:id", adminOnlyMiddleware(), adminFedDeleteRequest(db))
+		admin.POST("/fed/push-now", adminOnlyMiddleware(), adminFedPushNow(db, fedDistributor))
+		admin.GET("/fed/outgoing", adminOnlyMiddleware(), adminFedListOutgoing(db))
+		admin.POST("/fed/outgoing", adminOnlyMiddleware(), adminFedApproveOutgoing(db))
+		admin.DELETE("/fed/outgoing/:id", adminOnlyMiddleware(), adminFedRemoveOutgoing(db))
 
 		// Suggestions management (editor+)
 		admin.GET("/suggestions", adminListSuggestions(db))
@@ -4233,6 +4319,51 @@ func cancelImport() gin.HandlerFunc {
 func downloadBook(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := getConfig(c)
+
+		// The /api/v1/books/:id/download route is registered WITHOUT the
+		// requireAuth middleware so downloads work even when the session cookie
+		// is stale/invalid; the SPA re-issues the HttpOnly session cookie via
+		// POST /api/v1/auth/session-cookie right before navigating here (so no
+		// token ever appears in the URL). Accept, in order: an already-
+		// authenticated context (wrapping server group), an Authorization: Bearer
+		// header, or the session_token cookie.
+		if uid, ok := c.Get("user_id"); !ok || uid.(int) == 0 {
+			raw := ""
+			if h := c.GetHeader("Authorization"); strings.HasPrefix(h, "Bearer ") {
+				raw = h[7:]
+			}
+			if raw == "" {
+				if cookie, err := c.Cookie("session_token"); err == nil && cookie != "" {
+					raw = cookie
+				}
+			}
+			if raw == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Требуется авторизация"})
+				return
+			}
+			claims, err := validateToken(raw)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
+				return
+			}
+			var userID int
+			if id, ok := claims["user_id"].(float64); ok {
+				userID = int(id)
+			}
+			if userID <= 0 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Недействительный токен"})
+				return
+			}
+			var exists bool
+			if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", userID).Scan(&exists); err != nil || !exists {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Пользователь не найден или заблокирован"})
+				return
+			}
+			c.Set("user_id", userID)
+			if role, ok := claims["role"].(string); ok {
+				c.Set("role", role)
+			}
+		}
 
 		editionID := c.Param("id")
 

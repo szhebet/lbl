@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,18 @@ type SuggestionItem struct {
 	SuggHidden    *bool   `json:"sugg_hidden,omitempty"`
 	EditionTitle  *string `json:"edition_title,omitempty"`
 	EditionAuthor *string `json:"edition_author,omitempty"`
+	FedOutgoing   bool          `json:"fed_outgoing"`
+	FedDeliveries []FedDelivery `json:"fed_deliveries"`
+	FulfilledByURL string       `json:"fulfilled_by_url"`
+}
+
+// FedDelivery is one neighbour's delivery status for a federated request.
+// State is: "delivered" (ticket received), "sent" (pushed/retrying, no
+// ticket yet) or "error" (delivery failed, given up).
+type FedDelivery struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
 }
 
 type CreateSuggestionsRequest struct {
@@ -95,7 +108,21 @@ func adminListSuggestions(db *sql.DB) gin.HandlerFunc {
 				rl.created_at, rl.updated_at,
 				s.id AS sugg_id, s.edition_id, s.hidden,
 				COALESCE(e.title, '') AS edition_title,
-				COALESCE(STRING_AGG(DISTINCT p.last_name || ' ' || COALESCE(p.first_name, ''), ', '), '') AS edition_author
+				COALESCE(STRING_AGG(DISTINCT p.last_name || ' ' || COALESCE(p.first_name, ''), ', '), '') AS edition_author,
+				(g.id IS NOT NULL) AS fed_outgoing,
+				COALESCE(g.fulfilled_by_url, '') AS fulfilled_by_url,
+				COALESCE((
+					SELECT json_agg(json_build_object(
+						'url', n.url,
+						'state', CASE WHEN o.status='delivered' THEN 'delivered'
+							WHEN o.status='failed' AND o.next_retry_at IS NULL THEN 'error'
+							ELSE 'sent' END,
+						'error', COALESCE(o.last_error, '')))
+					FROM fed_request_outbox o
+					JOIN api_neighbours n ON n.id = o.neighbour_id
+					WHERE o.bookname = TRIM(rl.bookname) AND o.author = TRIM(rl.author)
+					  AND o.status <> 'cancelled'
+				), '[]') AS fed_deliveries
 			FROM read_list rl
 			JOIN users u ON u.id = rl.user_id
 			LEFT JOIN suggestions s ON s.read_list_id = rl.id AND s.user_id = $%d
@@ -103,11 +130,12 @@ func adminListSuggestions(db *sql.DB) gin.HandlerFunc {
 			LEFT JOIN works w ON w.id = e.work_id
 			LEFT JOIN work_contributors wc ON wc.work_id = w.id AND wc.role = 'author'
 			LEFT JOIN persons p ON p.id = wc.person_id
+			LEFT JOIN fed_outgoing_requests g ON g.read_list_id = rl.id AND g.status = 'approved'
 			%s
 			GROUP BY rl.id, rl.listname, rl.bookname, rl.author, rl.priority,
 				rl.user_id, u.username, rl.looking_for, rl.comment, rl.status,
 				rl.created_at, rl.updated_at,
-				s.id, s.edition_id, s.hidden, e.title
+				s.id, s.edition_id, s.hidden, e.title, g.id, g.fulfilled_by_url
 			ORDER BY rl.priority DESC, rl.created_at DESC
 		`, argNum, whereClause)
 
@@ -125,14 +153,32 @@ func adminListSuggestions(db *sql.DB) gin.HandlerFunc {
 			var suggID, editionID sql.NullInt64
 			var suggHidden sql.NullBool
 			var editionTitle, editionAuthor sql.NullString
+			var fedDeliveries []byte
 
 			if err := rows.Scan(&item.ReadListID, &item.Listname, &item.Bookname, &item.Author,
 				&item.Priority, &item.UserID, &item.Username, &item.LookingFor,
 				&item.Comment, &item.Status, &item.CreatedAt, &item.UpdatedAt,
 				&suggID, &editionID, &suggHidden,
-				&editionTitle, &editionAuthor); err != nil {
+				&editionTitle, &editionAuthor, &item.FedOutgoing, &item.FulfilledByURL, &fedDeliveries); err != nil {
 				adminInternalError(c, err)
 				return
+			}
+			if len(fedDeliveries) > 0 && string(fedDeliveries) != "[]" {
+				var ds []FedDelivery
+				if err := json.Unmarshal(fedDeliveries, &ds); err == nil {
+					item.FedDeliveries = ds
+				}
+			}
+			// Mark the delivery that fulfils this request as received. The peer
+			// that sent the book in response to the offer is the one whose
+			// neighbour URL matches fed_outgoing_requests.fulfilled_by_url.
+			if item.FulfilledByURL != "" {
+				for i := range item.FedDeliveries {
+					if item.FedDeliveries[i].URL == item.FulfilledByURL {
+						item.FedDeliveries[i].State = "fulfilled"
+						item.FedDeliveries[i].Error = ""
+					}
+				}
 			}
 
 			if suggID.Valid {
@@ -222,7 +268,38 @@ func adminGetReadListSuggestions(db *sql.DB) gin.HandlerFunc {
 			items = append(items, item)
 		}
 
-		c.JSON(http.StatusOK, items)
+		// Info about a book already received from a remote server in response to
+		// this request (read_list.book_id linked by the offer) so the offer form
+		// can display it.
+		type deliveredInfo struct {
+			EditionID      int    `json:"edition_id"`
+			Title          string `json:"title"`
+			Author         string `json:"author"`
+			FulfilledByURL string `json:"fulfilled_by_url"`
+		}
+		var delivered deliveredInfo
+		var delEdition sql.NullInt64
+		var delTitle, delAuthor, delURL sql.NullString
+		err = db.QueryRow(`
+			SELECT rl.book_id,
+				COALESCE(e.title, ''),
+				COALESCE((SELECT STRING_AGG(DISTINCT p.last_name || ' ' || COALESCE(p.first_name,''), ', ')
+					FROM work_contributors wc JOIN persons p ON p.id = wc.person_id
+					WHERE wc.work_id = e.work_id AND wc.role='author'), ''),
+				COALESCE((SELECT g.fulfilled_by_url FROM fed_outgoing_requests g
+					WHERE g.read_list_id = rl.id AND g.status='approved' LIMIT 1), '')
+			FROM read_list rl
+			LEFT JOIN editions e ON e.id = rl.book_id
+			WHERE rl.id = $1`, readListID).Scan(
+			&delEdition, &delTitle, &delAuthor, &delURL)
+		if err == nil && delEdition.Valid && delEdition.Int64 > 0 {
+			delivered.EditionID = int(delEdition.Int64)
+			delivered.Title = delTitle.String
+			delivered.Author = delAuthor.String
+			delivered.FulfilledByURL = delURL.String
+		}
+
+		c.JSON(http.StatusOK, gin.H{"items": items, "delivered": delivered})
 	}
 }
 
