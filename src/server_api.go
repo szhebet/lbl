@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,6 +46,7 @@ type ServerBook struct {
 
 type fedWorkMeta struct {
 	ID               int    `json:"id"`
+	UID              string `json:"uid,omitempty"`
 	OriginalTitle    string `json:"original_title"`
 	OriginalLanguage string `json:"original_language"`
 	FirstPublished   *int   `json:"first_published"`
@@ -54,6 +57,7 @@ type fedWorkMeta struct {
 
 type fedEditionMeta struct {
 	ID           int    `json:"id"`
+	UID          string `json:"uid,omitempty"`
 	WorkID       int    `json:"work_id"`
 	ISBN         string `json:"isbn"`
 	EAN          string `json:"ean"`
@@ -75,6 +79,7 @@ type fedEditionMeta struct {
 
 type fedAuthorMeta struct {
 	ID         int    `json:"id"`
+	UID        string `json:"uid,omitempty"`
 	FirstName  string `json:"first_name"`
 	MiddleName string `json:"middle_name"`
 	LastName   string `json:"last_name"`
@@ -122,13 +127,13 @@ func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 		var meta fedBookMetadata
 
 		err := db.QueryRow(`
-			SELECT e.id, e.work_id, COALESCE(e.title,''), COALESCE(e.language,''), COALESCE(e.isbn,''),
+			SELECT e.id, e.uid::text, e.work_id, COALESCE(e.title,''), COALESCE(e.language,''), COALESCE(e.isbn,''),
 			       COALESCE(e.ean,''), COALESCE(e.udc,''), COALESCE(e.bbk,''),
 			       COALESCE(e.publisher,''), e.year, COALESCE(e.city,''), e.pages,
 			       COALESCE(e.series,''), COALESCE(e.series_number,''), COALESCE(e.annotation,''),
 			       COALESCE(e.source,''), e.is_complete, COALESCE(e.quality,'')
 			FROM editions e WHERE e.id = $1`, id).Scan(
-			&meta.Edition.ID, &meta.Edition.WorkID, &meta.Edition.Title, &meta.Edition.Language,
+			&meta.Edition.ID, &meta.Edition.UID, &meta.Edition.WorkID, &meta.Edition.Title, &meta.Edition.Language,
 			&meta.Edition.ISBN, &meta.Edition.EAN, &meta.Edition.UDC, &meta.Edition.BBK,
 			&meta.Edition.Publisher, &meta.Edition.Year, &meta.Edition.City, &meta.Edition.Pages,
 			&meta.Edition.Series, &meta.Edition.SeriesNumber, &meta.Edition.Annotation,
@@ -143,10 +148,10 @@ func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 		}
 
 		err = db.QueryRow(`
-			SELECT id, COALESCE(original_title,''), COALESCE(original_language,''), first_published,
+			SELECT id, uid::text, COALESCE(original_title,''), COALESCE(original_language,''), first_published,
 			       COALESCE(work_type,''), COALESCE(annotation,''), word_count
 			FROM works WHERE id = $1`, meta.Edition.WorkID).Scan(
-			&meta.Work.ID, &meta.Work.OriginalTitle, &meta.Work.OriginalLanguage,
+			&meta.Work.ID, &meta.Work.UID, &meta.Work.OriginalTitle, &meta.Work.OriginalLanguage,
 			&meta.Work.FirstPublished, &meta.Work.WorkType, &meta.Work.Annotation, &meta.Work.WordCount)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -158,7 +163,7 @@ func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 		}
 
 		rows, err := db.Query(`
-			SELECT p.id, COALESCE(p.first_name, ''), COALESCE(p.middle_name, ''), p.last_name, wc.role
+			SELECT p.id, p.uid::text, COALESCE(p.first_name, ''), COALESCE(p.middle_name, ''), p.last_name, wc.role
 			FROM work_contributors wc
 			JOIN persons p ON p.id = wc.person_id
 			WHERE wc.work_id = $1`, meta.Work.ID)
@@ -168,7 +173,7 @@ func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 		}
 		for rows.Next() {
 			var a fedAuthorMeta
-			if err := rows.Scan(&a.ID, &a.FirstName, &a.MiddleName, &a.LastName, &a.Role); err != nil {
+			if err := rows.Scan(&a.ID, &a.UID, &a.FirstName, &a.MiddleName, &a.LastName, &a.Role); err != nil {
 				rows.Close()
 				internalError(c, err)
 				return
@@ -323,3 +328,306 @@ func serverSearchBooks(db *sql.DB) gin.HandlerFunc {
 		})
 	}
 }
+
+// ─── Book offer from a neighbour (role: server) ────────────────
+//
+// POST /api/v1/server/book/offer receives a book that was offered back in
+// response to one of this server's pending requests. The body is a JSON
+// reference (serverOffer):
+//   - source_url   the offering server's public URL (how to reach it back)
+//   - uid          the uid of the original request this offer fulfils
+//   - read_list_id the requester's stable read_list id (preferred for linking)
+//   - edition_id   the offering server's edition id
+//   - metadata     author / work / edition objects with original ids
+//
+// The offered book is pulled from the offering server and imported into the
+// local catalog preserving the original identifiers. If a copy is already
+// present (by id or content hash) it is simply linked to the originating user
+// request instead of being reported as an error.
+
+func serverOfferBook(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var offer serverOffer
+		if err := c.ShouldBindJSON(&offer); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			return
+		}
+		if offer.EditionID <= 0 || offer.Metadata.Edition.ID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный offer"})
+			return
+		}
+		cfg := getConfig(c)
+		meta := &offer.Metadata
+
+		// 1. A copy of the offered book may already be on this server. The
+		// preferred identity is the offered edition's stable cross-server uid:
+		// it is unambiguous even when numeric auto-increment ids collide across
+		// servers. The content hash is a secondary fallback for peers that do
+		// not yet advertise a uid. When a local edition matches, the offer is
+		// recorded and linked when it is the first one.
+		editionUID := meta.Edition.UID
+		if eid := findEditionByUID(db, editionUID); eid > 0 {
+			linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+				meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
+			c.JSON(http.StatusOK, gin.H{
+				"ok":        true,
+				"duplicate": true,
+				"linked":    linked,
+				"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
+				"work_id":   meta.Work.ID,
+				"edition_id": eid,
+				"title":     meta.Edition.Title,
+				"authors":   fedAuthorsDisplay(meta),
+			})
+			return
+		}
+		if h := offeredFileHash(meta); h != "" {
+			if eid := findEditionIDByHash(db, h); eid > 0 {
+				linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+					meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
+				c.JSON(http.StatusOK, gin.H{
+					"ok":        true,
+					"duplicate": true,
+					"linked":    linked,
+					"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
+					"work_id":   meta.Work.ID,
+					"edition_id": eid,
+					"title":     meta.Edition.Title,
+					"authors":   fedAuthorsDisplay(meta),
+				})
+				return
+			}
+		}
+
+		// 2. Pull the book from the offering server (federation-search style).
+		data, remoteMeta, errMsg := pullOfferedBook(db, nc, offer)
+		if errMsg != "" {
+			c.JSON(http.StatusBadGateway, gin.H{"error": errMsg})
+			return
+		}
+		innerHash, formatName, formatID, err := fedAnalyzeBook(data, db)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Не удалось распознать формат книги: " + err.Error()})
+			return
+		}
+
+		// 3. Already present by content hash → link the existing copy.
+		eid := 0
+		duplicate := false
+		if dup := findDuplicateByHash(db, innerHash); dup != nil {
+			duplicate = true
+			eid = findEditionIDByHash(db, innerHash)
+		} else {
+			// 4. Import preserving the original ids; if an id collision on the
+			// author/work blocks that, fall back to fresh identifiers.
+			var workID, editionID int
+			workID, editionID, _, err = fedCreateLocal(db, cfg, remoteMeta, data, innerHash, formatName, formatID, c.GetInt("user_id"), false)
+			if err != nil {
+				workID, editionID, _, err = fedCreateLocal(db, cfg, remoteMeta, data, innerHash, formatName, formatID, c.GetInt("user_id"), true)
+				if err != nil {
+					adminInternalError(c, err)
+					return
+				}
+			}
+			_ = workID
+			eid = editionID
+		}
+
+		linked := false
+		if eid > 0 {
+			linked = acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+				meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
+		}
+
+		log.Printf("[FED OFFER] stored book for request %q from %q (edition <> %d): edition=%d linked=%v",
+			offer.UID, offer.SourceURL, meta.Work.ID, eid, linked)
+		c.JSON(http.StatusOK, gin.H{
+			"ok":         true,
+			"duplicate":  duplicate,
+			"linked":     linked,
+			"message":    fedOfferMessage(linked, "книга скачана и добавлена в библиотеку"),
+			"edition_id": eid,
+			"work_id":    remoteMeta.Work.ID,
+			"title":      meta.Edition.Title,
+			"authors":    fedAuthorsDisplay(meta),
+		})
+	}
+}
+
+// fedOfferMessage builds the human-readable reply for an accepted offer.
+func fedOfferMessage(linked bool, storedWhat string) string {
+	if linked {
+		return "Запрос выполнен: книга привязана к запросу (" + storedWhat + ")"
+	}
+	return "Предложение сохранено: " + storedWhat + ", к запросу уже привязана другая книга"
+}
+
+// offeredFileHash returns the first non-empty content hash advertised by the
+// offered edition, which is the cross-server identity of the book.
+func offeredFileHash(meta *fedBookMetadata) string {
+	for _, f := range meta.Files {
+		if f.FileHash != "" {
+			return f.FileHash
+		}
+	}
+	return ""
+}
+
+// findEditionIDByHash returns the id of the edition that owns a file with the
+// given content hash ("" or 0 when absent).
+func findEditionIDByHash(db *sql.DB, hashStr string) int {
+	var id int
+	if err := db.QueryRow(`SELECT edition_id FROM edition_files WHERE file_hash = $1 LIMIT 1`, hashStr).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// findEditionByUID returns the id of a local edition carrying the given stable
+// cross-server uid ("", 0 when absent).
+func findEditionByUID(db *sql.DB, uid string) int {
+	if uid == "" {
+		return 0
+	}
+	var id int
+	if err := db.QueryRow(`SELECT id FROM editions WHERE uid::text = $1 LIMIT 1`, uid).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// findWorkByUID returns the id of a local work carrying the given stable
+// cross-server uid ("", 0 when absent).
+func findWorkByUID(db *sql.DB, uid string) int {
+	if uid == "" {
+		return 0
+	}
+	var id int
+	if err := db.QueryRow(`SELECT id FROM works WHERE uid::text = $1 LIMIT 1`, uid).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// findPersonByUID returns the id of a local person carrying the given stable
+// cross-server uid ("", 0 when absent).
+func findPersonByUID(db *sql.DB, uid string) int {
+	if uid == "" {
+		return 0
+	}
+	var id int
+	if err := db.QueryRow(`SELECT id FROM persons WHERE uid::text = $1 LIMIT 1`, uid).Scan(&id); err != nil {
+		return 0
+	}
+	return id
+}
+
+// acceptFedOffer records an incoming book offer and attaches it to the user
+// request (read_list row). Behaviour:
+//
+//  1. The offer is journalled in fed_offers (deduped by read_list + source +
+//     remote edition) with the received timestamp — the moment the book was
+//     downloaded and became available to the user.
+//  2. FIRST OFFER WINS: the offered edition is linked to read_list.book_id
+//     only when the request does not have a linked book yet (atomic
+//     `WHERE book_id IS NULL`). Later offers are imported into the library
+//     catalog but never overwrite the link; the user can pick one of them
+//     manually via the offers list API.
+//  3. The first accepted offer marks the approved fed_outgoing_requests row
+//     fulfilled («книга получена»).
+//  4. Any accepted offer stops further distribution of this request: its
+//     pending/failed outbox rows are cancelled, so unreachable neighbours are
+//     not retried once at least one server has responded.
+//
+// Returns true when THIS offer got linked to the request. Silently returns
+// false when neither read_list_id nor uid resolves to a local read_list row.
+func acceptFedOffer(db *sql.DB, readListID, uid, sourceURL string, remoteWorkID, remoteEditionID, localEditionID int, title, authors string) bool {
+	if localEditionID <= 0 {
+		return false
+	}
+	rlID := readListID
+	if rlID == "" && uid != "" {
+		if err := db.QueryRow(`
+			SELECT read_list_id::text FROM fed_outgoing_requests
+			WHERE uid = $1::uuid ORDER BY id DESC LIMIT 1`, uid).Scan(&rlID); err != nil || rlID == "" {
+			return false
+		}
+	}
+	if rlID == "" {
+		return false
+	}
+
+	// 1. Journal the offer (received_at = when it became available locally).
+	db.Exec(`
+		INSERT INTO fed_offers (read_list_id, source_url, remote_work_id, remote_edition_id,
+			local_edition_id, title, authors)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (read_list_id, source_url, remote_edition_id) DO NOTHING`,
+		rlID, sourceURL, remoteWorkID, remoteEditionID, localEditionID, title, authors)
+
+	// 2. First offer wins: atomic claim on the unlinked request.
+	linked := false
+	res, err := db.Exec(`
+		UPDATE read_list SET book_id = $2, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1::uuid AND book_id IS NULL`, rlID, localEditionID)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			linked = true
+			db.Exec(`UPDATE fed_offers SET linked = TRUE
+				WHERE read_list_id = $1::uuid AND source_url = $2 AND remote_edition_id = $3`,
+				rlID, sourceURL, remoteEditionID)
+		}
+	}
+
+	// 3. Mark the request fulfilled by the first responding server.
+	if sourceURL != "" {
+		db.Exec(`
+			UPDATE fed_outgoing_requests SET fulfilled_at = CURRENT_TIMESTAMP,
+				fulfilled_by_url = $2
+			WHERE read_list_id = $1::uuid AND status = 'approved' AND fulfilled_at IS NULL`,
+			rlID, sourceURL)
+	}
+
+	// 4. Stop distribution: no more retries to servers that have not received
+	// the request yet — some server has already answered with a book.
+	cancelPendingFedDeliveries(db, uid)
+	return linked
+}
+
+// pullOfferedBook connects to the offering server (found by matching the offer's
+// source_url against api_neighbours.url), fetches the authoritative metadata and
+// downloads the stored archive of the offered edition.
+func pullOfferedBook(db *sql.DB, nc *NeighbourCrypto, offer serverOffer) ([]byte, *fedBookMetadata, string) {
+	var n federationNeighbour
+	err := db.QueryRow(`
+		SELECT id, url, server_cert, client_cert, username, password_encrypted
+		FROM api_neighbours WHERE url = $1`, offer.SourceURL).
+		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, "Сервер, приславший эту книгу, не найден в списке соседей"
+		}
+		return nil, nil, "Не удалось найти соседа: " + err.Error()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	client, base, token, errMsg := loginToNeighbour(ctx, nc, n)
+	if errMsg != "" {
+		return nil, nil, errMsg
+	}
+
+	remoteMeta, err := fetchFedMetadata(ctx, client, base, token, offer.EditionID)
+	if err != nil {
+		return nil, nil, "Не удалось получить данные книги: " + err.Error()
+	}
+	data, err := downloadFedEdition(ctx, client, base, token, offer.EditionID)
+	if err != nil {
+		return nil, nil, "Не удалось скачать книгу: " + err.Error()
+	}
+	return data, remoteMeta, ""
+}
+
+// serverMetadataLike is a type alias used only to document server
+// role endpoints; it is not otherwise referenced.
+

@@ -32,6 +32,7 @@ document.querySelectorAll('.admin-tab').forEach(tab => {
         if (tab.dataset.tab === 'suggestions') { loadSuggestions(); }
         if (tab.dataset.tab === 'readlists') { loadChildren(); loadListNames(); loadReadlists(); }
         if (tab.dataset.tab === 'neighbours') { loadNeighbours(); }
+        if (tab.dataset.tab === 'fedrequests') { loadFedRequests(); }
     });
 });
 
@@ -1250,6 +1251,17 @@ async function loadSuggestions() {
     }
 }
 
+function fedDeliveryMarker(d) {
+    var cls, label;
+    if (d.state === 'fulfilled') { cls = 'sug-fed-blue'; label = 'книга получена'; }
+    else if (d.state === 'delivered') { cls = 'sug-fed-green'; label = 'Доставлено'; }
+    else if (d.state === 'error') { cls = 'sug-fed-red'; label = 'Ошибка доставки'; }
+    else { cls = 'sug-fed-yellow'; label = 'Отправлено'; }
+    var tip = d.error ? ' title="' + escapeHtml(d.error) + '"' : '';
+    return '<div class="sug-server ' + cls + '"' + tip + '>' +
+        '<span class="sug-dot"></span>' + escapeHtml(d.url || '') + ' — ' + escapeHtml(label) + '</div>';
+}
+
 function renderSuggestions(items, total) {
     var container = document.getElementById('suggestionsTableContainer');
     if (!items || items.length === 0) {
@@ -1272,10 +1284,13 @@ function renderSuggestions(items, total) {
                 has_suggestion: false,
                 has_edition: false,
                 edition_title: '',
-                sugg_hidden: true
+                sugg_hidden: true,
+                fed_outgoing: !!item.fed_outgoing
             };
         }
         var m = merged[rid];
+        if (item.fed_outgoing) m.fed_outgoing = true;
+        if (item.fed_deliveries && item.fed_deliveries.length && !m.fed_deliveries) m.fed_deliveries = item.fed_deliveries;
         if (item.has_suggestion) {
             m.has_suggestion = true;
             if (item.sugg_edition_id) {
@@ -1303,6 +1318,12 @@ function renderSuggestions(items, total) {
         var item = mergedItems[i];
         var actionBtns = '';
 
+        if (item.fed_outgoing) {
+            actionBtns += '<span class="sug-label sug-done">Отправлено по федерации</span> ';
+        } else {
+            actionBtns += '<button class="btn btn-small suggest-federation" data-id="' + escapeHtml(item.read_list_id) + '">Запросить по федерации</button>';
+        }
+
         if (item.has_suggestion) {
             actionBtns += '<button class="btn btn-small btn-secondary suggest-book" data-id="' + escapeHtml(item.read_list_id) + '">Предложить книгу</button>';
             if (item.has_edition) {
@@ -1323,11 +1344,17 @@ function renderSuggestions(items, total) {
             actionBtns += ' <button class="btn btn-small btn-secondary suggest-hide" data-id="' + escapeHtml(item.read_list_id) + '">Скрыть</button>';
         }
 
-        html += '<div class="suggestion-card">' +
+        var hasFed = item.fed_outgoing && item.fed_deliveries && item.fed_deliveries.length;
+        html += '<div class="suggestion-card' + (hasFed ? ' has-delivery' : '') + '">' +
+            '<div class="sug-main">' +
             '<div class="sug-field"><span class="sug-label">Книга:</span> ' + escapeHtml(item.bookname || '') + '</div>' +
             '<div class="sug-field"><span class="sug-label">Автор:</span> ' + escapeHtml(item.author || '') + '</div>' +
             '<div class="sug-field"><span class="sug-label">Пользователь:</span> ' + escapeHtml(item.username || '') + '</div>' +
             '<div class="sug-field"><span class="sug-label">Ищет:</span> ' + escapeHtml(item.looking_for || '') + '</div>' +
+            '</div>' +
+            (hasFed ?
+                '<div class="sug-delivery"><div class="sug-label" style="margin-bottom:6px">Серверы доставки:</div>' +
+                item.fed_deliveries.map(fedDeliveryMarker).join('') + '</div>' : '') +
             '<div class="sug-actions">' + actionBtns + '</div>' +
             '</div>';
     }
@@ -1584,12 +1611,29 @@ async function openSuggestModal(readListId) {
 
     // Load existing suggestions only (books are fetched on-demand)
     var existingSuggestions = [];
+    var delivered = null;
     try {
         var sugRes = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId)).catch(function() { return {ok: false}; });
-        if (sugRes.ok) existingSuggestions = await sugRes.json();
+        if (sugRes.ok) {
+            var sugData = await sugRes.json();
+            existingSuggestions = sugData.items || [];
+            if (sugData.delivered && sugData.delivered.edition_id) delivered = sugData.delivered;
+        }
     } catch(e) {}
 
-    var html = '<div class="form-group"><label>ID записи (не редактируется):</label>' +
+    var html = '';
+    // A book received from a remote server in response to this request.
+    if (delivered) {
+        html += '<div class="sug-delivered-block">' +
+            '<div class="sug-label" style="color:#2980b9;font-weight:600;margin-bottom:4px">Получено с удалённого сервера:</div>' +
+            '<div class="sug-delivered-book"><span class="sug-delivered-source">' + escapeHtml(delivered.fulfilled_by_url || '') + '</span> — ' +
+            escapeHtml(delivered.title || '') +
+            (delivered.author ? ' <span class="sug-delivered-author">(' + escapeHtml(delivered.author) + ')</span>' : '') +
+            ' <span class="sug-delivered-ed">(edition #' + delivered.edition_id + ')</span></div>' +
+            '</div>';
+    }
+
+    html += '<div class="form-group"><label>ID записи (не редактируется):</label>' +
         '<input type="text" id="sugReadListId" value="' + escapeHtml(readListId) + '" readonly class="readonly-input"></div>';
     html += '<div id="sugSlotsContainer">';
     for (var i = 0; i < existingSuggestions.length; i++) {
@@ -1817,6 +1861,12 @@ document.addEventListener('click', function(e) {
         return;
     }
 
+    // Approve request for federation distribution
+    if (target.classList.contains('suggest-federation')) {
+        approveFederationRequest(target.dataset.id, target);
+        return;
+    }
+
     // Hide suggestion
     if (target.classList.contains('suggest-hide')) {
         hideSuggestion(target.dataset.id);
@@ -1860,6 +1910,31 @@ document.addEventListener('click', function(e) {
         });
     }
 });
+
+async function approveFederationRequest(readListId, btn) {
+    if (currentRole !== 'admin') return;
+    try {
+        if (btn) { btn.disabled = true; btn.textContent = 'Отправка...'; }
+        var res = await api(API + '/fed/outgoing', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({read_list_id: readListId})
+        });
+        if (res.ok) {
+            // Push immediately so the request reaches neighbours now instead of
+            // waiting for the background distributor's next 5-minute tick.
+            api(API + '/fed/push-now', {method: 'POST'}).catch(function(){});
+            loadSuggestions();
+        } else {
+            var err = await res.json();
+            alert(err.error || 'Ошибка отправки');
+            if (btn) { btn.disabled = false; btn.textContent = 'Запросить по федерации'; }
+        }
+    } catch(e) {
+        alert('Ошибка: ' + e.message);
+        if (btn) { btn.disabled = false; btn.textContent = 'Запросить по федерации'; }
+    }
+}
 
 async function hideSuggestion(readListId) {
     try {
@@ -3319,6 +3394,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (currentRole !== 'admin') {
         var adminNav = document.querySelector('.admin-nav-link');
         if (adminNav) adminNav.remove();
+        var fedTab = document.querySelector('.admin-tab-fed');
+        if (fedTab) fedTab.remove();
+        var fedContent = document.getElementById('tab-fedrequests');
+        if (fedContent) fedContent.remove();
     }
     setupSorting('table-authors');
     setupSorting('table-genres');
@@ -3331,5 +3410,166 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupFederationSearch();
     setupReadlistsFilters();
     setupReadlistsSorting();
+    setupFedRequests();
     bindAdminBackLink();
 });
+
+// ─── Requests from neighbouring servers (federated, admin-only) ──
+var fedRequestsItems = [];
+
+function setupFedRequests() {
+    var btn = document.getElementById('fedRequestsRefreshBtn');
+    if (btn) btn.addEventListener('click', loadFedRequests);
+}
+
+async function loadFedRequests() {
+    var container = document.getElementById('fedRequestsTableContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="loading">Загрузка...</div>';
+    try {
+        var resp = await api(API + '/fed/requests');
+        if (!resp.ok) { container.innerHTML = '<div class="error">Ошибка загрузки</div>'; return; }
+        var data = await resp.json();
+        fedRequestsItems = data.items || [];
+        renderFedRequests();
+    } catch (e) {
+        container.innerHTML = '<div class="error">Ошибка загрузки: ' + escapeHtml(e.message || e) + '</div>';
+    }
+}
+
+function fedStatusLabel(status) {
+    return { new: 'Новый', done: 'Обработан', hidden: 'Скрыт' }[status] || escapeHtml(status || '');
+}
+
+function renderFedRequests() {
+    var container = document.getElementById('fedRequestsTableContainer');
+    if (!container) return;
+    if (!fedRequestsItems.length) {
+        container.innerHTML = '<div class="note">Запросов от соседних серверов пока нет.</div>';
+        return;
+    }
+    var html = '<table class="admin-table" id="table-fedrequests"><thead><tr>' +
+        '<th>Дата</th><th>Сервер</th><th>Название</th><th>Автор</th><th>Предложено</th><th>Статус</th><th class="actions">Действия</th>' +
+        '</tr></thead><tbody>';
+    fedRequestsItems.forEach(function(it) {
+        var offeredHtml = '';
+        if (it.offered_title) {
+            var dl = fedDeliveryLabel(it.delivery_status);
+            offeredHtml = escapeHtml(it.offered_title) +
+                (it.offered_authors ? '<div class="fed-offered-auth">' + escapeHtml(it.offered_authors) + '</div>' : '') +
+                (dl ? '<div class="' + (it.delivery_status === 'delivered' ? 'sug-fed-ok' : 'sug-fed-fail') + '">' + escapeHtml(dl) + (it.delivered_at ? ' ' + escapeHtml(formatDateTime(it.delivered_at)) : '') + '</div>' : '');
+        } else {
+            offeredHtml = '<span style="color:#999">—</span>';
+        }
+        html += '<tr>' +
+            '<td>' + escapeHtml(it.created_at || '') + '</td>' +
+            '<td>' + escapeHtml(it.source_url || '') + '</td>' +
+            '<td>' + escapeHtml(it.bookname || '') + '</td>' +
+            '<td>' + escapeHtml(it.author || '') + '</td>' +
+            '<td>' + offeredHtml + '</td>' +
+            '<td><span class="badge-role">' + fedStatusLabel(it.status) + '</span></td>' +
+            '<td class="actions">' +
+                '<button class="btn btn-small fed-req-offer" data-id="' + it.id + '">Предложить книгу</button> ' +
+                '<button class="btn btn-small fed-req-done" data-id="' + it.id + '" ' + (it.status === 'done' ? 'disabled' : '') + '>Обработан</button> ' +
+                '<button class="btn btn-small fed-req-hide" data-id="' + it.id + '" ' + (it.status === 'hidden' ? 'disabled' : '') + '>Скрыть</button> ' +
+                '<button class="btn btn-small btn-danger fed-req-del" data-id="' + it.id + '">Удалить</button>' +
+            '</td></tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function fedSetStatus(id, status) {
+    api(API + '/fed/requests/' + id + '/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: status })
+    }).then(function(r) {
+        if (r.ok) loadFedRequests();
+        else r.json().then(function(d) { alert(d.error || 'Ошибка'); });
+    });
+}
+
+function fedDeleteReq(id) {
+    api(API + '/fed/requests/' + id, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+    }).then(function(r) {
+        if (r.ok) loadFedRequests();
+        else r.json().then(function(d) { alert(d.error || 'Ошибка'); });
+    });
+}
+
+document.addEventListener('click', function(e) {
+    var t = e.target.closest('button');
+    if (!t) return;
+    if (t.classList.contains('fed-req-done')) fedSetStatus(parseInt(t.dataset.id), 'done');
+    else if (t.classList.contains('fed-req-hide')) fedSetStatus(parseInt(t.dataset.id), 'hidden');
+    else if (t.classList.contains('fed-req-del')) fedDeleteReq(parseInt(t.dataset.id));
+    else if (t.classList.contains('fed-req-offer')) openFedOfferModal(parseInt(t.dataset.id));
+});
+
+// ─── Offer a book back to the requesting neighbour ─────────────
+
+function fedDeliveryLabel(s) {
+    return { sent: 'Отправлено', delivered: 'Доставлено', failed: 'Ошибка доставки' }[s] || '';
+}
+
+function openFedOfferModal(incomingID) {
+    var item = (fedRequestsItems || []).find(function(i) { return i.id === incomingID; });
+    var alreadyOffered = item && item.offered_title;
+    var infoHtml = '';
+    if (alreadyOffered) {
+        var statusLabel = fedDeliveryLabel(item.delivery_status) || '';
+        var dateStr = item.delivered_at ? formatDateTime(item.delivered_at) : '';
+        infoHtml = '<div class="fed-offered-book">' + escapeHtml(item.offered_title || '') +
+            '<span class="fed-offered-auth">' + escapeHtml(item.offered_authors || '') + '</span>' +
+            '<span class="' + (item.delivery_status === 'delivered' ? 'sug-fed-ok' : 'sug-fed-fail') + '">' + escapeHtml(statusLabel) + (dateStr ? ' ' + escapeHtml(dateStr) : '') + '</span>' +
+            '</div>';
+        infoHtml += '<p style="font-size:12px;color:#666;margin:6px 0">Вы можете предложить другую книгу или отправить её повторно.</p>';
+    }
+    openAdminModal('Предложить книгу', `
+        <p style="font-size:13px;color:#666">Книга будет отправлена серверу, приславшему этот запрос.</p>
+        ` + infoHtml + `
+        <div class="form-group"><label>Книга из библиотеки:</label>
+            <div class="sug-book-search">
+                <input type="hidden" class="sug-edition-id" id="fedOfferEdition">
+                <input type="text" class="sug-bookname form-input" id="fedOfferBookname" autocomplete="off" placeholder="Начните вводить название...">
+                <div class="search-results" style="display:none"></div>
+            </div>
+        </div>`);
+    var group = document.querySelector('#adminModal .sug-book-search');
+    if (group) attachGroupAutocomplete(group);
+    document.getElementById('adminForm').onsubmit = function(e) {
+        e.preventDefault();
+        saveFedOffer(incomingID);
+    };
+}
+
+async function saveFedOffer(incomingID) {
+    var editionInput = document.getElementById('fedOfferEdition');
+    var editionId = editionInput ? parseInt(editionInput.value) || 0 : 0;
+    if (!editionId) { alert('Выберите книгу из библиотеки.'); return; }
+    try {
+        var res = await api(API + '/federation/offer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ incoming_request_id: incomingID, edition_id: editionId })
+        });
+        var data = await res.json().catch(function() { return {}; });
+        if (!res.ok) {
+            alert(data.error || 'Ошибка отправки книги');
+            return;
+        }
+        if (data && data.duplicate) {
+            alert('Запрос выполнен: книга привязана к запросу.\n' +
+                (data.title ? data.title + ' / ' + data.authors : ''));
+        } else {
+            alert('Запрос выполнен: книга отправлена серверу и привязана к запросу (edition ' + (data.edition_id || '') + ', work ' + (data.work_id || '') + ').');
+        }
+        closeAdminModal();
+        loadFedRequests();
+    } catch (err) {
+        alert('Ошибка: ' + err.message);
+    }
+}

@@ -3416,13 +3416,20 @@ func TestSuggestionsCreateHideAndList(t *testing.T) {
 	r.ServeHTTP(w6, req6)
 	require.Equal(t, http.StatusOK, w6.Code)
 
-	var suggestions []struct {
-		ID        int  `json:"id"`
-		EditionID *int `json:"edition_id"`
-		Hidden    bool `json:"hidden"`
+	var readResp struct {
+		Items []struct {
+			ID        int  `json:"id"`
+			EditionID *int `json:"edition_id"`
+			Hidden    bool `json:"hidden"`
+		} `json:"items"`
+		Delivered struct {
+			EditionID int `json:"edition_id"`
+		} `json:"delivered"`
 	}
-	err = json.Unmarshal(w6.Body.Bytes(), &suggestions)
+	err = json.Unmarshal(w6.Body.Bytes(), &readResp)
 	require.NoError(t, err)
+	suggestions := readResp.Items
+	require.NotNil(t, suggestions)
 	assert.GreaterOrEqual(t, len(suggestions), 1, "should have at least one suggestion for rlID1")
 	assert.True(t, suggestions[0].Hidden, "suggestion should be hidden")
 	assert.Nil(t, suggestions[0].EditionID, "edition should be null for hide")

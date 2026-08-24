@@ -2,7 +2,22 @@ const API_BASE = '/api/v1';
 let enableDelete = false;
 
 function triggerDownload(url) {
-    window.location.href = url;
+    // The download route is hit by a plain navigation that only carries
+    // cookies, so first re-issue the HttpOnly session_token cookie from our
+    // current JWT (Authorization header), then navigate. This avoids putting
+    // the token in the URL (a production security concern).
+    syncSessionCookie().then(function () {
+        window.location.href = url;
+    });
+}
+
+function syncSessionCookie() {
+    var token = localStorage.getItem('auth_token');
+    if (!token) return Promise.resolve();
+    return fetch(API_BASE + '/auth/session-cookie', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function () {}).catch(function () {});
 }
 let authorsPage = 1;
 let booksPage = 1;
@@ -3112,10 +3127,115 @@ function openCreateReadlistModal() {
     document.getElementById('rlStatus').value = 'Не заполнено';
     document.getElementById('rlLookingFor').value = 'Нет';
     document.getElementById('rlLookingFor').disabled = false;
+    hideReadlistOffers();
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
     loadAuthorSelect();
     loadBookSelect();
+}
+
+// ─── Federated offers on a read list record ────────────────────
+// The offers block is shown at the bottom of the read-list edit modal: every
+// book offered by a federation server with the date/time it was downloaded
+// and became available. The first offer is linked automatically; the user can
+// link any other offer instead.
+
+function hideReadlistOffers() {
+    var block = document.getElementById('rlOffersBlock');
+    if (block) block.style.display = 'none';
+    var list = document.getElementById('rlOffersList');
+    if (list) list.innerHTML = '';
+}
+
+async function loadReadlistOffers(rlId) {
+    hideReadlistOffers();
+    try {
+        var res = await apiFetch(RL_API + '/' + rlId + '/offers', { headers: getAuthHeaders() });
+        if (!res.ok) return;
+        var data = await res.json();
+        renderReadlistOffers(rlId, (data && data.items) || []);
+    } catch (err) { /* offline / not authorized — no offers block */ }
+}
+
+function formatOfferDateTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    var p = function(n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() +
+        ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function renderReadlistOffers(rlId, items) {
+    var block = document.getElementById('rlOffersBlock');
+    var list = document.getElementById('rlOffersList');
+    if (!block || !list || !items.length) return;
+    list.innerHTML = '';
+    items.forEach(function(o) {
+        var row = document.createElement('div');
+        row.className = 'rl-offer-item' + (o.linked ? ' rl-offer-linked' : '');
+
+        var main = document.createElement('div');
+        main.className = 'rl-offer-main';
+        var title = document.createElement('span');
+        title.className = 'rl-offer-title';
+        title.textContent = o.title || '(без названия)';
+        main.appendChild(title);
+        if (o.linked) {
+            var badge = document.createElement('span');
+            badge.className = 'rl-offer-badge';
+            badge.textContent = 'привязана';
+            main.appendChild(badge);
+        }
+        row.appendChild(main);
+
+        var meta = document.createElement('div');
+        meta.className = 'rl-offer-meta';
+        var host = o.source_url || '';
+        try { host = new URL(o.source_url).host; } catch (e) {}
+        var parts = ['Получено: ' + formatOfferDateTime(o.received_at)];
+        if (o.authors) parts.push(o.authors);
+        parts.push('сервер: ' + host);
+        meta.textContent = parts.join(' · ');
+        row.appendChild(meta);
+
+        if (!o.linked && o.edition_id) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-secondary btn-small rl-link-offer-btn';
+            btn.dataset.offer = o.id;
+            btn.dataset.rl = rlId;
+            btn.textContent = 'Связать';
+            row.appendChild(btn);
+        }
+        list.appendChild(row);
+    });
+    block.style.display = 'block';
+}
+
+async function linkReadlistOffer(rlId, offerId, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    try {
+        var res = await apiFetch(RL_API + '/' + rlId + '/offers/link', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ offer_id: parseInt(offerId, 10) })
+        });
+        if (res.status === 401) { handleAuthFailure(); return; }
+        if (!res.ok) {
+            var err = await res.json().catch(function() { return {}; });
+            alert('Ошибка: ' + (err.error || 'не удалось связать предложение'));
+            if (btn) { btn.disabled = false; btn.textContent = 'Связать'; }
+            return;
+        }
+        var data = await res.json();
+        if (data && data.book_id) applyBookToReadlistForm(data.book_id);
+        await loadReadlistOffers(rlId);
+        loadReadlist();
+    } catch (err) {
+        alert('Ошибка: ' + err.message);
+        if (btn) { btn.disabled = false; btn.textContent = 'Связать'; }
+    }
 }
 
 function updateReadlistFilterBtnText() {
@@ -3258,6 +3378,7 @@ function fillReadlistEditForm(item) {
     }
     document.getElementById('readlistModal').style.display = 'block';
     document.getElementById('readlistModal').classList.add('active');
+    loadReadlistOffers(item.id);
     loadAuthorSelect().then(function() {
         if (!item.author_id) return;
         var sel = document.getElementById('rlAuthorSelect');
@@ -3269,28 +3390,37 @@ function fillReadlistEditForm(item) {
             }
         });
     });
-    loadBookSelect().then(function() {
-        if (!item.book_id) return;
-        apiFetch(API_BASE + '/books/' + item.book_id).then(function(res) {
-            if (!res.ok) return null;
-            return res.json();
-        }).then(function(b) {
-            if (!b) return;
-            var title = (b.edition_title || b.original_title || '').trim();
-            if (!title) return;
-            var author = '';
-            if (typeof b.authors === 'string') author = b.authors;
-            else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
-            var firstAuthor = author ? author.split(',')[0].trim() : '';
-            document.getElementById('rlBookname').value = title;
-            document.getElementById('rlBookId').value = item.book_id;
-            if (firstAuthor) {
-                document.getElementById('rlAuthor').value = firstAuthor;
-                var aid = personMap[firstAuthor.toLowerCase()];
-                document.getElementById('rlAuthorId').value = aid || '';
-            }
-        }).catch(function() {});
-    });
+    if (item.book_id) {
+        loadBookSelect().then(function() { applyBookToReadlistForm(item.book_id); });
+    }
+}
+
+// Fills the visible bookname/author inputs (and hidden ids) from an actual
+// library book. Used when opening the edit modal and right after linking a
+// federated offer — otherwise the first Save would persist stale text.
+function applyBookToReadlistForm(bookId) {
+    if (!bookId) return;
+    apiFetch(API_BASE + '/books/' + bookId).then(function(res) {
+        if (!res.ok) return null;
+        return res.json();
+    }).then(function(b) {
+        if (!b) return;
+        var title = (b.edition_title || b.original_title || '').trim();
+        if (!title) return;
+        var author = '';
+        if (typeof b.authors === 'string') author = b.authors;
+        else if (b.authors && typeof b.authors.String === 'string') author = b.authors.String;
+        var firstAuthor = author ? author.split(',')[0].trim() : '';
+        document.getElementById('rlBookname').value = title;
+        document.getElementById('rlBookId').value = bookId;
+        document.getElementById('rlLookingFor').disabled = true;
+        document.getElementById('rlLookingFor').value = 'Нет';
+        if (firstAuthor) {
+            document.getElementById('rlAuthor').value = firstAuthor;
+            var aid = personMap[firstAuthor.toLowerCase()];
+            document.getElementById('rlAuthorId').value = aid || '';
+        }
+    }).catch(function() {});
 }
 
 function closeReadlistModal() {
@@ -3361,6 +3491,12 @@ document.addEventListener('click', function(e) {
 
     var target = e.target.closest('.close-readlist-btn');
     if (target) { e.preventDefault(); closeReadlistModal(); return; }
+    var linkBtn = e.target.closest('.rl-link-offer-btn');
+    if (linkBtn) {
+        e.preventDefault();
+        linkReadlistOffer(linkBtn.dataset.rl, linkBtn.dataset.offer, linkBtn);
+        return;
+    }
     target = e.target.closest('.close-modal-btn');
     if (target) { e.preventDefault(); closeModal(); return; }
 });

@@ -15,15 +15,16 @@
         <h1 style="margin-bottom:20px">Управление</h1>
 
         <div class="admin-tabs">
-            <a href="/administer" class="admin-nav-link" data-short="П" title="Администрирование">Администрирование</a>
             <button class="admin-tab active" data-tab="authors" data-short="А">Авторы</button>
             <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
             <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
             <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
             <button class="admin-tab" data-tab="suggestions" data-short="З">Запросы</button>
             <button class="admin-tab" data-tab="readlists" data-short="Ч">Программы чтения</button>
+            <button class="admin-tab admin-tab-fed" data-tab="fedrequests" data-short="Ф">Запросы соседей</button>
             <span style="flex:1"></span>
             <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
+            <a href="/administer" class="admin-nav-link admin-nav-red" data-short="П" title="Администрирование">Адм.</a>
         </div>
 
         <div id="tab-authors" class="admin-content active">
@@ -196,6 +197,16 @@
                 <tbody id="readlistsTableBody"></tbody>
             </table>
             <div class="pagination" id="readlistsPagination"></div>
+        </div>
+
+        <div id="tab-fedrequests" class="admin-content">
+            <h2>Запросы книг соседних серверов</h2>
+            <div class="admin-toolbar">
+                <div style="color:#666;margin-right:8px">Запросы, полученные от других серверов федерации.</div>
+                <button class="btn" id="fedRequestsRefreshBtn">Обновить</button>
+                <a href="/api/v1/admin/fed/push-now" rel="nofollow" style="display:none"></a>
+            </div>
+            <div id="fedRequestsTableContainer"><div class="loading">Загрузка...</div></div>
         </div>
 
         <div id="tab-import" class="admin-content">

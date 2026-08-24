@@ -732,19 +732,263 @@ func fedPrimaryFilePath(db *sql.DB, editionID int) string {
 	return p
 }
 
+// ─── Admin-offered book sent back to the requesting neighbour ──
+
+type federationOfferRequest struct {
+	IncomingRequestID int `json:"incoming_request_id"`
+	EditionID         int `json:"edition_id"`
+}
+
+// serverOffer is the reference a server sends when it offers one of its local
+// books to the server that made a request. Instead of pushing the file bytes,
+// the offer carries the identifiers plus this server's public URL so the
+// requesting server can pull the book (federation-search style) and attach it
+// to the user request that originated the order.
+type serverOffer struct {
+	SourceURL  string          `json:"source_url"`  // this server's URL as the requester knows it
+	UID        string          `json:"uid"`         // the uid of the original request (from fed_incoming_requests)
+	ReadListID string          `json:"read_list_id"` // the requester's stable read_list id this offer fulfils
+	EditionID  int             `json:"edition_id"`   // the offered edition on this server
+	WorkID     int             `json:"work_id"`      // the offered work on this server
+	Metadata   fedBookMetadata `json:"metadata"`
+}
+
+// adminFederationOffer POST /api/v1/admin/federation/offer (admin only).
+// Tells the requesting server to pull a locally-selected book. The requesting
+// server imports it (or links the existing copy) and marks the user's request
+// as fulfilled.
+func adminFederationOffer(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req federationOfferRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			return
+		}
+		if req.IncomingRequestID <= 0 || req.EditionID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Укажите incoming_request_id и edition_id"})
+			return
+		}
+
+		// 1. Find the source server of the request.
+		var sourceURL, uid, readListID string
+		err := db.QueryRow(`SELECT source_url, COALESCE(uid::text,''), COALESCE(read_list_id::text,'') FROM fed_incoming_requests WHERE id=$1`,
+			req.IncomingRequestID).Scan(&sourceURL, &uid, &readListID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Запрос соседа не найден"})
+				return
+			}
+			adminInternalError(c, err)
+			return
+		}
+
+		var n federationNeighbour
+		err = db.QueryRow(`
+			SELECT id, url, server_cert, client_cert, username, password_encrypted
+			FROM api_neighbours WHERE url = $1`, sourceURL).
+			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Сервер-источник не найден в списке соседей"})
+				return
+			}
+			adminInternalError(c, err)
+			return
+		}
+
+		// 2. Build the local author/work/edition metadata and validate a file exists.
+		meta, err := loadLocalBookMetadata(db, req.EditionID)
+		if err != nil {
+			adminInternalError(c, err)
+			return
+		}
+		if len(meta.Files) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "У выбранной книги нет файла"})
+			return
+		}
+		offeredTitle := meta.Edition.Title
+		offeredAuthors := fedAuthorsDisplay(meta)
+		recordDelivery := func(status, errMsg string) {
+			db.Exec(`UPDATE fed_incoming_requests SET offered_edition_id=$1,
+				offered_title=$2, offered_authors=$3, delivery_status=$4,
+				delivery_error=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6`,
+				req.EditionID, offeredTitle, offeredAuthors, status, errMsg, req.IncomingRequestID)
+		}
+
+		// 3. Send a reference to the requesting server (it will pull the book).
+		cfg := getConfig(c)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+		defer cancel()
+		client, loginBase, token, errMsg := loginToNeighbour(ctx, nc, n)
+		if errMsg != "" {
+			recordDelivery("failed", errMsg)
+			c.JSON(http.StatusBadGateway, gin.H{"error": errMsg})
+			return
+		}
+		// The requester must be able to reach US back, so advertise our own
+		// public URL (what the requester has stored in its api_neighbours).
+		advert := orDefault(cfg.Server.PublicURL, sourceURL)
+
+		offer := serverOffer{SourceURL: advert, UID: uid, ReadListID: readListID, EditionID: req.EditionID, WorkID: meta.Work.ID, Metadata: *meta}
+		bodyBytes, _ := json.Marshal(offer)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			loginBase+"/api/v1/server/book/offer", bytes.NewReader(bodyBytes))
+		if err != nil {
+			recordDelivery("failed", err.Error())
+			adminInternalError(c, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			recordDelivery("failed", "Не удалось отправить книгу: "+err.Error())
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Не удалось отправить книгу: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		var out map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			recordDelivery("failed", "Некорректный ответ сервера: "+err.Error())
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Некорректный ответ сервера: " + err.Error()})
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			if msg, _ := out["error"].(string); msg != "" {
+				recordDelivery("failed", msg)
+			} else {
+				recordDelivery("failed", fmt.Sprintf("сервер вернул HTTP %d", resp.StatusCode))
+			}
+			c.JSON(resp.StatusCode, out)
+			return
+		}
+
+		// 4. The request is fulfilled — the message reached the neighbour and
+		// the book is linked/imported there. Mark handled + record delivery.
+		delivered := true
+		if b, ok := out["ok"].(bool); ok && !b {
+			delivered = false
+		}
+		status := "delivered"
+		if !delivered {
+			status = "failed"
+		}
+		db.Exec(`UPDATE fed_incoming_requests SET status='done', offered_edition_id=$1,
+			offered_title=$2, offered_authors=$3, delivery_status=$4,
+			delivery_error='', delivered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$5`,
+			req.EditionID, offeredTitle, offeredAuthors, status, req.IncomingRequestID)
+
+		out["source_url"] = sourceURL
+		out["uid"] = uid
+		if readListID != "" {
+			out["read_list_id"] = readListID
+		}
+		c.JSON(http.StatusOK, out)
+	}
+}
+
+// loadLocalBookMetadata returns the author/work/edition objects of a local
+// edition, with the original identifiers, for offer to a neighbouring server.
+func loadLocalBookMetadata(db *sql.DB, editionID int) (*fedBookMetadata, error) {
+	var meta fedBookMetadata
+	err := db.QueryRow(`
+		SELECT e.id, e.uid::text, e.work_id, COALESCE(e.title,''), COALESCE(e.language,''), COALESCE(e.isbn,''),
+		       COALESCE(e.ean,''), COALESCE(e.udc,''), COALESCE(e.bbk,''),
+		       COALESCE(e.publisher,''), e.year, COALESCE(e.city,''), e.pages,
+		       COALESCE(e.series,''), COALESCE(e.series_number,''), COALESCE(e.annotation,''),
+		       COALESCE(e.source,''), e.is_complete, COALESCE(e.quality,'')
+		FROM editions e WHERE e.id = $1`, editionID).Scan(
+		&meta.Edition.ID, &meta.Edition.UID, &meta.Edition.WorkID, &meta.Edition.Title, &meta.Edition.Language,
+		&meta.Edition.ISBN, &meta.Edition.EAN, &meta.Edition.UDC, &meta.Edition.BBK,
+		&meta.Edition.Publisher, &meta.Edition.Year, &meta.Edition.City, &meta.Edition.Pages,
+		&meta.Edition.Series, &meta.Edition.SeriesNumber, &meta.Edition.Annotation,
+		&meta.Edition.Source, &meta.Edition.IsComplete, &meta.Edition.Quality)
+	if err != nil {
+		return nil, err
+	}
+
+	err = db.QueryRow(`
+		SELECT id, uid::text, COALESCE(original_title,''), COALESCE(original_language,''), first_published,
+		       COALESCE(work_type,''), COALESCE(annotation,''), word_count
+		FROM works WHERE id = $1`, meta.Edition.WorkID).Scan(
+		&meta.Work.ID, &meta.Work.UID, &meta.Work.OriginalTitle, &meta.Work.OriginalLanguage,
+		&meta.Work.FirstPublished, &meta.Work.WorkType, &meta.Work.Annotation, &meta.Work.WordCount)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(`
+		SELECT p.id, p.uid::text, COALESCE(p.first_name, ''), COALESCE(p.middle_name, ''), p.last_name, wc.role
+		FROM work_contributors wc JOIN persons p ON p.id = wc.person_id
+		WHERE wc.work_id = $1`, meta.Work.ID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var a fedAuthorMeta
+		if err := rows.Scan(&a.ID, &a.UID, &a.FirstName, &a.MiddleName, &a.LastName, &a.Role); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		meta.Authors = append(meta.Authors, a)
+	}
+	rows.Close()
+
+	rows, err = db.Query(`
+		SELECT g.id, g.name FROM work_genres wg JOIN genres g ON g.id = wg.genre_id
+		WHERE wg.work_id = $1`, meta.Work.ID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var g fedGenreMeta
+		if err := rows.Scan(&g.ID, &g.Name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		meta.Genres = append(meta.Genres, g)
+	}
+	rows.Close()
+
+	rows, err = db.Query(`
+		SELECT ef.id, ef.format_id, f.name, COALESCE(ef.file_size, 0), COALESCE(ef.file_hash, '')
+		FROM edition_files ef JOIN formats f ON f.id = ef.format_id
+		WHERE ef.edition_id = $1`, editionID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var f fedFileMeta
+		if err := rows.Scan(&f.ID, &f.FormatID, &f.FormatName, &f.FileSize, &f.FileHash); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		meta.Files = append(meta.Files, f)
+	}
+	rows.Close()
+
+	return &meta, nil
+}
+
 // fedInsertWork inserts the remote work (with the remote id unless newIDs) and
 // its authors/genres. In create-new mode an existing local work with the same
-// title and authors is reused.
+// title and authors is reused. In either mode a local work that already carries
+// the remote work's stable cross-server uid is reused (identity match), and the
+// uid is stamped on newly-created rows so future matches are unambiguous.
 func fedInsertWork(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, newIDs bool) (int, error) {
+	if wid := findWorkByUID(db, meta.Work.UID); wid > 0 {
+		return wid, nil
+	}
 	if newIDs {
 		if wid := findWorkByTitleAndAuthors(db, meta.Work.OriginalTitle, fedAuthorNames(meta)); wid > 0 {
 			return wid, nil
 		}
 		var id int
 		err := tx.QueryRow(`
-			INSERT INTO works (original_title, original_language, first_published, work_type, annotation, word_count)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			meta.Work.OriginalTitle, fedLanguageCode(tx, meta.Work.OriginalLanguage), meta.Work.FirstPublished,
+			INSERT INTO works (uid, original_title, original_language, first_published, work_type, annotation, word_count)
+			VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7) RETURNING id`,
+			uidVal(meta.Work.UID), meta.Work.OriginalTitle, fedLanguageCode(tx, meta.Work.OriginalLanguage), meta.Work.FirstPublished,
 			orDefault(meta.Work.WorkType, "novel"), strOrNil(meta.Work.Annotation), meta.Work.WordCount).Scan(&id)
 		if err != nil {
 			return 0, err
@@ -760,9 +1004,9 @@ func fedInsertWork(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, newIDs bool) (
 
 	// Preserve the remote work id.
 	if _, err := tx.Exec(`
-		INSERT INTO works (id, original_title, original_language, first_published, work_type, annotation, word_count)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		meta.Work.ID, meta.Work.OriginalTitle, fedLanguageCode(tx, meta.Work.OriginalLanguage), meta.Work.FirstPublished,
+		INSERT INTO works (id, uid, original_title, original_language, first_published, work_type, annotation, word_count)
+		VALUES ($1, COALESCE($2, gen_random_uuid()), $3, $4, $5, $6, $7, $8)`,
+		meta.Work.ID, uidVal(meta.Work.UID), meta.Work.OriginalTitle, fedLanguageCode(tx, meta.Work.OriginalLanguage), meta.Work.FirstPublished,
 		orDefault(meta.Work.WorkType, "novel"), strOrNil(meta.Work.Annotation), meta.Work.WordCount); err != nil {
 		return 0, err
 	}
@@ -774,6 +1018,15 @@ func fedInsertWork(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, newIDs bool) (
 	}
 	fedSyncSequence(tx, "works")
 	return meta.Work.ID, nil
+}
+
+// uidVal returns the uid as a SQL value, or nil so a COALESCE default
+// (gen_random_uuid()) applies when the peer did not advertise one.
+func uidVal(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }
 
 // fedUpsertWork inserts or updates the local work row with the remote work id.
@@ -807,16 +1060,20 @@ func fedUpsertWork(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, _ bool) (int, 
 }
 
 // fedInsertEdition inserts the remote edition with the remote id unless newIDs
-// (create-new mode generates a fresh id).
+// (create-new mode generates a fresh id). A local edition that already carries
+// the remote edition's stable cross-server uid is reused instead of a new row.
 func fedInsertEdition(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, workID, forcedID int, newIDs bool, userID int) (int, error) {
+	if eid := findEditionByUID(db, meta.Edition.UID); eid > 0 {
+		return eid, nil
+	}
 	isbn := fedIsbn(tx, meta.Edition.ISBN, forcedID)
 	lang := fedLanguageCode(tx, meta.Edition.Language)
 	if newIDs {
 		var id int
 		err := tx.QueryRow(`
-			INSERT INTO editions (work_id, isbn, ean, udc, bbk, title, language, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date, uploaded_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18) RETURNING id`,
-			workID, isbn, strOrNil(meta.Edition.EAN), strOrNil(meta.Edition.UDC), strOrNil(meta.Edition.BBK),
+			INSERT INTO editions (uid, work_id, isbn, ean, udc, bbk, title, language, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date, uploaded_by)
+			VALUES (COALESCE($1, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW(),$19) RETURNING id`,
+			uidVal(meta.Edition.UID), workID, isbn, strOrNil(meta.Edition.EAN), strOrNil(meta.Edition.UDC), strOrNil(meta.Edition.BBK),
 			meta.Edition.Title, lang, strOrNil(meta.Edition.Publisher), meta.Edition.Year, strOrNil(meta.Edition.City),
 			meta.Edition.Pages, strOrNil(meta.Edition.Series), strOrNil(meta.Edition.SeriesNumber),
 			strOrNil(meta.Edition.Annotation), strOrNil(meta.Edition.Source), meta.Edition.IsComplete,
@@ -827,9 +1084,9 @@ func fedInsertEdition(tx *sql.Tx, db *sql.DB, meta *fedBookMetadata, workID, for
 		return id, nil
 	}
 	_, err := tx.Exec(`
-		INSERT INTO editions (id, work_id, isbn, ean, udc, bbk, title, language, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date, uploaded_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW(),$19)`,
-		forcedID, workID, isbn, strOrNil(meta.Edition.EAN), strOrNil(meta.Edition.UDC), strOrNil(meta.Edition.BBK),
+		INSERT INTO editions (id, uid, work_id, isbn, ean, udc, bbk, title, language, publisher, year, city, pages, series, series_number, annotation, source, is_complete, quality, upload_date, uploaded_by)
+		VALUES ($1, COALESCE($2, gen_random_uuid()),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20)`,
+		forcedID, uidVal(meta.Edition.UID), workID, isbn, strOrNil(meta.Edition.EAN), strOrNil(meta.Edition.UDC), strOrNil(meta.Edition.BBK),
 		meta.Edition.Title, lang, strOrNil(meta.Edition.Publisher), meta.Edition.Year, strOrNil(meta.Edition.City),
 		meta.Edition.Pages, strOrNil(meta.Edition.Series), strOrNil(meta.Edition.SeriesNumber),
 		strOrNil(meta.Edition.Annotation), strOrNil(meta.Edition.Source), meta.Edition.IsComplete,
@@ -895,6 +1152,16 @@ func fedInsertContributors(tx *sql.Tx, db *sql.DB, workID int, meta *fedBookMeta
 		if role == "" {
 			role = "author"
 		}
+		// Identity match first: a local person that already carries this
+		// author's stable cross-server uid is reused regardless of numeric id.
+		if pid := findPersonByUID(db, a.UID); pid > 0 {
+			if _, err := tx.Exec(`
+				INSERT INTO work_contributors (work_id, person_id, role) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+				workID, pid, role); err != nil {
+				return err
+			}
+			continue
+		}
 		personID := 0
 		if !newIDs {
 			// Overwrite semantics: a local person occupying the remote id must
@@ -921,9 +1188,9 @@ func fedInsertContributors(tx *sql.Tx, db *sql.DB, workID int, meta *fedBookMeta
 		if newIDs {
 			var id int
 			err := tx.QueryRow(`
-				INSERT INTO persons (first_name, middle_name, last_name)
-				VALUES ($1, $2, $3) ON CONFLICT (first_name, last_name) DO NOTHING RETURNING id`,
-				strOrNil(a.FirstName), strOrNil(a.MiddleName), a.LastName).Scan(&id)
+				INSERT INTO persons (uid, first_name, middle_name, last_name)
+				VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4) ON CONFLICT (first_name, last_name) DO NOTHING RETURNING id`,
+				uidVal(a.UID), strOrNil(a.FirstName), strOrNil(a.MiddleName), a.LastName).Scan(&id)
 			if err != nil {
 				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name=$1 AND COALESCE(first_name,'')=$2`,
 					a.LastName, a.FirstName).Scan(&id)
@@ -935,9 +1202,9 @@ func fedInsertContributors(tx *sql.Tx, db *sql.DB, workID int, meta *fedBookMeta
 		} else {
 			var id int
 			err := tx.QueryRow(`
-				INSERT INTO persons (id, first_name, middle_name, last_name)
-				VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING id`,
-				a.ID, strOrNil(a.FirstName), strOrNil(a.MiddleName), a.LastName).Scan(&id)
+				INSERT INTO persons (id, uid, first_name, middle_name, last_name)
+				VALUES ($1, COALESCE($2, gen_random_uuid()), $3, $4, $5) ON CONFLICT (id) DO NOTHING RETURNING id`,
+				a.ID, uidVal(a.UID), strOrNil(a.FirstName), strOrNil(a.MiddleName), a.LastName).Scan(&id)
 			if err != nil {
 				err = tx.QueryRow(`SELECT id FROM persons WHERE last_name=$1 AND COALESCE(first_name,'')=$2`,
 					a.LastName, a.FirstName).Scan(&id)
