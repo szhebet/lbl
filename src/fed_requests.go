@@ -102,14 +102,32 @@ func (d *fedRequestsDistributor) Start() {
 func (d *fedRequestsDistributor) Stop()   { select { case <-d.stop: default: close(d.stop) } }
 func (d *fedRequestsDistributor) IsEnabled() bool { return d.cfg.Enabled }
 
+// cancelPendingFedDeliveries stops further distribution of a request once at
+// least one neighbour has responded with a book offer: pending/failed outbox
+// rows carrying this request's uid are cancelled, so unreachable neighbours
+// are not retried anymore. Rows already delivered (the peer has the request)
+// are left untouched.
+func cancelPendingFedDeliveries(db *sql.DB, uid string) {
+	if uid == "" {
+		return
+	}
+	db.Exec(`
+		UPDATE fed_request_outbox SET status='cancelled', next_retry_at=NULL,
+			last_error='Ответ от сервера уже получен', updated_at=CURRENT_TIMESTAMP
+		WHERE uid = $1::uuid AND status IN ('pending','failed')`, uid)
+}
+
 // gatherApprovedRequests returns the admin-approved set of book requests to
 // push to neighbours. It reads ONLY from fed_outgoing_requests — raw user
-// read_list requests are never sent automatically.
+// read_list requests are never sent automatically. Requests that have already
+// been answered by at least one server (fulfilled_at set) stop being
+// distributed.
 func (d *fedRequestsDistributor) gatherApprovedRequests() ([]fedBookRequest, error) {
 	rows, err := d.db.Query(`
 		SELECT DISTINCT g.uid::text, TRIM(g.bookname), TRIM(g.author), g.priority, COALESCE(g.read_list_id::text,'')
 		FROM fed_outgoing_requests g
 		WHERE g.status = 'approved'
+		  AND g.fulfilled_at IS NULL
 		  AND TRIM(g.bookname) != ''
 		ORDER BY g.priority DESC`)
 	if err != nil {
@@ -603,6 +621,7 @@ func adminFedApproveOutgoing(db *sql.DB) gin.HandlerFunc {
 			ON CONFLICT (read_list_id) WHERE read_list_id IS NOT NULL
 			DO UPDATE SET status='approved', bookname=EXCLUDED.bookname,
 			  author=EXCLUDED.author, priority=EXCLUDED.priority,
+			  uid=gen_random_uuid(), fulfilled_at=NULL, fulfilled_by_url=NULL,
 			  updated_at=CURRENT_TIMESTAMP
 			RETURNING id, status`, req.ReadListID, bookname, author, priority).Scan(&id, &status)
 		if err != nil {

@@ -363,33 +363,37 @@ func serverOfferBook(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 		// preferred identity is the offered edition's stable cross-server uid:
 		// it is unambiguous even when numeric auto-increment ids collide across
 		// servers. The content hash is a secondary fallback for peers that do
-		// not yet advertise a uid. When a local edition matches, the request is
-		// fulfilled by linking that existing copy.
+		// not yet advertise a uid. When a local edition matches, the offer is
+		// recorded and linked when it is the first one.
 		editionUID := meta.Edition.UID
 		if eid := findEditionByUID(db, editionUID); eid > 0 {
-			linkOfferToReadList(db, offer.ReadListID, offer.UID, offer.SourceURL, eid)
+			linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+				meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
 			c.JSON(http.StatusOK, gin.H{
-				"ok":         true,
-				"duplicate":  true,
-				"message":    "Запрос выполнен: книга привязана к запросу (она уже была в библиотеке)",
-				"work_id":    meta.Work.ID,
+				"ok":        true,
+				"duplicate": true,
+				"linked":    linked,
+				"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
+				"work_id":   meta.Work.ID,
 				"edition_id": eid,
-				"title":      meta.Edition.Title,
-				"authors":    fedAuthorsDisplay(meta),
+				"title":     meta.Edition.Title,
+				"authors":   fedAuthorsDisplay(meta),
 			})
 			return
 		}
 		if h := offeredFileHash(meta); h != "" {
 			if eid := findEditionIDByHash(db, h); eid > 0 {
-				linkOfferToReadList(db, offer.ReadListID, offer.UID, offer.SourceURL, eid)
+				linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+					meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
 				c.JSON(http.StatusOK, gin.H{
-					"ok":         true,
-					"duplicate":  true,
-					"message":    "Запрос выполнен: книга привязана к запросу (она уже была в библиотеке)",
-					"work_id":    meta.Work.ID,
+					"ok":        true,
+					"duplicate": true,
+					"linked":    linked,
+					"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
+					"work_id":   meta.Work.ID,
 					"edition_id": eid,
-					"title":      meta.Edition.Title,
-					"authors":    fedAuthorsDisplay(meta),
+					"title":     meta.Edition.Title,
+					"authors":   fedAuthorsDisplay(meta),
 				})
 				return
 			}
@@ -429,21 +433,33 @@ func serverOfferBook(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			eid = editionID
 		}
 
+		linked := false
 		if eid > 0 {
-			linkOfferToReadList(db, offer.ReadListID, offer.UID, offer.SourceURL, eid)
+			linked = acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
+				meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
 		}
 
-		log.Printf("[FED OFFER] stored book for request %q from %q (edition <> %d): edition=%d",
-			offer.UID, offer.SourceURL, meta.Work.ID, eid)
+		log.Printf("[FED OFFER] stored book for request %q from %q (edition <> %d): edition=%d linked=%v",
+			offer.UID, offer.SourceURL, meta.Work.ID, eid, linked)
 		c.JSON(http.StatusOK, gin.H{
 			"ok":         true,
 			"duplicate":  duplicate,
+			"linked":     linked,
+			"message":    fedOfferMessage(linked, "книга скачана и добавлена в библиотеку"),
 			"edition_id": eid,
 			"work_id":    remoteMeta.Work.ID,
 			"title":      meta.Edition.Title,
 			"authors":    fedAuthorsDisplay(meta),
 		})
 	}
+}
+
+// fedOfferMessage builds the human-readable reply for an accepted offer.
+func fedOfferMessage(linked bool, storedWhat string) string {
+	if linked {
+		return "Запрос выполнен: книга привязана к запросу (" + storedWhat + ")"
+	}
+	return "Предложение сохранено: " + storedWhat + ", к запросу уже привязана другая книга"
 }
 
 // offeredFileHash returns the first non-empty content hash advertised by the
@@ -506,34 +522,76 @@ func findPersonByUID(db *sql.DB, uid string) int {
 	return id
 }
 
-// linkOfferToReadList attaches the given edition to the user request (read_list
-// row) this offer fulfils. The local read_list id is preferred — it is stable
-// and survives re-approvals that regenerate the request uid. When it is not
-// carried (older peer), the uid is resolved against fed_outgoing_requests.
-// Silently does nothing when neither resolves. The approved fed_outgoing_requests
-// row is marked fulfilled (with the offering server's URL) so the requester's
-// admin sees «книга получена» in the delivery status.
-func linkOfferToReadList(db *sql.DB, readListID, uid, sourceURL string, editionID int) {
-	if editionID <= 0 {
-		return
+// acceptFedOffer records an incoming book offer and attaches it to the user
+// request (read_list row). Behaviour:
+//
+//  1. The offer is journalled in fed_offers (deduped by read_list + source +
+//     remote edition) with the received timestamp — the moment the book was
+//     downloaded and became available to the user.
+//  2. FIRST OFFER WINS: the offered edition is linked to read_list.book_id
+//     only when the request does not have a linked book yet (atomic
+//     `WHERE book_id IS NULL`). Later offers are imported into the library
+//     catalog but never overwrite the link; the user can pick one of them
+//     manually via the offers list API.
+//  3. The first accepted offer marks the approved fed_outgoing_requests row
+//     fulfilled («книга получена»).
+//  4. Any accepted offer stops further distribution of this request: its
+//     pending/failed outbox rows are cancelled, so unreachable neighbours are
+//     not retried once at least one server has responded.
+//
+// Returns true when THIS offer got linked to the request. Silently returns
+// false when neither read_list_id nor uid resolves to a local read_list row.
+func acceptFedOffer(db *sql.DB, readListID, uid, sourceURL string, remoteWorkID, remoteEditionID, localEditionID int, title, authors string) bool {
+	if localEditionID <= 0 {
+		return false
 	}
-	var rlID string
-	if readListID != "" {
-		rlID = readListID
-	} else if uid != "" {
+	rlID := readListID
+	if rlID == "" && uid != "" {
 		if err := db.QueryRow(`
-			SELECT read_list_id FROM fed_outgoing_requests
-			WHERE uid::text = $1 ORDER BY id DESC LIMIT 1`, uid).Scan(&rlID); err != nil || rlID == "" {
-			return
+			SELECT read_list_id::text FROM fed_outgoing_requests
+			WHERE uid = $1::uuid ORDER BY id DESC LIMIT 1`, uid).Scan(&rlID); err != nil || rlID == "" {
+			return false
 		}
-	} else {
-		return
 	}
-	db.Exec(`UPDATE read_list SET book_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`, rlID, editionID)
+	if rlID == "" {
+		return false
+	}
+
+	// 1. Journal the offer (received_at = when it became available locally).
+	db.Exec(`
+		INSERT INTO fed_offers (read_list_id, source_url, remote_work_id, remote_edition_id,
+			local_edition_id, title, authors)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (read_list_id, source_url, remote_edition_id) DO NOTHING`,
+		rlID, sourceURL, remoteWorkID, remoteEditionID, localEditionID, title, authors)
+
+	// 2. First offer wins: atomic claim on the unlinked request.
+	linked := false
+	res, err := db.Exec(`
+		UPDATE read_list SET book_id = $2, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1::uuid AND book_id IS NULL`, rlID, localEditionID)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			linked = true
+			db.Exec(`UPDATE fed_offers SET linked = TRUE
+				WHERE read_list_id = $1::uuid AND source_url = $2 AND remote_edition_id = $3`,
+				rlID, sourceURL, remoteEditionID)
+		}
+	}
+
+	// 3. Mark the request fulfilled by the first responding server.
 	if sourceURL != "" {
-		db.Exec(`UPDATE fed_outgoing_requests SET fulfilled_at = CURRENT_TIMESTAMP, fulfilled_by_url = $2
-			WHERE read_list_id = $1 AND status = 'approved'`, rlID, sourceURL)
+		db.Exec(`
+			UPDATE fed_outgoing_requests SET fulfilled_at = CURRENT_TIMESTAMP,
+				fulfilled_by_url = $2
+			WHERE read_list_id = $1::uuid AND status = 'approved' AND fulfilled_at IS NULL`,
+			rlID, sourceURL)
 	}
+
+	// 4. Stop distribution: no more retries to servers that have not received
+	// the request yet — some server has already answered with a book.
+	cancelPendingFedDeliveries(db, uid)
+	return linked
 }
 
 // pullOfferedBook connects to the offering server (found by matching the offer's

@@ -660,6 +660,165 @@ func getReadListItem(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// fedOfferItem is one book offered by a federation server for a read_list
+// request, as returned to the owner of that request.
+type fedOfferItem struct {
+	ID              int64  `json:"id"`
+	Title           string `json:"title"`
+	Authors         string `json:"authors"`
+	SourceURL       string `json:"source_url"`
+	RemoteEditionID int64  `json:"remote_edition_id"`
+	EditionID       *int   `json:"edition_id"`
+	ReceivedAt      string `json:"received_at"`
+	Linked          bool   `json:"linked"`
+}
+
+// ownsReadListItem checks the read_list row exists, is not deleted and belongs
+// to the authenticated user.
+func ownsReadListItem(db *sql.DB, c *gin.Context, id string) bool {
+	userID, _ := c.Get("user_id")
+	uid, _ := userID.(int)
+	if uid == 0 {
+		return false
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM read_list WHERE id = $1::uuid AND user_id = $2 AND deleted = FALSE`,
+		id, uid).Scan(&n); err != nil || n == 0 {
+		return false
+	}
+	return true
+}
+
+// getReadListOffers GET /api/v1/user/readlist/:id/offers — all books offered
+// by federation servers for this request, newest first, with the received
+// timestamp (when the offer was downloaded and became available) and which
+// offer is currently linked to the request.
+func getReadListOffers(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		if !ownsReadListItem(db, c, id) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
+			return
+		}
+		rows, err := db.Query(`
+			SELECT o.id, o.title, o.authors, o.source_url, o.remote_edition_id,
+				o.local_edition_id, o.received_at, o.linked
+			FROM fed_offers o
+			WHERE o.read_list_id = $1::uuid
+			ORDER BY o.linked DESC, o.received_at DESC, o.id DESC`, id)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		defer rows.Close()
+		items := make([]fedOfferItem, 0)
+		for rows.Next() {
+			var it fedOfferItem
+			var eid sql.NullInt64
+			var received sql.NullTime
+			if err := rows.Scan(&it.ID, &it.Title, &it.Authors, &it.SourceURL,
+				&it.RemoteEditionID, &eid, &received, &it.Linked); err != nil {
+				internalError(c, err)
+				return
+			}
+			if eid.Valid {
+				e := int(eid.Int64)
+				it.EditionID = &e
+			}
+			if received.Valid {
+				it.ReceivedAt = received.Time.Format(time.RFC3339)
+			}
+			items = append(items, it)
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	}
+}
+
+// flexID is an integer id that accepts both a JSON number (5) and a numeric
+// string ("5") — DOM dataset values are always strings and browser clients
+// may send the id either way.
+type flexID int64
+
+func (f *flexID) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" {
+		*f = 0
+		return nil
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid numeric id %q", s)
+	}
+	*f = flexID(n)
+	return nil
+}
+
+// linkOfferRequest is the body of POST /api/v1/user/readlist/:id/offers/link.
+type linkOfferRequest struct {
+	OfferID flexID `json:"offer_id" binding:"required"`
+}
+
+// linkReadListOffer POST /api/v1/user/readlist/:id/offers/link — links a
+// user-chosen offer to the read_list record (read_list.book_id = the edition
+// imported from that offer). Only the offer's owner may do this. The linked
+// flags are flipped so the chosen offer stays marked in the offers list, and
+// the fulfilled_by_url marker follows the chosen server.
+func linkReadListOffer(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		if !ownsReadListItem(db, c, id) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена"})
+			return
+		}
+		var req linkOfferRequest
+		if err := c.ShouldBindJSON(&req); err != nil || req.OfferID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			return
+		}
+		offerID := int64(req.OfferID)
+		var eid sql.NullInt64
+		var srcURL string
+		err := db.QueryRow(`
+			SELECT local_edition_id, source_url FROM fed_offers
+			WHERE id = $1 AND read_list_id = $2::uuid`, offerID, id).Scan(&eid, &srcURL)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Предложение не найдено"})
+			return
+		}
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		if !eid.Valid || eid.Int64 <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "У предложения нет загруженной книги"})
+			return
+		}
+		editionID := int(eid.Int64)
+		if _, err := db.Exec(`
+			UPDATE read_list SET book_id = $2, updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1::uuid`, id, editionID); err != nil {
+			internalError(c, err)
+			return
+		}
+		if _, err := db.Exec(`
+			UPDATE fed_offers SET linked = (id = $2)
+			WHERE read_list_id = $1::uuid`, id, offerID); err != nil {
+			internalError(c, err)
+			return
+		}
+		if srcURL != "" {
+			db.Exec(`
+				UPDATE fed_outgoing_requests SET fulfilled_at = CURRENT_TIMESTAMP,
+					fulfilled_by_url = $2
+				WHERE read_list_id = $1::uuid AND status = 'approved'`, id, srcURL)
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "book_id": editionID})
+	}
+}
+
 func updateReadListItem(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, _ := c.Get("user_id")

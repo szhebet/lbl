@@ -116,7 +116,10 @@ var embeddedMigration55 string
 //go:embed migration_5.6.sql
 var embeddedMigration56 string
 
-const currentDBVersion = "5.6"
+//go:embed migration_5.7.sql
+var embeddedMigration57 string
+
+const currentDBVersion = "5.7"
 
 type migration struct {
 	Version     string
@@ -259,6 +262,11 @@ var migrations = []migration{
 		Version:     "5.6",
 		Description: "Record fulfilled federated requests (received book + source)",
 		SQL:         stripSchema(embeddedMigration56),
+	},
+	{
+		Version:     "5.7",
+		Description: "Federated book offers journal (fed_offers, first offer wins)",
+		SQL:         stripSchema(embeddedMigration57),
 	},
 }
 
@@ -944,6 +952,8 @@ func main() {
 		write.POST("/user/readlist", createReadListItem(db))
 		write.GET("/user/readlist/names", getReadListNames(db))
 		write.GET("/user/readlist/:id", getReadListItem(db))
+		write.GET("/user/readlist/:id/offers", getReadListOffers(db))
+		write.POST("/user/readlist/:id/offers/link", linkReadListOffer(db))
 
 		// Re-issues the HttpOnly session_token cookie from the current JWT so a
 		// plain-navigation download sends a fresh cookie (no token in URL).

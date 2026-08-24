@@ -646,6 +646,12 @@ header h1 {
     padding: 20px;
 }
 
+/* Readlist modal has no .modal-body wrapper: the form itself is the
+   scrollable region (header stays fixed, scrolls only when needed). */
+.modal-content > form#readlistForm {
+    overflow-y: auto;
+}
+
 .search-results {
     margin-top: 5px;
     border: 1px solid #ddd;
@@ -1710,3 +1716,53 @@ header h1 {
     min-width: 100px;
 }
 
+
+/* Federated offers on a read list record (read-list edit modal) */
+.rl-offers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.rl-offer-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 7px 10px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background: #fafafa;
+    min-width: 0;
+}
+.rl-offer-item.rl-offer-linked {
+    border-color: #bfe3c4;
+    background: #f2faf3;
+}
+.rl-offer-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+.rl-offer-title {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+.rl-offer-badge {
+    font-size: 11px;
+    color: #1e7e34;
+    background: #d9f2dd;
+    border-radius: 10px;
+    padding: 1px 8px;
+    white-space: nowrap;
+}
+.rl-offer-meta {
+    width: 100%;
+    font-size: 12px;
+    color: #777;
+    overflow-wrap: anywhere;
+}
