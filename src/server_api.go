@@ -600,9 +600,9 @@ func acceptFedOffer(db *sql.DB, readListID, uid, sourceURL string, remoteWorkID,
 func pullOfferedBook(db *sql.DB, nc *NeighbourCrypto, offer serverOffer) ([]byte, *fedBookMetadata, string) {
 	var n federationNeighbour
 	err := db.QueryRow(`
-		SELECT id, url, server_cert, client_cert, username, password_encrypted
+		SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
 		FROM api_neighbours WHERE url = $1`, offer.SourceURL).
-		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, "Сервер, приславший эту книгу, не найден в списке соседей"

@@ -13,28 +13,28 @@ import (
 )
 
 type SuggestionItem struct {
-	ID            int     `json:"id"`
-	ReadListID    string  `json:"read_list_id"`
-	Listname      string  `json:"listname"`
-	Bookname      string  `json:"bookname"`
-	Author        string  `json:"author"`
-	Priority      int     `json:"priority"`
-	UserID        int     `json:"user_id"`
-	Username      string  `json:"username"`
-	LookingFor    string  `json:"looking_for"`
-	Comment       string  `json:"comment"`
-	Status        string  `json:"status"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
-	HasSuggestion bool    `json:"has_suggestion"`
-	SuggestionID  *int    `json:"suggestion_id,omitempty"`
-	SuggEditionID *int    `json:"sugg_edition_id,omitempty"`
-	SuggHidden    *bool   `json:"sugg_hidden,omitempty"`
-	EditionTitle  *string `json:"edition_title,omitempty"`
-	EditionAuthor *string `json:"edition_author,omitempty"`
-	FedOutgoing   bool          `json:"fed_outgoing"`
-	FedDeliveries []FedDelivery `json:"fed_deliveries"`
-	FulfilledByURL string       `json:"fulfilled_by_url"`
+	ID             int           `json:"id"`
+	ReadListID     string        `json:"read_list_id"`
+	Listname       string        `json:"listname"`
+	Bookname       string        `json:"bookname"`
+	Author         string        `json:"author"`
+	Priority       int           `json:"priority"`
+	UserID         int           `json:"user_id"`
+	Username       string        `json:"username"`
+	LookingFor     string        `json:"looking_for"`
+	Comment        string        `json:"comment"`
+	Status         string        `json:"status"`
+	CreatedAt      string        `json:"created_at"`
+	UpdatedAt      string        `json:"updated_at"`
+	HasSuggestion  bool          `json:"has_suggestion"`
+	SuggestionID   *int          `json:"suggestion_id,omitempty"`
+	SuggEditionID  *int          `json:"sugg_edition_id,omitempty"`
+	SuggHidden     *bool         `json:"sugg_hidden,omitempty"`
+	EditionTitle   *string       `json:"edition_title,omitempty"`
+	EditionAuthor  *string       `json:"edition_author,omitempty"`
+	FedOutgoing    bool          `json:"fed_outgoing"`
+	FedDeliveries  []FedDelivery `json:"fed_deliveries"`
+	FulfilledByURL string        `json:"fulfilled_by_url"`
 }
 
 // FedDelivery is one neighbour's delivery status for a federated request.
@@ -234,14 +234,14 @@ func adminGetReadListSuggestions(db *sql.DB) gin.HandlerFunc {
 		defer rows.Close()
 
 		type SuggestionEntry struct {
-			ID            int     `json:"id"`
-			ReadListID    string  `json:"read_list_id"`
-			EditionID     *int    `json:"edition_id"`
-			Hidden        bool    `json:"hidden"`
-			CreatedAt     string  `json:"created_at"`
-			UpdatedAt     string  `json:"updated_at"`
-			EditionTitle  string  `json:"edition_title"`
-			EditionAuthor string  `json:"edition_author"`
+			ID            int    `json:"id"`
+			ReadListID    string `json:"read_list_id"`
+			EditionID     *int   `json:"edition_id"`
+			Hidden        bool   `json:"hidden"`
+			CreatedAt     string `json:"created_at"`
+			UpdatedAt     string `json:"updated_at"`
+			EditionTitle  string `json:"edition_title"`
+			EditionAuthor string `json:"edition_author"`
 		}
 
 		items := make([]SuggestionEntry, 0)
@@ -303,6 +303,34 @@ func adminGetReadListSuggestions(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// mirrorLocalOffer journals an admin-made local suggestion as a fed_offers
+// row so the user sees it in the offers block of the readlist edit modal —
+// the same channel used by federation offers. source_url=” marks a local
+// (non-federated) offer; re-offering the same book is a no-op thanks to the
+// UNIQUE(read_list_id, source_url, remote_edition_id) index.
+func mirrorLocalOffer(db *sql.DB, readListID string, editionID int) {
+	if editionID <= 0 || readListID == "" {
+		return
+	}
+	var title, authors string
+	err := db.QueryRow(`
+		SELECT COALESCE(w.original_title, e.title),
+			COALESCE((SELECT STRING_AGG(DISTINCT p.last_name || ' ' || COALESCE(p.first_name, ''), ', ')
+				FROM work_contributors wc JOIN persons p ON p.id = wc.person_id
+				WHERE wc.work_id = e.work_id AND wc.role = 'author'), '')
+		FROM editions e LEFT JOIN works w ON w.id = e.work_id
+		WHERE e.id = $1`, editionID).Scan(&title, &authors)
+	if err != nil {
+		return // edition vanished — nothing to offer
+	}
+	db.Exec(`
+		INSERT INTO fed_offers (read_list_id, source_url, remote_work_id, remote_edition_id,
+			local_edition_id, title, authors)
+		VALUES ($1::uuid, '', 0, $2, $3, $4, $5)
+		ON CONFLICT (read_list_id, source_url, remote_edition_id) DO NOTHING`,
+		readListID, editionID, editionID, title, authors)
+}
+
 func adminCreateSuggestions(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		currentUserID, _ := c.Get("user_id")
@@ -341,6 +369,9 @@ func adminCreateSuggestions(db *sql.DB) gin.HandlerFunc {
 					adminInternalError(c, err)
 					return
 				}
+				if item.EditionID != nil {
+					mirrorLocalOffer(db, req.ReadListID, *item.EditionID)
+				}
 			} else {
 				// For create with no edition: use separate handling to avoid unique violation
 				if item.EditionID == nil {
@@ -368,6 +399,9 @@ func adminCreateSuggestions(db *sql.DB) gin.HandlerFunc {
 				if err != nil {
 					adminInternalError(c, err)
 					return
+				}
+				if item.EditionID != nil {
+					mirrorLocalOffer(db, req.ReadListID, *item.EditionID)
 				}
 			}
 		}

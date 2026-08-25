@@ -119,7 +119,10 @@ var embeddedMigration56 string
 //go:embed migration_5.7.sql
 var embeddedMigration57 string
 
-const currentDBVersion = "5.7"
+//go:embed migration_5.8.sql
+var embeddedMigration58 string
+
+const currentDBVersion = "5.8"
 
 type migration struct {
 	Version     string
@@ -267,6 +270,11 @@ var migrations = []migration{
 		Version:     "5.7",
 		Description: "Federated book offers journal (fed_offers, first offer wins)",
 		SQL:         stripSchema(embeddedMigration57),
+	},
+	{
+		Version:     "5.8",
+		Description: "Disabled flag for api_neighbours (SSRF hardening)",
+		SQL:         stripSchema(embeddedMigration58),
 	},
 }
 
@@ -951,6 +959,7 @@ func main() {
 		write.GET("/user/readlist", getReadListItems(db))
 		write.POST("/user/readlist", createReadListItem(db))
 		write.GET("/user/readlist/names", getReadListNames(db))
+		write.GET("/user/readlist/offers", getUserOffersBatch(db))
 		write.GET("/user/readlist/:id", getReadListItem(db))
 		write.GET("/user/readlist/:id/offers", getReadListOffers(db))
 		write.POST("/user/readlist/:id/offers/link", linkReadListOffer(db))

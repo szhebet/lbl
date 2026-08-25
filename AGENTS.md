@@ -249,7 +249,7 @@ See `config.toml.example` for all options.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/config` | App config (enable_delete flag) |
+| GET | `/api/v1/config` | App config for the SPA (enable_delete flag + llm_prompt_convert). Authenticated (any role) |
 | GET | `/debug/goroutines` | Goroutine dump (admin+editor) |
 
 ### OPDS
@@ -472,7 +472,8 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:9091/
 
 ```bash
 curl -sk -o /dev/null -w "%{http_code}" https://localhost/
-curl -sk https://localhost/api/v1/config
+# /api/v1/config requires auth (any role): expect 401 without a token
+curl -sk -o /dev/null -w "%{http_code}" https://localhost/api/v1/config
 curl -sk -H "X-Platform: android" https://localhost/ | grep -o 'class="android"'
 ```
 
@@ -883,6 +884,41 @@ timeout = 60    # Seconds
 - *(none)*
 
 ### Done (latest)
+- **Блок «Предложения серверов» в форме списка чтения прокручивается общей прокруткой формы**:
+  - `.rl-offers-list` (static/css/style.css) имел `max-height:220px; overflow-y:auto` — у списка офферов была собственная линия прокрутки внутри области полей. Убраны оба свойства; единственным скролл-контейнером модалки осталась `.rl-form-scroll` — список прокручивается вместе с остальными полями формы.
+  - style.css синхронизирован в APK-ассеты, образ пересоздан, library-app (9091) и library-app2 (9092) перезапущены (200), nginx 443/444/445 → 200, новый CSS отдаётся обоими серверами. Контейнеры оставлены запущенными.
+- **Офферы книг кэшируются в APK-офлайне (one-way sync, server → client)**:
+  - До правки: `loadReadlistOffers()` ходил только в сеть (`GET /user/readlist/:id/offers`) — офлайн блок «Полученные книги» просто не показывался, SyncService тянул лишь сами записи списков.
+  - Бэкенд: новый пакетный эндпоинт `GET /api/v1/user/readlist/offers` (src/reading.go `getUserOffersBatch`, маршрут в src/main.go рядом с `/user/readlist/names`; gin спокойно держит статический сегмент рядом с `:id` — как существующий `/names`) — все офферы по всем спискам текущего пользователя одним запросом (`JOIN read_list`, только неудалённые, каждая строка несёт `read_list_id`; сортировка linked DESC → received_at DESC). Поле `ReadListID` у `fedOfferItem` с `omitempty` — per-item эндпоинт остался байт-в-байт прежним.
+  - Java-мост (APK): `ReadListDB.java` DB_VERSION 3→4 + таблица `readlist_offers` (id INTEGER PK, read_list_id, title, authors, source_url, remote_edition_id, edition_id NULLable, received_at, linked, user_id; CREATE IF NOT EXISTS и в onCreate, и в onUpgrade<4), методы `replaceAllOffers(json)` (DELETE ALL + INSERT в транзакции) и `queryAllOffers()`; экспонированы как `AndroidReadListDB.replaceAllOffers/queryAllOffers` (MainActivity.ReadListBridge). **Требуется пересборка APK** — старые билды моста новых методов не имеют.
+  - offline.js: в ReadListStore добавлен offers-кэш с feature-detection `offersSupported()` (старый APK → поведение как раньше): `_loadOffersFromBridge` (фильтр по user_id), `getOffers(rlId)` (сортировка как на сервере), `replaceOffers(rlId, items)` (частичная замена одного списка — прогрев при онлайн-загрузке/после «Связать»), `replaceAllOffers(items)` (полная замена строк ТЕКУЩЕГО пользователя, чужие строки SQLite сохраняются); `clearByUser` теперь чистит и офферы других пользователей. В SyncService добавлен Step 2b сразу после pull записей: `GET /user/readlist/offers` → replaceAllOffers. Push для офферов НЕТ в принципе (никогда не кладутся в OfflineQueue).
+  - app.js: `loadReadlistOffers` при успехе греет кэш (`replaceOffers`), при сетевой ошибке рендерит из `getOffers(rlId)`; `linkReadlistOffer` при `navigator.onLine === false` показывает сообщение и НЕ делает запрос (связывание — запись на сервер, офферы в очередь офлайн не ставятся осознанно).
+  - Совместимость: js_static_test зелёный (новый путь зарегистрирован); полный `go test -count=1 ./src/` зелёный 5 прогонов подряд (один раз был транзиентный FAIL от мусора прошлых прогонов — фикстуры почистены).
+  - Новый тест `TestGetUserOffersBatch` (src/fed_offers_test.go): 2 своих оффера (linked первым) + чужой список не протекает, edition_id пробрасывается, no-auth → 401. Питфолл: фикстурный work id может остаться от прерванного прогона — перед INSERT делать DELETE по своим id.
+  - Live E2E на app1: register → create readlist → 2 fed_offers вставлены SQL → GET /user/readlist/offers отдаёт ровно 2 строки linked-first с read_list_id; другой пользователь видит 0; без токена 401; per-item `/readlist/:id/offers` не изменился. Всё вычищено.
+  - Деплой: бинарь пересобран, образ пересоздан (static запечён внутрь — app2 без mount'ов тоже отдаёт новые ассеты), library-app/library-app2 перезапущены (200), nginx 443/444/445 → 200, JS синхронизированы в APK-ассеты. Контейнеры оставлены запущенными.
+
+- **Локальное «Предложить книгу» видно пользователю (зеркалирование в fed_offers)**:
+  - Причина жалобы: предложение книги админом на вкладке «Запросы» писалось только в таблицу `suggestions` (служебное состояние модалки админки), а блок «Полученные книги» у пользователя читает только `fed_offers`, куда попадают книги исключительно от удалённых серверов федерации — локальные предложения до пользователя не доходили.
+  - Фикс `src/suggestion.go`: хелпер `mirrorLocalOffer(db, readListID, editionID)` — берёт title/authors из editions/works/work_contributors и вставляет строку в `fed_offers` с `source_url=''` (маркер локального оффера), `remote_edition_id=edition_id` (по нему работает дедуп через UNIQUE(read_list_id, source_url, remote_edition_id) — повторное предложение той же книги не дублирует строку). Вызывается из обеих веток `adminCreateSuggestions` (INSERT и UPDATE) при `edition_id != nil`, т.е. и при повторном открытии модалки с сохранением. Питфолл lib/pq: один параметр `$2` в колонках разных типов (BIGINT remote + INTEGER local) даёт «inconsistent types deduced for parameter» — передавать edition_id двумя параметрами.
+  - Привязка пользователем работает через обычный `POST /user/readlist/:id/offers/link` без изменений: для `source_url=''` блок обновления `fed_outgoing_requests.fulfilled_at` корректно пропускается.
+  - Фронтенд (`static/js/app.js` `renderReadlistOffers`): для локальных предложений вместо пустого «сервер: » показывается «предложено администратором».
+  - Тест `TestAdminSuggestionMirrorsToUserOffers` (`src/fed_offers_test.go`): админ предлагает тестовое издание → fed_offers-строка с пустым source_url и верным title/authors → повторный оффер не дублирует → GET /offers отдаёт элемент → link привязывает book_id. Питфоллы testify: `EqualValues` не разыменовывает `*int`; переиспользование httptest.NewRequest со вторым ServeHTTP даёт пустое тело (400).
+  - Live E2E на app1: POST /admin/suggestions (edition 875) → 200; GET /offers показывает книгу с `linked:false`; POST /offers/link → 200, `book_id:875`, `linked:true`. Тестовые записи вычищены (DELETE /user/readlist — мягкий, дочищено SQL).
+  - Проверено: `go test -count=1 ./src/` зелёный, `node --check` OK, бинарь пересобран, APK-ассеты синхронизированы, оба контейнера перезапущены (9091/9092 → 200), nginx → 200, контейнеры оставлены запущенными.
+- **Фикс ошибки кнопок «Скрыть»/«Показать» на вкладке «Запросы»**:
+  - Причина: `hideSuggestion`/`showSuggestion` в `static/js/admin.js` ждали от `GET /suggestions/readlist/:id` плоский массив и падали с «existing.map is not a function» после того, как эндпоинт (миграция 5.6, блок «Предложить книгу») стал возвращать `{items, delivered}`.
+  - Фикс: оба обработчика принимают оба формата — `Array.isArray(data) ? data : (data.items || [])`. Модалка «Предложить книгу» уже работала с новым форматом; других потребителей эндпоинта нет.
+  - Проверено живым прогоном точного пути кнопки: GET (200, `{items:0, delivered:edition_id=849}`) → POST `/admin/suggestions` `{read_list_id, items:[{edition_id:null,hidden:true}]}` → 200 «Сохранено», в БД строка `hidden=t` (в списке не видна — фильтр скрытых, ожидаемо). Тестовые данные вычищены. `go test -count=1 ./src/` зелёный, `node --check` OK, admin.js синхронизирован в APK-ассеты и отдается сервером (static смонтирован).
+- **Вкладки «Программы чтения» и «Запросы соседей» скрыты в APK**:
+  - «Программы чтения» уже скрывалась (`body.android .admin-tab[data-tab="readlists"]`/`#tab-readlists` в `mobile.css`). Для «Запросы соседей» (`templates/admin.html`, `data-tab="fedrequests"`) правил НЕ было — вкладка была видна на Android; добавлены `body.android .admin-tab[data-tab="fedrequests"] { display:none }` + `#tab-fedrequests { display:none }` рядом с существующими (после блока `neighbours`).
+  - Механизм скрытия: детекция через `<body class="android">` + mobile.css — класс и линк на CSS инжектятся и сервером (`X-Platform: android` → замена в admin.html, src/main.go), и `MainActivity.java` (`serveAdminFromAssets()` для `/admin`, `serveAdministerFromAssets()` для `/administer`; `/static/*` отдаётся из APK-ассетов).
+  - Проверено на живых серверах: все порты (9091/9092 напрямую и 443/444/445 через nginx) при `X-Platform: android` отдают `<body class="android">` и mobile.css с обоими fedrequests-правилами; правило readlists на месте; APK-ассет `www/static/css/mobile.css` синхронизирован. Контейнеры оставлены запущенными. Пересборка бинаря/образа не требовалась (static смонтирован в контейнеры).
+- **Форма списка чтения шире + кнопки «Сохранить»/«Отмена» не скрываются прокруткой**:
+  - `templates/index.html`: разметка `readlistForm` перестроена — все поля и блок офферов обёрнуты в `<div class="rl-form-scroll">`, футер с кнопками вынесен из скроллящейся области как `<div class="modal-footer rl-form-footer">`; инлайн-стили (`padding:20px`, `max-width:500px`, кастомный футер) убраны.
+  - `static/css/style.css`: `#readlistModal .modal-content { max-width:700px }` (было 500px); `#readlistForm { display:flex; flex-direction:column; flex:1; min-height:0 }` — форма занимает остаток высоты модалки; `.rl-form-scroll { flex:1; min-height:0; overflow-y:auto; padding:20px }` — прокрутка только у полей (появляется при необходимости); `.rl-form-footer { flex-shrink:0 }` — кнопки всегда видны внизу под шапкой.
+  - `static/css/mobile.css`: android-правило перенесено с формы на `body.android #readlistModal .rl-form-scroll` (padding 16px + touch-скролл).
+  - Проверено: `go test -count=1 ./src/` зелёный, бинарь пересобран, APK-ассеты (`index.html`, `style.css`, `mobile.css`) синхронизированы, образ пересоздан, оба контейнера перезапущены (9091/9092 → 200), nginx 443/444/445 → 200, новая разметка и CSS-правила отдаются сервером.
 - **Форма списка чтения: прокрутка модалки + фикс несохранения полей после «Связать»**:
   - Прокрутка: `.modal-content > form#readlistForm { overflow-y: auto }` в `static/css/style.css` — форма модалки редактирования/создания записи списка чтения скроллится при необходимости (шапка модалки зафиксирована; контейнер `.modal-content` уже flex-column с max-height 90vh). На Android аналогичное правило уже было в `mobile.css`.
   - Фикс бага «связал книгу → поля на форме новые, но при первом «Сохранить» в БД попадали старые значения»: `linkReadlistOffer` обновлял только скрытый `#rlBookId`, видимые «Название книги»/«Автор» оставались со старым текстом (реальные данные подставлялись лишь при повторном открытии формы веткой `loadBookSelect` в `fillReadlistEditForm`, поэтому второе сохранение «чинило»). Решение: логика заполнения вынесена из `fillReadlistEditForm` в общий хелпер `applyBookToReadlistForm(bookId)` (`static/js/app.js`) — дергает `GET /books/:id`, заполняет `rlBookname`/`rlAuthor`/скрытые id и блокирует `rlLookingFor`; вызывается и при открытии формы, и сразу после успешного «Связать».

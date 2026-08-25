@@ -3627,6 +3627,112 @@ func TestNeighboursCRUD(t *testing.T) {
 	assert.Equal(t, 0, cnt)
 }
 
+func TestNeighboursHTTPSAndDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+
+	db := setupTestDB()
+	defer db.Close()
+
+	uname := "nbrsec_admin_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var adminID int
+	err := db.QueryRow(`INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin') RETURNING id`,
+		uname, "$2a$10$dummyhash").Scan(&adminID)
+	require.NoError(t, err)
+	defer db.Exec("DELETE FROM users WHERE id = $1", adminID)
+	adminToken := generateToken(adminID, uname, "admin")
+
+	nc, err := NewNeighbourCrypto(db)
+	require.NoError(t, err)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("db", db); c.Set("role", "admin"); c.Next() })
+	admin := r.Group("/api/v1/admin")
+	admin.Use(adminAuthMiddleware())
+	ng := admin.Group("/neighbours")
+	ng.Use(adminOnlyMiddleware())
+	ng.GET("", adminGetNeighbours(db))
+	ng.GET("/:id", adminGetNeighbour(db))
+	ng.POST("", adminCreateNeighbour(db, nc))
+	ng.PUT("/:id", adminUpdateNeighbour(db, nc))
+	ng.DELETE("/:id", adminDeleteNeighbour(db))
+
+	auth := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// ── HTTP URL rejected on create ──
+	body := `{"url":"http://insecure.example.com","username":"u","password":"p"}`
+	req, _ := http.NewRequest("POST", "/api/v1/admin/neighbours", strings.NewReader(body))
+	auth(req)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "HTTPS")
+
+	// ── Bare hostname (no scheme) rejected ──
+	body = `{"url":"peer.example.com","username":"u","password":"p"}`
+	req, _ = http.NewRequest("POST", "/api/v1/admin/neighbours", strings.NewReader(body))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "HTTPS")
+
+	// ── HTTPS URL accepted on create ──
+	body = `{"url":"https://secure.example.com","username":"u","password":"p"}`
+	req, _ = http.NewRequest("POST", "/api/v1/admin/neighbours", strings.NewReader(body))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+	var created struct{ ID int }
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	defer db.Exec("DELETE FROM api_neighbours WHERE id = $1", created.ID)
+
+	// ── GET: disabled=false by default ──
+	req, _ = http.NewRequest("GET", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var one Neighbour
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &one))
+	assert.False(t, one.Disabled)
+
+	// ── PUT: set disabled ──
+	disabledBody := `{"url":"https://secure.example.com","username":"u","clear_password":true,"disabled":true}`
+	req, _ = http.NewRequest("PUT", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), strings.NewReader(disabledBody))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	req, _ = http.NewRequest("GET", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), nil)
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &one))
+	assert.True(t, one.Disabled)
+
+	// ── PUT: change URL without password → 400 ──
+	noPassBody := `{"url":"https://other.example.com","username":"u"}`
+	req, _ = http.NewRequest("PUT", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), strings.NewReader(noPassBody))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, strings.ToLower(w.Body.String()), "пароль")
+
+	// ── PUT: change URL with password → 200 ──
+	withPassBody := `{"url":"https://other.example.com","username":"u","password":"newpass"}`
+	req, _ = http.NewRequest("PUT", "/api/v1/admin/neighbours/"+strconv.Itoa(created.ID), strings.NewReader(withPassBody))
+	auth(req)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestNeighboursAdminOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	initJWTSecret("test-secret")

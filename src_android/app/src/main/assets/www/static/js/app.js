@@ -3153,8 +3153,19 @@ async function loadReadlistOffers(rlId) {
         var res = await apiFetch(RL_API + '/' + rlId + '/offers', { headers: getAuthHeaders() });
         if (!res.ok) return;
         var data = await res.json();
-        renderReadlistOffers(rlId, (data && data.items) || []);
-    } catch (err) { /* offline / not authorized — no offers block */ }
+        var items = (data && data.items) || [];
+        renderReadlistOffers(rlId, items);
+        // Warm the one-way offline cache (server → client only).
+        if (window.ReadListStore && ReadListStore.replaceOffers) {
+            ReadListStore.replaceOffers(rlId, items);
+        }
+    } catch (err) {
+        // Offline / network failure: show cached offers instead.
+        if (window.ReadListStore && ReadListStore.getOffers) {
+            var cached = ReadListStore.getOffers(rlId);
+            if (cached && cached.length) renderReadlistOffers(rlId, cached);
+        }
+    }
 }
 
 function formatOfferDateTime(iso) {
@@ -3191,11 +3202,16 @@ function renderReadlistOffers(rlId, items) {
 
         var meta = document.createElement('div');
         meta.className = 'rl-offer-meta';
-        var host = o.source_url || '';
-        try { host = new URL(o.source_url).host; } catch (e) {}
         var parts = ['Получено: ' + formatOfferDateTime(o.received_at)];
         if (o.authors) parts.push(o.authors);
-        parts.push('сервер: ' + host);
+        if (o.source_url) {
+            var host = o.source_url;
+            try { host = new URL(o.source_url).host; } catch (e) {}
+            parts.push('сервер: ' + host);
+        } else {
+            // Local admin offer (suggestions mirror): no source server
+            parts.push('предложено администратором');
+        }
         meta.textContent = parts.join(' · ');
         row.appendChild(meta);
 
@@ -3214,6 +3230,12 @@ function renderReadlistOffers(rlId, items) {
 }
 
 async function linkReadlistOffer(rlId, offerId, btn) {
+    // Linking writes to the server and offers are never queued offline
+    // (one-way sync: server → client).
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        alert('Связывание предложения требует подключения к серверу. Повторите, когда появится сеть.');
+        return;
+    }
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
         var res = await apiFetch(RL_API + '/' + rlId + '/offers/link', {

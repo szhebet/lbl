@@ -1397,6 +1397,17 @@ public class MainActivity extends Activity {
             readListDB.clearAll();
         }
 
+        // Offers cache (fed_offers mirror, server → client only; never pushed)
+        @JavascriptInterface
+        public void replaceAllOffers(String jsonArray) {
+            readListDB.replaceAllOffers(jsonArray);
+        }
+
+        @JavascriptInterface
+        public String queryAllOffers() {
+            return readListDB.queryAllOffers();
+        }
+
         @JavascriptInterface
         public String getPendingQueue() {
             return readListDB.getPendingQueue();

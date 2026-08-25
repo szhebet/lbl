@@ -459,3 +459,214 @@ func TestFedDeliveryCancelledAfterOffer(t *testing.T) {
 	assert.Equal(t, "cancelled", st2, "distribution pass must not resurrect cancelled deliveries")
 
 }
+
+// TestAdminSuggestionMirrorsToUserOffers verifies that a book offered by the
+// admin on the «Запросы» tab (POST /admin/suggestions with an edition_id)
+// becomes visible to the user: it is mirrored into fed_offers (source_url=”
+// marks a local offer), shows up in GET /user/readlist/:id/offers and can be
+// linked to the request via POST /offers/link.
+func TestAdminSuggestionMirrorsToUserOffers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+	db := setupTestDB()
+	var rlA string
+	var ownerID int
+	var adminID int
+	defer func() {
+		cleanupOfferFixture(db, rlA, ownerID, "eeeeeee5-5555-5555-5555-555555555555", true)
+		db.Exec(`DELETE FROM suggestions WHERE read_list_id=$1::uuid`, rlA)
+		if adminID > 0 {
+			db.Exec("DELETE FROM users WHERE id = $1", adminID)
+		}
+		db.Close()
+	}()
+
+	cfg := offerTestCfg(t)
+
+	// Owner + readlist request.
+	const uidA = "eeeeeee5-5555-5555-5555-555555555555"
+	rlA, ownerID = insertOfferRLWithUser(t, db, uidA)
+
+	// Admin user (the one who offers books on the «Запросы» tab).
+	require.NoError(t, db.QueryRow(`INSERT INTO users (username, password_hash, role)
+		VALUES ($1,'$2a$10$dummyhash','admin') RETURNING id`,
+		"mirror_admin_"+strconv.FormatInt(time.Now().UnixNano(), 36)).Scan(&adminID))
+
+	// A local book to offer: person + work + edition in the test id range.
+	var eid int
+	require.NoError(t, db.QueryRow(`
+		WITH p AS (
+			INSERT INTO persons (first_name, last_name) VALUES ('Зеркальный','Персонов') RETURNING id
+		), w AS (
+			INSERT INTO works (original_title) VALUES ('ТестЗеркало') RETURNING id
+		), wc AS (
+			INSERT INTO work_contributors (work_id, person_id, role)
+			SELECT w.id, p.id, 'author' FROM w, p RETURNING work_id
+		)
+		INSERT INTO editions (work_id, title)
+		SELECT w.id, 'ТестЗеркало' FROM w
+		RETURNING id`).Scan(&eid))
+	require.True(t, eid >= 2950000, "edition must land in the test id range")
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("db", db); c.Set("config", cfg); c.Set("user_id", adminID); c.Next() })
+	r.POST("/api/v1/admin/suggestions", adminCreateSuggestions(db))
+
+	ro := gin.New()
+	ro.Use(func(c *gin.Context) { c.Set("db", db); c.Set("config", cfg); c.Set("user_id", ownerID); c.Next() })
+	ro.GET("/api/v1/user/readlist/:id/offers", getReadListOffers(db))
+	ro.POST("/api/v1/user/readlist/:id/offers/link", linkReadListOffer(db))
+
+	// 1. Admin offers the local book for the user's request.
+	body := `{"read_list_id":"` + rlA + `","items":[{"edition_id":` + strconv.Itoa(eid) + `}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/suggestions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	// 2. The offer is mirrored into fed_offers as a local (source_url='') row.
+	var srcURL string
+	var localEID int64
+	var title, authors string
+	require.NoError(t, db.QueryRow(`
+		SELECT source_url, local_edition_id, title, authors FROM fed_offers
+		WHERE read_list_id=$1::uuid AND remote_edition_id=$2`, rlA, eid).Scan(&srcURL, &localEID, &title, &authors))
+	assert.Empty(t, srcURL, "local offers carry an empty source_url")
+	assert.EqualValues(t, eid, localEID)
+	assert.Equal(t, "ТестЗеркало", title)
+	assert.Contains(t, authors, "Персонов")
+
+	// 3. Re-offering the same book does not duplicate the mirror row.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/admin/suggestions", bytes.NewBufferString(body))
+	req2.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req2)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var cnt int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM fed_offers WHERE read_list_id=$1::uuid AND remote_edition_id=$2`, rlA, eid).Scan(&cnt))
+	assert.Equal(t, 1, cnt, "re-offer must not duplicate the fed_offers row")
+
+	// 4. The user sees the offer in their offers list.
+	reqO := httptest.NewRequest(http.MethodGet, "/api/v1/user/readlist/"+rlA+"/offers", nil)
+	recO := httptest.NewRecorder()
+	ro.ServeHTTP(recO, reqO)
+	require.Equal(t, http.StatusOK, recO.Code, recO.Body.String())
+	var resp struct {
+		Items []fedOfferItem `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(recO.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].EditionID)
+	assert.EqualValues(t, eid, *resp.Items[0].EditionID)
+	assert.False(t, resp.Items[0].Linked)
+
+	// 5. Linking works through the regular offers/link endpoint.
+	linkBody := `{"offer_id":` + strconv.FormatInt(resp.Items[0].ID, 10) + `}`
+	reqL := httptest.NewRequest(http.MethodPost, "/api/v1/user/readlist/"+rlA+"/offers/link", bytes.NewBufferString(linkBody))
+	reqL.Header.Set("Content-Type", "application/json")
+	recL := httptest.NewRecorder()
+	ro.ServeHTTP(recL, reqL)
+	require.Equal(t, http.StatusOK, recL.Code, recL.Body.String())
+
+	var bookID sql.NullInt64
+	require.NoError(t, db.QueryRow(`SELECT book_id FROM read_list WHERE id=$1::uuid`, rlA).Scan(&bookID))
+	require.True(t, bookID.Valid && bookID.Int64 == int64(eid), "linked book_id must equal the offered edition")
+}
+
+// TestGetUserOffersBatch verifies GET /api/v1/user/readlist/offers — the
+// one-request batch used by the APK offline sync (server → client only):
+// returns offers for ALL read lists of the current user with read_list_id on
+// each row, only the owner's rows, sorted linked-first.
+func TestGetUserOffersBatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initJWTSecret("test-secret")
+	db := setupTestDB()
+	var rlA, rlB string
+	var ownerID, otherID int
+	defer func() {
+		cleanupOfferFixture(db, rlA, ownerID, "fffffff4-0000-4444-8444-ffff44444444", false)
+		cleanupOfferFixture(db, rlB, otherID, "fffffff4-0000-4444-8444-ffff44444445", false)
+		db.Close()
+	}()
+
+	rlA, ownerID = insertOfferRLWithUser(t, db, "fffffff4-0000-4444-8444-ffff44444444")
+	rlB, otherID = insertOfferRLWithUser(t, db, "fffffff4-0000-4444-8444-ffff44444445")
+
+	var eid1, eid2 int64
+	db.Exec(`DELETE FROM fed_offers WHERE remote_edition_id IN (101,102) AND read_list_id IN ($1::uuid,$2::uuid)`, rlA, rlB)
+	db.Exec(`DELETE FROM edition_files WHERE edition_id IN (SELECT id FROM editions WHERE work_id = 2950020)`)
+	db.Exec(`DELETE FROM editions WHERE work_id = 2950020`)
+	db.Exec(`DELETE FROM works WHERE id = 2950020`)
+	_, errIns := db.Exec(`INSERT INTO works (id, original_title) VALUES (2950020,'Батч работа')`)
+	require.NoError(t, errIns)
+	require.NoError(t, db.QueryRow(`INSERT INTO editions (work_id, title) VALUES (2950020,'Оффер батч 1') RETURNING id`).Scan(&eid1))
+	require.NoError(t, db.QueryRow(`INSERT INTO editions (work_id, title) VALUES (2950020,'Оффер батч 2') RETURNING id`).Scan(&eid2))
+	_, err := db.Exec(`
+		INSERT INTO fed_offers (read_list_id, source_url, remote_work_id, remote_edition_id, local_edition_id, title, authors, linked)
+		VALUES ($1::uuid,'https://srv-x',1,101,$2,'Батч книга А','Автор Батч',FALSE),
+		       ($1::uuid,'https://srv-y',2,102,NULL,'Батч книга Б','Автор Батч',TRUE),
+		       ($3::uuid,'https://srv-z',3,103,NULL,'Чужая книга','Чужой автор',FALSE)`,
+		rlA, eid1, rlB)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM fed_offers WHERE read_list_id IN ($1::uuid,$2::uuid)`, rlA, rlB)
+		db.Exec(`DELETE FROM editions WHERE work_id = 2950020`)
+		db.Exec(`DELETE FROM works WHERE id = 2950020`)
+	})
+
+	ownerToken := generateToken(ownerID, "offer_rl_owner", "viewer")
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("db", db); c.Next() })
+	og := r.Group("/api/v1/user/readlist")
+	og.Use(authMiddleware())
+	og.GET("/offers", getUserOffersBatch(db))
+
+	req, _ := http.NewRequest("GET", "/api/v1/user/readlist/offers", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var resp struct {
+		Items []fedOfferItem `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Only THIS user's offers: two rows from rlA, none from rlB.
+	var mine []fedOfferItem
+	for _, it := range resp.Items {
+		if it.ReadListID == rlA {
+			mine = append(mine, it)
+		}
+		require.NotEqual(t, rlB, it.ReadListID, "other user's offers must not leak")
+	}
+	require.Len(t, mine, 2)
+
+	// Sorted linked-first.
+	require.True(t, mine[0].Linked && !mine[1].Linked)
+	for _, it := range mine {
+		require.NotEmpty(t, it.ReadListID)
+		require.Equal(t, "Автор Батч", it.Authors)
+	}
+
+	// The row with a local edition carries edition_id; the linked one is NULL there.
+	var withEd *fedOfferItem
+	for i := range mine {
+		if mine[i].EditionID != nil {
+			withEd = &mine[i]
+		} else {
+			require.True(t, mine[i].Linked)
+		}
+	}
+	require.NotNil(t, withEd)
+	require.EqualValues(t, eid1, *withEd.EditionID)
+
+	// Unauthenticated request rejected.
+	reqNoAuth, _ := http.NewRequest("GET", "/api/v1/user/readlist/offers", nil)
+	recNoAuth := httptest.NewRecorder()
+	r.ServeHTTP(recNoAuth, reqNoAuth)
+	assert.Equal(t, http.StatusUnauthorized, recNoAuth.Code)
+}

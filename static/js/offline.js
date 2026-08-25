@@ -278,6 +278,107 @@
             });
             this._saveToBridge();
             debug('clearByUser: ' + uid);
+            // Offers are purged the same way (server → client cache only).
+            if (ReadListStore.offersSupported()) {
+                ReadListStore._ensureOffers();
+                ReadListStore._offersCache = ReadListStore._offersCache.filter(function(o) {
+                    return !o.user_id || o.user_id === uid;
+                });
+                ReadListStore._saveOffersToBridge();
+            }
+        },
+
+        // ── Offers cache (fed_offers mirror) ────────────────────
+        // Book offers are synced ONLY server → client and are never pushed.
+        // Requires an APK bridge with queryAllOffers/replaceAllOffers — older
+        // APK builds simply keep today's behaviour (no cached offers).
+
+        offersSupported() {
+            var bridge = getBridge();
+            return !!(bridge &&
+                typeof bridge.queryAllOffers === 'function' &&
+                typeof bridge.replaceAllOffers === 'function');
+        },
+
+        _loadOffersFromBridge() {
+            this._offersCache = [];
+            var bridge = getBridge();
+            if (!bridge || !this.offersSupported()) return;
+            try {
+                var all = JSON.parse(bridge.queryAllOffers());
+                var uid = getCurrentUserId();
+                this._offersCache = all.filter(function(o) { return o.user_id === uid; });
+                debug('_loadOffersFromBridge: ' + this._offersCache.length + ' offers for user ' + uid);
+            } catch(e) {
+                debug('offers load failed: ' + e.message);
+            }
+        },
+
+        _ensureOffers() {
+            if (!this._offersCache) this._loadOffersFromBridge();
+        },
+
+        _saveOffersToBridge() {
+            var bridge = getBridge();
+            if (!bridge || !this.offersSupported()) return;
+            try {
+                bridge.replaceAllOffers(JSON.stringify(this._offersCache));
+            } catch(e) {
+                debug('replaceAllOffers failed: ' + e.message);
+            }
+        },
+
+        // Cached offers for one read list, sorted like the server does:
+        // linked first, then newest.
+        getOffers(rlId) {
+            this._ensureOffers();
+            var uid = getCurrentUserId();
+            return this._offersCache
+                .filter(function(o) { return o.user_id === uid && o.read_list_id === rlId; })
+                .sort(function(a,b) {
+                    if (a.linked !== b.linked) return a.linked ? -1 : 1;
+                    var ta = a.received_at || '', tb = b.received_at || '';
+                    if (ta !== tb) return ta > tb ? -1 : 1;
+                    return (b.id||0) - (a.id||0);
+                });
+        },
+
+        // Replace cached offers of ONE read list (used when the SPA loads them
+        // online or after a successful link).
+        replaceOffers(rlId, items) {
+            if (!this.offersSupported()) return;
+            this._ensureOffers();
+            var uid = getCurrentUserId();
+            this._offersCache = this._offersCache.filter(function(o) {
+                return !(o.user_id === uid && o.read_list_id === rlId);
+            });
+            for (var i = 0; i < items.length; i++) {
+                var o = {};
+                for (var k in items[i]) if (items[i].hasOwnProperty(k)) o[k] = items[i][k];
+                o.read_list_id = rlId;
+                o.user_id = uid;
+                this._offersCache.push(o);
+            }
+            this._saveOffersToBridge();
+            debug('replaceOffers: ' + items.length + ' for list ' + rlId);
+        },
+
+        // Full replacement from the sync pull: drop ALL current user's cached
+        // offers and store what the server returned (other users' rows kept).
+        replaceAllOffers(items) {
+            if (!this.offersSupported()) return;
+            this._ensureOffers();
+            var uid = getCurrentUserId();
+            this._offersCache = this._offersCache.filter(function(o) { return o.user_id !== uid; });
+            for (var i = 0; i < items.length; i++) {
+                var o = {};
+                for (var k in items[i]) if (items[i].hasOwnProperty(k)) o[k] = items[i][k];
+                if (!o.read_list_id) continue;
+                o.user_id = uid;
+                this._offersCache.push(o);
+            }
+            this._saveOffersToBridge();
+            debug('replaceAllOffers: ' + items.length + ' for user ' + uid);
         }
     };
 
@@ -478,6 +579,26 @@
             } catch(e) {
                 anyError = true;
                 debug('pull network error: ' + e.message);
+            }
+
+            // Step 2b: Pull book offers for current user's read lists.
+            // ONE-WAY only (server → client) — offers are never pushed and
+            // never queued; linking an offer requires a live connection.
+            if (ReadListStore.offersSupported && ReadListStore.offersSupported()) {
+                debug('pull offers: fetching server offers for user ' + uid);
+                try {
+                    var offResp = await fetch('/api/v1/user/readlist/offers', { headers: getAuthHeaders() });
+                    if (offResp.ok) {
+                        var offData = await offResp.json();
+                        ReadListStore.replaceAllOffers((offData && offData.items) || []);
+                    } else {
+                        anyError = true;
+                        debug('pull offers failed: status=' + offResp.status);
+                    }
+                } catch(e3) {
+                    anyError = true;
+                    debug('pull offers network error: ' + e3.message);
+                }
             }
 
             this._syncing = false;

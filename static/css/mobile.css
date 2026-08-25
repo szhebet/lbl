@@ -486,9 +486,8 @@ body.android .form-group textarea {
     font-size: 16px;
 }
 
-body.android .modal-content > form#readlistForm {
+body.android #readlistModal .rl-form-scroll {
     padding: 16px;
-    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
 }
 
@@ -646,6 +645,14 @@ body.android .admin-tab[data-tab="neighbours"] {
     display: none;
 }
 body.android #tab-neighbours {
+    display: none;
+}
+
+/* Neighbours' requests ("Запросы соседей") tab is not shown inside the Android app */
+body.android .admin-tab[data-tab="fedrequests"] {
+    display: none;
+}
+body.android #tab-fedrequests {
     display: none;
 }
 
