@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление — Домашняя библиотека</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link" id="adminBackLink">&larr; Назад к библиотеке</a>
+        <h1 style="margin-bottom:20px">Управление</h1>
+
+        <div class="admin-tabs">
+            <button class="admin-tab active" data-tab="authors" data-short="А">Авторы</button>
+            <button class="admin-tab" data-tab="books" data-short="К">Книги</button>
+            <button class="admin-tab" data-tab="genres" data-short="Ж">Жанры</button>
+            <button class="admin-tab" data-tab="tags" data-short="Т">Теги</button>
+            <button class="admin-tab" data-tab="suggestions" data-short="З">Запросы</button>
+            <button class="admin-tab" data-tab="readlists" data-short="Ч">Программы чтения</button>
+            <button class="admin-tab admin-tab-fed" data-tab="fedrequests" data-short="Ф">Запросы соседей</button>
+            <span style="flex:1"></span>
+            <button class="admin-tab" data-tab="import" data-short="И">Импорт</button>
+            <a href="/administer" class="admin-nav-link admin-nav-red" data-short="П" title="Администрирование">Адм.</a>
+        </div>
+
+        <div id="tab-authors" class="admin-content active">
+            <div class="admin-toolbar">
+                <button id="addAuthorBtn" class="btn">+ Создать автора</button>
+                <input type="text" class="filter-input" id="filter-authors" placeholder="Фильтр: имя, фамилия, псевдоним...">
+            </div>
+            <div class="pagination" id="authorsPaginationTop"></div>
+            <table class="admin-table" id="table-authors">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="last_name">Фамилия<span class="sort-arrow"></span></th>
+                    <th data-sort="first_name">Имя<span class="sort-arrow"></span></th>
+                    <th data-sort="middle_name">Отчество<span class="sort-arrow"></span></th>
+                    <th data-sort="pseudonym">Псевдоним<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="authorsTableBody"></tbody>
+            </table>
+            <div class="pagination" id="authorsPagination"></div>
+        </div>
+
+        <div id="tab-books" class="admin-content">
+            <div class="admin-toolbar">
+                <input type="text" id="bookAuthorFilter" class="filter-input" placeholder="Автор...">
+                <input type="text" id="bookTitleFilter" class="filter-input" placeholder="Название...">
+                <input type="text" id="bookGenreFilter" class="filter-input" placeholder="Жанр...">
+                <input type="date" id="bookDateFrom" class="filter-input" style="width:140px">
+                <input type="date" id="bookDateTo" class="filter-input" style="width:140px">
+                <div class="status-dropdown" id="bookStatusFilter">
+                    <div class="status-dropdown-trigger">Статус</div>
+                    <div class="status-dropdown-menu">
+                        <label class="status-option"><input type="checkbox" value="Не заполнено"> Не заполнено</label>
+                        <label class="status-option"><input type="checkbox" value="Прочитано"> Прочитано</label>
+                        <label class="status-option"><input type="checkbox" value="Читаю"> Читаю</label>
+                        <label class="status-option"><input type="checkbox" value="Отложил"> Отложил</label>
+                        <label class="status-option"><input type="checkbox" value="Бросил"> Бросил</label>
+                    </div>
+                </div>
+            </div>
+            <div class="pagination" id="booksPagination"></div>
+            <div id="booksTableContainer"><div class="loading">Загрузка...</div></div>
+            <div class="pagination" id="booksPaginationBottom"></div>
+        </div>
+
+        <div id="tab-genres" class="admin-content">
+            <div class="admin-toolbar">
+                <button id="addGenreBtn" class="btn">+ Создать жанр</button>
+                <input type="text" class="filter-input" id="filter-genres" placeholder="Фильтр: название, родитель...">
+            </div>
+            <div class="pagination" id="genresPaginationTop"></div>
+            <table class="admin-table" id="table-genres">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="ru_name">Наименование (рус.)<span class="sort-arrow"></span></th>
+                    <th data-sort="parent_name">Родитель<span class="sort-arrow"></span></th>
+                    <th data-sort="description">Описание<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="genresTableBody"></tbody>
+            </table>
+            <div class="pagination" id="genresPagination"></div>
+        </div>
+
+        <div id="tab-tags" class="admin-content">
+            <div class="admin-toolbar">
+                <button id="addTagBtn" class="btn">+ Создать тег</button>
+                <input type="text" class="filter-input" id="filter-tags" placeholder="Фильтр: название...">
+            </div>
+            <div class="pagination" id="tagsPaginationTop"></div>
+            <table class="admin-table" id="table-tags">
+                <thead><tr>
+                    <th data-sort="id">ID<span class="sort-arrow"></span></th>
+                    <th data-sort="name">Название<span class="sort-arrow"></span></th>
+                    <th data-sort="color">Цвет<span class="sort-arrow"></span></th>
+                    <th data-sort="description">Описание<span class="sort-arrow"></span></th>
+                    <th data-sort="books_count">Книг<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="tagsTableBody"></tbody>
+            </table>
+            <div class="pagination" id="tagsPagination"></div>
+        </div>
+
+        <div id="tab-suggestions" class="admin-content">
+            <div class="admin-toolbar">
+                <input type="text" class="filter-input" id="filter-sug-user" placeholder="Пользователь...">
+                <input type="text" class="filter-input" id="filter-sug-bookname" placeholder="Название...">
+                <input type="text" class="filter-input" id="filter-sug-author" placeholder="Автор...">
+                <select id="filter-sug-hidden" class="filter-input" style="width:120px">
+                    <option value="no">Скрытые: Нет</option>
+                    <option value="yes">Скрытые: Да</option>
+                    <option value="all">Скрытые: Все</option>
+                </select>
+                <button class="btn" id="federationSearchBtn" title="Найти книги в каталогах соседних серверов (вкладка «Серверы» в Администрировании)">Поиск 1й круг</button>
+            </div>
+            <div id="suggestionsTableContainer"><div class="loading">Загрузка...</div></div>
+        </div>
+
+        <div id="tab-readlists" class="admin-content">
+            <div class="admin-toolbar rl-toolbar">
+                <div class="rl-filters-col">
+                    <div class="rl-filter-row">
+                        <div class="rl-children-filter" id="rlChildrenFilterWrap">
+                            <button type="button" class="btn" id="rlChildrenFilterBtn">Дети: все</button>
+                            <div class="rl-children-dropdown" id="rlChildrenDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlChildrenAllBtn">Выбрать всех</button>
+                                    <button type="button" class="btn btn-small" id="rlChildrenClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlChildrenList"></div>
+                            </div>
+                        </div>
+                        <div class="rl-children-filter" id="rlListFilterWrap">
+                            <button type="button" class="btn" id="rlListFilterBtn">Списки: все</button>
+                            <div class="rl-children-dropdown" id="rlListDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlListAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlListClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlListList"></div>
+                            </div>
+                        </div>
+                        <div class="rl-children-filter" id="rlStatusFilterWrap">
+                            <button type="button" class="btn" id="rlStatusFilterBtn">Статус: все</button>
+                            <div class="rl-children-dropdown" id="rlStatusDropdown" style="display:none">
+                                <div class="rl-children-actions">
+                                    <button type="button" class="btn btn-small" id="rlStatusAllBtn">Выбрать все</button>
+                                    <button type="button" class="btn btn-small" id="rlStatusClearBtn">Очистить</button>
+                                </div>
+                                <div id="rlStatusList"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rl-filter-row">
+                        <input type="text" class="filter-input" id="filter-rl-bookname" placeholder="Название книги...">
+                        <input type="text" class="filter-input" id="filter-rl-author" placeholder="Автор...">
+                        <button class="btn" id="rlApplyBtn">Применить</button>
+                    </div>
+                </div>
+                <div class="rl-bulk-frame">
+                    <div class="rl-bulk-title">Массовые операции</div>
+                    <div class="rl-bulk-top">
+                        <button class="btn" id="rlCreateFromTextBtn" title="Создать записи из вставленного текста (по одной книге на строку)">Создать из текста</button>
+                    </div>
+                    <div class="rl-bulk-buttons">
+                        <button class="btn" id="rlBulkShelfBtn" title="Выложить на полку все книги отфильтрованного списка">На полку</button>
+                        <button class="btn" id="rlBulkStatusBtn" title="Установить статус всем записям отфильтрованного списка">Установить статус</button>
+                        <button class="btn" id="rlCreateBtn" title="Создать новый список чтения">Создать список</button>
+                        <button class="btn btn-danger" id="rlBulkDeleteBtn" title="Удалить все созданные вами записи отфильтрованного списка">Удалить</button>
+                    </div>
+                </div>
+            </div>
+            <div class="pagination" id="readlistsPaginationTop"></div>
+            <table class="admin-table" id="table-readlists">
+                <thead><tr>
+                    <th data-sort="username">Пользователь<span class="sort-arrow"></span></th>
+                    <th data-sort="listname">Список<span class="sort-arrow"></span></th>
+                    <th data-sort="author">Автор<span class="sort-arrow"></span></th>
+                    <th data-sort="bookname">Книга<span class="sort-arrow"></span></th>
+                    <th data-sort="status">Статус<span class="sort-arrow"></span></th>
+                    <th data-sort="created_by_username">Создатель<span class="sort-arrow"></span></th>
+                    <th data-sort="created_at">Дата создания<span class="sort-arrow"></span></th>
+                    <th data-sort="on_shelf">Полка<span class="sort-arrow"></span></th>
+                    <th class="actions">Действия</th>
+                </tr></thead>
+                <tbody id="readlistsTableBody"></tbody>
+            </table>
+            <div class="pagination" id="readlistsPagination"></div>
+        </div>
+
+        <div id="tab-fedrequests" class="admin-content">
+            <h2>Запросы книг соседних серверов</h2>
+            <div class="admin-toolbar">
+                <div style="color:#666;margin-right:8px">Запросы, полученные от других серверов федерации.</div>
+                <button class="btn" id="fedRequestsRefreshBtn">Обновить</button>
+                <a href="/api/v1/admin/fed/push-now" rel="nofollow" style="display:none"></a>
+            </div>
+            <div id="fedRequestsTableContainer"><div class="loading">Загрузка...</div></div>
+        </div>
+
+        <div id="tab-import" class="admin-content">
+            <h2>Импорт книг</h2>
+            <div class="admin-toolbar">
+                <button id="showImportProgressBtn" class="btn" style="display:none">Прогресс загрузки</button>
+            </div>
+            <div class="import-section">
+                <h3>Загрузить файл книги</h3>
+                <form id="uploadForm">
+                    <div class="form-group">
+                        <label for="bookFile" style="display:none">Выберите файл (FB2, EPUB, ZIP):</label>
+                        <input type="file" id="bookFile" accept=".fb2,.fb2.zip,.epub,.zip" class="file-input">
+                    </div>
+                    <div id="uploadPreview" class="upload-preview" style="display: none;"></div>
+                    <button type="submit" class="btn">Загрузить</button>
+                </form>
+                <div id="uploadResult" class="upload-result"></div>
+            </div>
+            <div class="import-section">
+                <h3>Импорт из локальной папки</h3>
+                <p style="display:none">Выберите папку с книгами на вашем компьютере:</p>
+                <input type="file" id="folderInput" webkitdirectory multiple style="display: none;">
+                <button id="loadBooksBtn" class="btn">Загрузить книги</button>
+            </div>
+            <div class="import-section">
+                <h3>Импорт книг из папки на сервере</h3>
+                <form id="directoryForm">
+                    <div class="form-group">
+                        <label for="directoryPath" style="display:none">Путь к папке:</label>
+                        <input type="text" id="directoryPath" placeholder="/path/to/books" class="directory-input">
+                    </div>
+                    <button type="submit" class="btn">Импортировать все книги</button>
+                </form>
+                <div id="directoryResult" class="upload-result"></div>
+            </div>
+            <div id="importProgressArea" class="import-section" style="display:none"></div>
+        </div>
+    </div>
+
+    <div id="adminModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="adminModalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeAdminModal()">&times;</button>
+            </div>
+            <form id="adminForm">
+                <div id="adminModalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAdminModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактирование</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="editForm">
+                <div id="modalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="suggestModal" class="modal">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="suggestModalTitle">Предложить книгу</h2>
+                <button class="modal-close" onclick="closeSuggestModal()">&times;</button>
+            </div>
+            <form id="suggestForm">
+                <div id="suggestModalBody" class="modal-body"></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn">Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSuggestModal()">Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="suggestImportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="suggestImportModalTitle">Загрузить книгу</h2>
+                <button class="modal-close" onclick="closeSuggestImportModal()">&times;</button>
+            </div>
+            <form id="suggestImportForm" enctype="multipart/form-data">
+                <div id="suggestImportModalBody" class="modal-body">
+                    <div class="form-group">
+                        <label>Выберите файл (FB2, EPUB, PDF, DOC, DOCX, ZIP):</label>
+                        <input type="file" id="suggestImportFile" accept=".fb2,.fb2.zip,.epub,.pdf,.doc,.docx,.zip" class="file-input" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn" id="suggestImportBtn">Загрузить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSuggestImportModal()">Отмена</button>
+                </div>
+            </form>
+            <div id="suggestImportResult" class="upload-result"></div>
+        </div>
+    </div>
+
+    <div id="fedConflictModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="fedConflictTitle">Конфликт идентификаторов</h2>
+                <button class="modal-close" onclick="closeFedConflictModal()">&times;</button>
+            </div>
+            <div id="fedConflictBody" class="modal-body">
+                <div id="fedConflictMessage" class="fed-conflict-message"></div>
+                <div id="fedConflictFound" class="fed-conflict-found"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" id="fedConflictOverwriteBtn" onclick="fedConflictResolve('overwrite')">Перезаписать</button>
+                <button type="button" class="btn" id="fedConflictCreateBtn" onclick="fedConflictResolve('create_new')">Создать новую</button>
+                <button type="button" class="btn btn-secondary" onclick="closeFedConflictModal()">Отменить</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=2"></script>
+    <script src="/static/js/auth.js?v=2"></script>
+    <script src="/static/js/import.js"></script>
+    <script src="/static/js/admin.js?v=2"></script>
+    <script>
+    if (typeof AndroidTokenBridge !== 'undefined') {
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(function(link) {
+            link.addEventListener('error', function() {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('css'); } catch(e) {}
+            });
+        });
+        window.addEventListener('error', function(e) {
+            if (e.filename && e.filename.indexOf('/static/js/') !== -1) {
+                try { AndroidTokenBridge.notifyCriticalResourceFailed('js'); } catch(e2) {}
+            }
+        }, true);
+    }
+    </script>
+</body>
+</html>

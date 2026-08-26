@@ -153,6 +153,7 @@ public class ReadListDB extends SQLiteOpenHelper {
                 item.put("priority", c.getInt(c.getColumnIndexOrThrow("priority")));
                 item.put("comment", getString(c, "comment"));
                 item.put("status", getString(c, "status"));
+                item.put("looking_for", getString(c, "looking_for"));
                 item.put("deleted", c.getInt(c.getColumnIndexOrThrow("deleted")) != 0);
                 item.put("created_at", getString(c, "created_at"));
                 item.put("updated_at", getString(c, "updated_at"));
