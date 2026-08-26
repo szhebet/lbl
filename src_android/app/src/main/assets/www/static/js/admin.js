@@ -232,12 +232,13 @@ function renderNeighbours() {
         var certs = [];
         if (n.server_cert) certs.push('серверный');
         if (n.client_cert) certs.push('клиентский');
-        return '<tr>' +
+        return '<tr' + (n.disabled ? ' style="opacity:0.5"' : '') + '>' +
             '<td>' + n.id + '</td>' +
             '<td>' + escapeHtml(n.url) + '</td>' +
             '<td>' + escapeHtml(n.username || '') + '</td>' +
             '<td>' + (n.has_password ? 'задан' : '') + '</td>' +
             '<td>' + escapeHtml(certs.join(', ')) + '</td>' +
+            '<td>' + (n.disabled ? 'да' : '') + '</td>' +
             '<td class="actions">' +
             '<button class="btn btn-small edit-neighbour" data-id="' + n.id + '">✎</button> ' +
             '<button class="btn btn-small btn-secondary test-neighbour" data-id="' + n.id + '">Тест</button> ' +
@@ -438,6 +439,7 @@ function editUser(id) {
                 <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_children_picker">+ Добавить ребёнка</button>
             </div>
         `);
+        document.getElementById('adminModal').classList.add('rl-modal-locked');
         initUserPicker('f_parents_picker', u.parent_ids);
         initUserPicker('f_children_picker', u.child_ids);
         document.getElementById('adminForm').onsubmit = async function(e) {
@@ -507,6 +509,7 @@ if (addUserBtn) addUserBtn.addEventListener('click', function() {
             <button type="button" class="btn btn-secondary add-user-picker-row" data-container="f_children_picker">+ Добавить ребёнка</button>
         </div>
     `);
+    document.getElementById('adminModal').classList.add('rl-modal-locked');
     initUserPicker('f_parents_picker', []);
     initUserPicker('f_children_picker', []);
     document.getElementById('adminForm').onsubmit = async function(e) {
@@ -557,7 +560,11 @@ function editNeighbour(id) {
                 <label>Клиентский сертификат (.crt/PEM):</label>
                 <textarea id="f_client_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----...">${escapeHtml(n.client_cert || '')}</textarea>
             </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="f_disabled" ${n.disabled ? 'checked' : ''}> Отключен (исходящие запросы не отправляются)</label>
+            </div>
         `);
+        document.getElementById('adminModal').classList.add('rl-modal-locked');
         document.getElementById('adminForm').onsubmit = async function(e) {
             e.preventDefault();
             var body = {
@@ -565,7 +572,8 @@ function editNeighbour(id) {
                 username: document.getElementById('f_username').value,
                 server_cert: document.getElementById('f_server_cert').value,
                 client_cert: document.getElementById('f_client_cert').value,
-                clear_password: document.getElementById('f_clear_password').checked
+                clear_password: document.getElementById('f_clear_password').checked,
+                disabled: document.getElementById('f_disabled').checked
             };
             var p = document.getElementById('f_password').value;
             if (p) body.password = p;
@@ -588,9 +596,10 @@ function deleteNeighbour(id) {
     });
 }
 
-async function testNeighbour(id, btn) {
+async function testNeighbour(id, btn, silent) {
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     var ok = false;
+    var errorMsg = '';
     try {
         var res = await api(API + '/federation/test', {
             method: 'POST',
@@ -600,10 +609,17 @@ async function testNeighbour(id, btn) {
         var data = {};
         try { data = await res.json(); } catch (e) {}
         ok = res.ok && data.ok;
+        if (!ok) errorMsg = data.error || ('HTTP ' + res.status);
     } catch (err) {
         ok = false;
+        errorMsg = err.message || String(err);
     }
     setTestNeighbourButton(btn, ok);
+    if (!ok && errorMsg && !silent) {
+        var n = (storeNeighbours || []).find(function(x) { return x.id === id; });
+        var title = n ? n.url : '#' + id;
+        alert('Ошибка тестирования «' + title + '»:\n\n' + errorMsg);
+    }
     return ok;
 }
 
@@ -644,19 +660,18 @@ async function testAllNeighbours() {
         var n = items[i];
         var rowBtn = document.querySelector('.test-neighbour[data-id="' + n.id + '"]');
         if (rowBtn) { rowBtn.disabled = true; rowBtn.textContent = '...'; }
-        var ok = await testNeighbour(n.id, rowBtn);
+        var ok = await testNeighbour(n.id, rowBtn, true);
         if (ok) results.ok++; else results.fail++;
     }
     if (btnAll) btnAll.disabled = false;
-    alert('Тестирование завершено.\nУспешно: ' + results.ok + ', ошибок: ' + results.fail + '.');
 }
 
 var addNeighbourBtn = document.getElementById('addNeighbourBtn');
 if (addNeighbourBtn) addNeighbourBtn.addEventListener('click', function() {
     openAdminModal('Добавить сервер', `
         <div class="form-group">
-            <label>URL:</label>
-            <input type="text" id="f_url" required>
+            <label>URL (только https://):</label>
+            <input type="text" id="f_url" placeholder="https://example.com:9091" required>
         </div>
         <div class="form-group">
             <label>Имя пользователя:</label>
@@ -674,14 +689,19 @@ if (addNeighbourBtn) addNeighbourBtn.addEventListener('click', function() {
             <label>Клиентский сертификат (.crt/PEM):</label>
             <textarea id="f_client_cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----..."></textarea>
         </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="f_disabled"> Отключен</label>
+        </div>
     `);
+    document.getElementById('adminModal').classList.add('rl-modal-locked');
     document.getElementById('adminForm').onsubmit = async function(e) {
         e.preventDefault();
         var body = {
             url: document.getElementById('f_url').value,
             username: document.getElementById('f_username').value,
             server_cert: document.getElementById('f_server_cert').value,
-            client_cert: document.getElementById('f_client_cert').value
+            client_cert: document.getElementById('f_client_cert').value,
+            disabled: document.getElementById('f_disabled').checked
         };
         var p = document.getElementById('f_password').value;
         if (p) body.password = p;
@@ -1940,7 +1960,9 @@ async function hideSuggestion(readListId) {
     try {
         var resp = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId));
         if (!resp.ok) { alert('Ошибка загрузки предложений'); return; }
-        var existing = await resp.json();
+        var data = await resp.json();
+        // Endpoint returns {items, delivered} since migration 5.6
+        var existing = Array.isArray(data) ? data : (data.items || []);
         var items = existing.map(function(s) {
             var item = {id: s.id, hidden: true};
             if (s.edition_id) item.edition_id = s.edition_id;
@@ -1973,7 +1995,9 @@ async function showSuggestion(readListId) {
     try {
         var resp = await api(API + '/suggestions/readlist/' + encodeURIComponent(readListId));
         if (!resp.ok) { alert('Ошибка загрузки предложений'); return; }
-        var existing = await resp.json();
+        var data = await resp.json();
+        // Endpoint returns {items, delivered} since migration 5.6
+        var existing = Array.isArray(data) ? data : (data.items || []);
         // Build items with hidden=false while preserving edition_id
         var items = existing.map(function(s) {
             var item = {id: s.id, hidden: false};

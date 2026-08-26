@@ -671,6 +671,9 @@ type fedOfferItem struct {
 	EditionID       *int   `json:"edition_id"`
 	ReceivedAt      string `json:"received_at"`
 	Linked          bool   `json:"linked"`
+	// ReadListID is set only by the batch endpoint
+	// (GET /api/v1/user/readlist/offers); the per-item endpoint omits it.
+	ReadListID string `json:"read_list_id,omitempty"`
 }
 
 // ownsReadListItem checks the read_list row exists, is not deleted and belongs
@@ -718,6 +721,52 @@ func getReadListOffers(db *sql.DB) gin.HandlerFunc {
 			var received sql.NullTime
 			if err := rows.Scan(&it.ID, &it.Title, &it.Authors, &it.SourceURL,
 				&it.RemoteEditionID, &eid, &received, &it.Linked); err != nil {
+				internalError(c, err)
+				return
+			}
+			if eid.Valid {
+				e := int(eid.Int64)
+				it.EditionID = &e
+			}
+			if received.Valid {
+				it.ReceivedAt = received.Time.Format(time.RFC3339)
+			}
+			items = append(items, it)
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items})
+	}
+}
+
+// getUserOffersBatch GET /api/v1/user/readlist/offers — all offers for every
+// read list of the authenticated user in one request. Used by the APK offline
+// sync (server → client only) so it does not need one request per list.
+func getUserOffersBatch(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		uid, _ := userID.(int)
+		if uid == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Не авторизован"})
+			return
+		}
+		rows, err := db.Query(`
+			SELECT o.id, o.read_list_id::text, o.title, o.authors, o.source_url,
+				o.remote_edition_id, o.local_edition_id, o.received_at, o.linked
+			FROM fed_offers o
+			JOIN read_list r ON r.id = o.read_list_id
+			WHERE r.user_id = $1 AND r.deleted = FALSE
+			ORDER BY o.read_list_id, o.linked DESC, o.received_at DESC, o.id DESC`, uid)
+		if err != nil {
+			internalError(c, err)
+			return
+		}
+		defer rows.Close()
+		items := make([]fedOfferItem, 0)
+		for rows.Next() {
+			var it fedOfferItem
+			var eid sql.NullInt64
+			var received sql.NullTime
+			if err := rows.Scan(&it.ID, &it.ReadListID, &it.Title, &it.Authors,
+				&it.SourceURL, &it.RemoteEditionID, &eid, &received, &it.Linked); err != nil {
 				internalError(c, err)
 				return
 			}

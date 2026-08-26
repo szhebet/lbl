@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type Neighbour struct {
 	ClientCert  string    `json:"client_cert"`
 	Username    string    `json:"username"`
 	HasPassword bool      `json:"has_password"`
+	Disabled    bool      `json:"disabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -113,7 +115,7 @@ func adminGetNeighbours(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rows, err := db.Query(`
 			SELECT id, url, server_cert, client_cert, username,
-			       password_encrypted, created_at, updated_at
+			       password_encrypted, disabled, created_at, updated_at
 			FROM api_neighbours ORDER BY url`)
 		if err != nil {
 			adminInternalError(c, err)
@@ -125,7 +127,7 @@ func adminGetNeighbours(db *sql.DB) gin.HandlerFunc {
 			var n Neighbour
 			var enc string
 			if err := rows.Scan(&n.ID, &n.URL, &n.ServerCert, &n.ClientCert,
-				&n.Username, &enc, &n.CreatedAt, &n.UpdatedAt); err != nil {
+				&n.Username, &enc, &n.Disabled, &n.CreatedAt, &n.UpdatedAt); err != nil {
 				adminInternalError(c, err)
 				return
 			}
@@ -149,10 +151,10 @@ func adminGetNeighbour(db *sql.DB) gin.HandlerFunc {
 		var enc string
 		err = db.QueryRow(`
 			SELECT id, url, server_cert, client_cert, username,
-			       password_encrypted, created_at, updated_at
+			       password_encrypted, disabled, created_at, updated_at
 			FROM api_neighbours WHERE id = $1`, id).
 			Scan(&n.ID, &n.URL, &n.ServerCert, &n.ClientCert,
-				&n.Username, &enc, &n.CreatedAt, &n.UpdatedAt)
+				&n.Username, &enc, &n.Disabled, &n.CreatedAt, &n.UpdatedAt)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Сервер не найден"})
@@ -173,6 +175,7 @@ type neighbourRequest struct {
 	Username      string `json:"username"`
 	Password      string `json:"password"`
 	ClearPassword bool   `json:"clear_password"`
+	Disabled      *bool  `json:"disabled"`
 }
 
 func (r *neighbourRequest) normalize() {
@@ -195,6 +198,10 @@ func adminCreateNeighbour(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "URL обязателен"})
 			return
 		}
+		if !isHTTPSScheme(req.URL) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Допустима только HTTPS-схема (https://)"})
+			return
+		}
 		enc := ""
 		if req.Password != "" {
 			var err error
@@ -204,11 +211,15 @@ func adminCreateNeighbour(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 				return
 			}
 		}
+		disabled := false
+		if req.Disabled != nil {
+			disabled = *req.Disabled
+		}
 		var id int
 		err := db.QueryRow(`
-			INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-			req.URL, req.ServerCert, req.ClientCert, req.Username, enc).Scan(&id)
+			INSERT INTO api_neighbours (url, server_cert, client_cert, username, password_encrypted, disabled)
+			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+			req.URL, req.ServerCert, req.ClientCert, req.Username, enc, disabled).Scan(&id)
 		if err != nil {
 			adminInternalError(c, err)
 			return
@@ -234,6 +245,28 @@ func adminUpdateNeighbour(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "URL обязателен"})
 			return
 		}
+		if !isHTTPSScheme(req.URL) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Допустима только HTTPS-схема (https://)"})
+			return
+		}
+
+		// Fetch current URL to detect changes.
+		var oldURL string
+		if err := db.QueryRow(
+			`SELECT url FROM api_neighbours WHERE id = $1`, id).Scan(&oldURL); err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Сервер не найден"})
+			} else {
+				adminInternalError(c, err)
+			}
+			return
+		}
+
+		// When URL changes, require a new password (no stale creds from another server).
+		if req.URL != oldURL && req.Password == "" && !req.ClearPassword {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "При смене адреса сервера необходимо указать пароль"})
+			return
+		}
 
 		var enc string
 		switch {
@@ -257,12 +290,17 @@ func adminUpdateNeighbour(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			}
 		}
 
+		disabled := false
+		if req.Disabled != nil {
+			disabled = *req.Disabled
+		}
+
 		res, err := db.Exec(`
 			UPDATE api_neighbours
 			SET url = $1, server_cert = $2, client_cert = $3, username = $4,
-			    password_encrypted = $5, updated_at = NOW()
-			WHERE id = $6`,
-			req.URL, req.ServerCert, req.ClientCert, req.Username, enc, id)
+			    password_encrypted = $5, disabled = $6, updated_at = NOW()
+			WHERE id = $7`,
+			req.URL, req.ServerCert, req.ClientCert, req.Username, enc, disabled, id)
 		if err != nil {
 			adminInternalError(c, err)
 			return
@@ -293,4 +331,15 @@ func adminDeleteNeighbour(db *sql.DB) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
+}
+
+// isHTTPSScheme validates that a neighbour URL uses HTTPS. URLs without a
+// scheme (bare hostnames) are rejected — callers should not auto-add https://
+// as that would silently bypass validation for a potentially insecure endpoint.
+func isHTTPSScheme(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, "https")
 }

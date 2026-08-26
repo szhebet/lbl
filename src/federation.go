@@ -49,12 +49,13 @@ type FederationResult struct {
 }
 
 type federationNeighbour struct {
-	id         int
-	url        string
-	serverCert string
-	clientCert string
-	username   string
+	id          int
+	url         string
+	serverCert  string
+	clientCert  string
+	username    string
 	passwordEnc string
+	disabled    bool
 }
 
 // adminFederationSearch POST /api/v1/admin/federation/search (admin only).
@@ -158,9 +159,9 @@ func adminFederationTest(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 
 		var n federationNeighbour
 		err := db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted
+			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
 			FROM api_neighbours WHERE id = $1`, req.NeighbourID).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Сосед не найден"})
@@ -206,11 +207,11 @@ func adminFederationTest(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	}
 }
 
-// loadFederationNeighbours loads all neighbour rows ordered by URL.
+// loadFederationNeighbours loads all active (non-disabled) neighbour rows ordered by URL.
 func loadFederationNeighbours(db *sql.DB) ([]federationNeighbour, error) {
 	rows, err := db.Query(`
 		SELECT id, url, server_cert, client_cert, username, password_encrypted
-		FROM api_neighbours ORDER BY url`)
+		FROM api_neighbours WHERE disabled = FALSE ORDER BY url`)
 	if err != nil {
 		return nil, err
 	}
@@ -288,9 +289,9 @@ func adminFederationImport(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 
 		var n federationNeighbour
 		err := db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted
+			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
 			FROM api_neighbours WHERE id = $1`, req.NeighbourID).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Сосед не найден"})
@@ -784,9 +785,9 @@ func adminFederationOffer(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 
 		var n federationNeighbour
 		err = db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted
+			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
 			FROM api_neighbours WHERE url = $1`, sourceURL).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc)
+			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Сервер-источник не найден в списке соседей"})
@@ -1448,6 +1449,9 @@ func orDefault(s, def string) string {
 // credentials and returns a ready HTTP client, the neighbour base URL and the
 // obtained JWT. errMsg is non-empty on failure.
 func loginToNeighbour(ctx context.Context, nc *NeighbourCrypto, n federationNeighbour) (client *http.Client, base, token, errMsg string) {
+	if n.disabled {
+		return nil, "", "", "Сервер отключен"
+	}
 	if n.username == "" {
 		return nil, "", "", "Не указан логин сервера-соседа"
 	}

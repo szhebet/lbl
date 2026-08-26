@@ -16,10 +16,11 @@ import java.util.List;
 public class ReadListDB extends SQLiteOpenHelper {
     private static final String TAG = "ReadListDB";
     private static final String DB_NAME = "readlist.db";
-    private static final int DB_VERSION = 3;
+    private static final int DB_VERSION = 4;
 
     private static final String TABLE_ITEMS = "readlist_items";
     private static final String TABLE_QUEUE = "offline_queue";
+    private static final String TABLE_OFFERS = "readlist_offers";
 
     public ReadListDB(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -58,6 +59,24 @@ public class ReadListDB extends SQLiteOpenHelper {
             "created_at TEXT NOT NULL DEFAULT (datetime('now'))" +
             ")"
         );
+        createOffersTable(db);
+    }
+
+    private static void createOffersTable(SQLiteDatabase db) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS " + TABLE_OFFERS + " (" +
+            "id INTEGER PRIMARY KEY," +
+            "read_list_id TEXT NOT NULL," +
+            "title TEXT NOT NULL DEFAULT ''," +
+            "authors TEXT NOT NULL DEFAULT ''," +
+            "source_url TEXT NOT NULL DEFAULT ''," +
+            "remote_edition_id INTEGER NOT NULL DEFAULT 0," +
+            "edition_id INTEGER," +
+            "received_at TEXT," +
+            "linked INTEGER NOT NULL DEFAULT 0," +
+            "user_id INTEGER NOT NULL DEFAULT 0" +
+            ")"
+        );
     }
 
     @Override
@@ -67,6 +86,9 @@ public class ReadListDB extends SQLiteOpenHelper {
         }
         if (oldVersion < 3) {
             db.execSQL("ALTER TABLE " + TABLE_ITEMS + " ADD COLUMN looking_for TEXT NOT NULL DEFAULT 'Нет'");
+        }
+        if (oldVersion < 4) {
+            createOffersTable(db);
         }
     }
 
@@ -131,6 +153,7 @@ public class ReadListDB extends SQLiteOpenHelper {
                 item.put("priority", c.getInt(c.getColumnIndexOrThrow("priority")));
                 item.put("comment", getString(c, "comment"));
                 item.put("status", getString(c, "status"));
+                item.put("looking_for", getString(c, "looking_for"));
                 item.put("deleted", c.getInt(c.getColumnIndexOrThrow("deleted")) != 0);
                 item.put("created_at", getString(c, "created_at"));
                 item.put("updated_at", getString(c, "updated_at"));
@@ -173,6 +196,72 @@ public class ReadListDB extends SQLiteOpenHelper {
     public void clearAll() {
         SQLiteDatabase db = getWritableDatabase();
         db.delete(TABLE_ITEMS, null, null);
+    }
+
+    // ── Offers cache (fed_offers mirror, server → client only) ──
+
+    /** Replaces the WHOLE offers cache with the given array (JSON). */
+    public void replaceAllOffers(String jsonArray) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete(TABLE_OFFERS, null, null);
+            JSONArray arr = new JSONArray(jsonArray);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject offer = arr.getJSONObject(i);
+                ContentValues cv = offerToValues(offer);
+                db.insertWithOnConflict(TABLE_OFFERS, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            db.setTransactionSuccessful();
+        } catch (Exception e) {
+            Log.e(TAG, "replaceAllOffers error: " + e.getMessage());
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    public String queryAllOffers() {
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = db.rawQuery("SELECT * FROM " + TABLE_OFFERS +
+            " ORDER BY read_list_id ASC, linked DESC, received_at DESC, id DESC", null);
+        JSONArray result = new JSONArray();
+        while (c.moveToNext()) {
+            JSONObject offer = new JSONObject();
+            try {
+                offer.put("id", c.getLong(c.getColumnIndexOrThrow("id")));
+                offer.put("read_list_id", getString(c, "read_list_id"));
+                offer.put("title", getString(c, "title"));
+                offer.put("authors", getString(c, "authors"));
+                offer.put("source_url", getString(c, "source_url"));
+                offer.put("remote_edition_id", c.getLong(c.getColumnIndexOrThrow("remote_edition_id")));
+                if (!c.isNull(c.getColumnIndexOrThrow("edition_id")))
+                    offer.put("edition_id", c.getInt(c.getColumnIndexOrThrow("edition_id")));
+                offer.put("received_at", getString(c, "received_at"));
+                offer.put("linked", c.getInt(c.getColumnIndexOrThrow("linked")) != 0);
+                offer.put("user_id", c.getInt(c.getColumnIndexOrThrow("user_id")));
+                result.put(offer);
+            } catch (Exception e) {
+                Log.e(TAG, "Error reading offer row: " + e.getMessage());
+            }
+        }
+        c.close();
+        return result.toString();
+    }
+
+    private ContentValues offerToValues(JSONObject offer) throws Exception {
+        ContentValues cv = new ContentValues();
+        cv.put("id", offer.optLong("id", 0));
+        cv.put("read_list_id", offer.optString("read_list_id", ""));
+        cv.put("title", offer.optString("title", ""));
+        cv.put("authors", offer.optString("authors", ""));
+        cv.put("source_url", offer.optString("source_url", ""));
+        cv.put("remote_edition_id", offer.optLong("remote_edition_id", 0));
+        if (offer.has("edition_id") && !offer.isNull("edition_id"))
+            cv.put("edition_id", offer.getInt("edition_id"));
+        cv.put("received_at", offer.isNull("received_at") ? "" : offer.optString("received_at"));
+        cv.put("linked", offer.optBoolean("linked", false) ? 1 : 0);
+        cv.put("user_id", offer.optInt("user_id", 0));
+        return cv;
     }
 
     public void enqueue(String operation, String itemId, String body) {

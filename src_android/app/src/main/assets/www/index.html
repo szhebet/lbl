@@ -205,60 +205,62 @@
     <!-- Модальное окно для редактирования -->
     <!-- Модальное окно для создания элемента списка чтения -->
     <div id="readlistModal" class="modal" style="display:none">
-        <div class="modal-content" style="max-width:500px">
+        <div class="modal-content">
             <div class="modal-header">
                 <h2 id="readlistModalTitle">Новая запись</h2>
                 <button class="modal-close close-readlist-btn">&times;</button>
             </div>
-            <form id="readlistForm" style="padding:20px">
-                <input type="hidden" id="rlEditId" value="">
-                <div class="form-group">
-                    <label for="rlListname">Список:</label>
-                    <input type="text" id="rlListname" class="form-input" required>
+            <form id="readlistForm">
+                <div class="rl-form-scroll">
+                    <input type="hidden" id="rlEditId" value="">
+                    <div class="form-group">
+                        <label for="rlListname">Список:</label>
+                        <input type="text" id="rlListname" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="rlBookname">Название книги:</label>
+                        <input type="hidden" id="rlBookId" value="">
+                        <input type="text" id="rlBookname" class="form-input" autocomplete="off" placeholder="Начните вводить название...">
+                        <div id="rlBookSelect" class="search-results" style="display:none"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="rlAuthor">Автор:</label>
+                        <input type="hidden" id="rlAuthorId" value="">
+                        <input type="text" id="rlAuthor" class="form-input" autocomplete="off" placeholder="Начните вводить автора...">
+                        <div id="rlAuthorSelect" class="search-results" style="display:none"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="rlPriority">Приоритет:</label>
+                        <input type="number" id="rlPriority" class="form-input" value="0" min="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="rlComment">Комментарий:</label>
+                        <textarea id="rlComment" class="form-input" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="rlStatus">Статус:</label>
+                        <select id="rlStatus" class="filter-select">
+                            <option value="Не заполнено">Не заполнено</option>
+                            <option value="Прочитано">Прочитано</option>
+                            <option value="Читаю">Читаю</option>
+                            <option value="Отложил">Отложил</option>
+                            <option value="Бросил">Бросил</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="rlLookingFor">Ищу книгу:</label>
+                        <select id="rlLookingFor" class="filter-select">
+                            <option value="Нет">Нет</option>
+                            <option value="Да, локально">Да, локально</option>
+                            <option value="Да, по федерации">Да, по федерации</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="rlOffersBlock" style="display:none">
+                        <label>Предложения серверов:</label>
+                        <div id="rlOffersList" class="rl-offers-list"></div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="rlBookname">Название книги:</label>
-                    <input type="hidden" id="rlBookId" value="">
-                    <input type="text" id="rlBookname" class="form-input" autocomplete="off" placeholder="Начните вводить название...">
-                    <div id="rlBookSelect" class="search-results" style="display:none"></div>
-                </div>
-                <div class="form-group">
-                    <label for="rlAuthor">Автор:</label>
-                    <input type="hidden" id="rlAuthorId" value="">
-                    <input type="text" id="rlAuthor" class="form-input" autocomplete="off" placeholder="Начните вводить автора...">
-                    <div id="rlAuthorSelect" class="search-results" style="display:none"></div>
-                </div>
-                <div class="form-group">
-                    <label for="rlPriority">Приоритет:</label>
-                    <input type="number" id="rlPriority" class="form-input" value="0" min="0">
-                </div>
-                <div class="form-group">
-                    <label for="rlComment">Комментарий:</label>
-                    <textarea id="rlComment" class="form-input" rows="3"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="rlStatus">Статус:</label>
-                    <select id="rlStatus" class="filter-select">
-                        <option value="Не заполнено">Не заполнено</option>
-                        <option value="Прочитано">Прочитано</option>
-                        <option value="Читаю">Читаю</option>
-                        <option value="Отложил">Отложил</option>
-                        <option value="Бросил">Бросил</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="rlLookingFor">Ищу книгу:</label>
-                    <select id="rlLookingFor" class="filter-select">
-                        <option value="Нет">Нет</option>
-                        <option value="Да, локально">Да, локально</option>
-                        <option value="Да, по федерации">Да, по федерации</option>
-                    </select>
-                </div>
-                <div class="form-group" id="rlOffersBlock" style="display:none">
-                    <label>Предложения серверов:</label>
-                    <div id="rlOffersList" class="rl-offers-list"></div>
-                </div>
-                <div class="modal-footer" style="padding:0;border:none;margin-top:15px">
+                <div class="modal-footer rl-form-footer">
                     <button type="submit" class="btn">Сохранить</button>
                     <button type="button" class="btn btn-secondary close-readlist-btn">Отмена</button>
                 </div>
