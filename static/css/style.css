@@ -1157,6 +1157,27 @@ header h1 {
     border: 1px solid #f5c6cb;
 }
 
+/* User menu modal */
+.user-menu-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 20px;
+}
+
+.user-menu-btn {
+    width: 100%;
+}
+
+#changePwError {
+    color: #e74c3c;
+    font-size: 14px;
+    padding: 8px;
+    background: #fdf0ef;
+    border-radius: 4px;
+    border: 1px solid #f5c6cb;
+}
+
 /* Book status select */
 .status-select {
     font-size: 12px;

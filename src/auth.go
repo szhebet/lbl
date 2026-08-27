@@ -295,3 +295,49 @@ func createUser(db *sql.DB) gin.HandlerFunc {
 		})
 	}
 }
+
+func changeOwnPassword(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+
+		var req struct {
+			OldPassword string `json:"old_password" binding:"required"`
+			NewPassword string `json:"new_password" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			return
+		}
+
+		if len(req.NewPassword) < minPasswordLength {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Пароль должен быть не менее " + strconv.Itoa(minPasswordLength) + " символов"})
+			return
+		}
+
+		var passwordHash string
+		err := db.QueryRow("SELECT password_hash FROM users WHERE id = $1", userID).Scan(&passwordHash)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+			return
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.OldPassword)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный текущий пароль"})
+			return
+		}
+
+		newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка хеширования пароля"})
+			return
+		}
+
+		_, err = db.Exec("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", string(newHash), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения пароля"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "message": "Пароль успешно изменён"})
+	}
+}

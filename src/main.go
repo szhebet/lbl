@@ -967,6 +967,7 @@ func main() {
 		// Re-issues the HttpOnly session_token cookie from the current JWT so a
 		// plain-navigation download sends a fresh cookie (no token in URL).
 		write.POST("/auth/session-cookie", syncSessionCookie(db))
+		write.PUT("/auth/password", changeOwnPassword(db))
 		write.PUT("/user/readlist/:id", updateReadListItem(db))
 		write.DELETE("/user/readlist/:id", deleteReadListItem(db))
 	}
@@ -4739,11 +4740,7 @@ updateMobileUser();
 setInterval(updateMobileUser,1000);
 document.getElementById('mobileUserBtn')?.addEventListener('click',function(){
 if(localStorage.getItem('auth_user')){
-if(confirm('Вы хотите завершить сессию пользователя?')){
-localStorage.removeItem('auth_token');
-localStorage.removeItem('auth_user');
-window.location.reload();
-}
+if(typeof openUserMenuModal==='function'){openUserMenuModal();}
 }else{
 var lb=document.getElementById('loginBtn');
 if(lb)lb.click();
