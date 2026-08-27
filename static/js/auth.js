@@ -158,10 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     loginBtn.addEventListener('click', function() {
         if (isAuthenticated() && authUser) {
-            if (confirm('Вы хотите завершить сессию пользователя?')) {
-                doLogout();
-                openLoginModal();
-            }
+            openUserMenuModal();
         } else {
             openLoginModal();
         }
@@ -181,6 +178,137 @@ function doLogout() {
         btn.classList.remove('logged-in');
     }
     window.dispatchEvent(new Event('auth-changed'));
+}
+
+function openUserMenuModal() {
+    var existing = document.getElementById('userMenuModal');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.id = 'userMenuModal';
+    overlay.innerHTML = '<div class="modal-content" style="max-width:360px">' +
+        '<div class="modal-header">' +
+        '<h2>' + escapeHtml(authUser.username) + '</h2>' +
+        '<button class="modal-close" onclick="closeUserMenuModal()">&times;</button>' +
+        '</div>' +
+        '<div class="user-menu-body">' +
+        '<button class="btn user-menu-btn" onclick="closeUserMenuModal();doLogout()">Выйти</button>' +
+        '<button class="btn btn-secondary user-menu-btn" onclick="closeUserMenuModal();openChangePasswordModal()">Сменить пароль</button>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+        '<button type="button" class="btn btn-secondary" onclick="closeUserMenuModal()">Отмена</button>' +
+        '</div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    overlay.classList.add('active');
+}
+
+function closeUserMenuModal() {
+    var modal = document.getElementById('userMenuModal');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.remove();
+    }
+}
+
+function openChangePasswordModal() {
+    var existing = document.getElementById('changePwModal');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.id = 'changePwModal';
+    overlay.innerHTML = '<div class="modal-content" style="max-width:400px">' +
+        '<div class="modal-header">' +
+        '<h2>Смена пароля</h2>' +
+        '<button class="modal-close" onclick="closeChangePasswordModal()">&times;</button>' +
+        '</div>' +
+        '<form id="changePwForm" style="padding:20px">' +
+        '<div class="form-group">' +
+        '<label>Имя пользователя:</label>' +
+        '<input type="text" value="' + escapeHtml(authUser.username) + '" disabled class="form-control">' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label for="oldPassword">Старый пароль:</label>' +
+        '<input type="password" id="oldPassword" name="old_password" required autocomplete="current-password">' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label for="newPassword">Новый пароль:</label>' +
+        '<input type="password" id="newPassword" name="new_password" required autocomplete="new-password">' +
+        '</div>' +
+        '<div class="form-group">' +
+        '<label for="confirmPassword">Повторить новый пароль:</label>' +
+        '<input type="password" id="confirmPassword" required autocomplete="new-password">' +
+        '</div>' +
+        '<div id="changePwError" class="form-error" style="display:none;margin-bottom:10px"></div>' +
+        '<div class="modal-footer" style="padding:0;border:none">' +
+        '<button type="submit" class="btn" style="width:100%">Ок</button>' +
+        '<button type="button" class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="closeChangePasswordModal()">Отмена</button>' +
+        '</div>' +
+        '</form>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    overlay.classList.add('active');
+
+    document.getElementById('changePwForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var oldPw = document.getElementById('oldPassword').value;
+        var newPw = document.getElementById('newPassword').value;
+        var confirmPw = document.getElementById('confirmPassword').value;
+        var errorEl = document.getElementById('changePwError');
+
+        errorEl.style.display = 'none';
+
+        if (!oldPw || !newPw || !confirmPw) {
+            errorEl.textContent = 'Заполните все поля';
+            errorEl.style.display = 'block';
+            return;
+        }
+        if (newPw !== confirmPw) {
+            errorEl.textContent = 'Новые пароли не совпадают';
+            errorEl.style.display = 'block';
+            return;
+        }
+        if (newPw.length < 6) {
+            errorEl.textContent = 'Пароль должен быть не менее 6 символов';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        try {
+            var response = await fetch('/api/v1/auth/password', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify({
+                    old_password: oldPw,
+                    new_password: newPw
+                })
+            });
+            var data = await response.json();
+            if (response.ok && data.ok) {
+                closeChangePasswordModal();
+                alert('Пароль успешно изменён');
+            } else {
+                errorEl.textContent = data.error || 'Ошибка смены пароля';
+                errorEl.style.display = 'block';
+            }
+        } catch (err) {
+            errorEl.textContent = 'Ошибка соединения: ' + err.message;
+            errorEl.style.display = 'block';
+        }
+    });
+}
+
+function closeChangePasswordModal() {
+    var modal = document.getElementById('changePwModal');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.remove();
+    }
 }
 
 function openLoginModal() {

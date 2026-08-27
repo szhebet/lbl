@@ -104,8 +104,20 @@ rm -rf src_android/app/src/main/res/raw/ca_cert.crt \
 rm -rf src_android/certres 2>/dev/null
 rm -f src_android/app/src/main/java/app/library/twa/Config.java src_android/build-extras.gradle
 
+# ── Step 10: Prepare release artifacts ─────────────────────────
+echo ""
+echo "--- Preparing release artifacts ---"
+if [ -f android-apk/app-release.apk ]; then
+    cp android-apk/app-release.apk android-apk/library.apk
+    echo "$APK_VERSION_NAME" > android-apk/version.txt
+    echo "  android-apk/library.apk  ($(du -h android-apk/library.apk | cut -f1))"
+    echo "  android-apk/version.txt  ($APK_VERSION_NAME)"
+fi
+
 echo ""
 echo "=== Build Complete ==="
 ls -lh android-apk/*.apk 2>/dev/null && echo "" || echo "  No APKs found"
 echo "Install:"
 echo "  adb install -r android-apk/app-debug.apk"
+echo "Deploy to server:"
+echo "  cp android-apk/library.apk android-apk/version.txt <server>:/path/to/apk/"
