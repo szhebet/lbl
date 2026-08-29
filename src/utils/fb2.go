@@ -1,42 +1,40 @@
 package utils
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/encoding/traditionalchinese"
-	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/transform"
 )
 
 type FB2Book struct {
-	Title     string
-	Authors   []string
-	Lang      string
-	Year      string
-	ISBN      string
-	Publisher string
-	Genres    []string
-	Annotation string
-	Sequence  string
+	Title          string
+	Authors        []string
+	Lang           string
+	Year           string
+	ISBN           string
+	Publisher      string
+	Genres         []string
+	Annotation     string
+	Sequence       string
 	SequenceNumber string
 }
 
 type fb2Description struct {
 	TitleInfo struct {
-		Genre             []string `xml:"genre"`
-		Author            []struct {
+		Genre  []string `xml:"genre"`
+		Author []struct {
 			FirstName string `xml:"first-name"`
 			LastName  string `xml:"last-name"`
 		} `xml:"author"`
@@ -180,64 +178,6 @@ func ParseFB2FromBytes(data []byte) (*FB2Book, error) {
 	}
 
 	return book, nil
-}
-
-func ExtractFB2FromZipBytes(data []byte) ([]byte, error) {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open zip: %w", err)
-	}
-
-	for _, file := range reader.File {
-		ext := strings.ToLower(filepath.Ext(file.Name))
-		if ext == ".fb2" || ext == ".xml" {
-			rc, err := file.Open()
-			if err != nil {
-				continue
-			}
-
-			content, err := io.ReadAll(rc)
-			rc.Close()
-			if err != nil {
-				continue
-			}
-
-			return content, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no FB2 file found in archive")
-}
-
-func ParseFB2FromZip(filePath string) (*FB2Book, error) {
-	reader, err := zip.OpenReader(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open zip: %w", err)
-	}
-	defer reader.Close()
-
-	for _, file := range reader.File {
-		ext := strings.ToLower(filepath.Ext(file.Name))
-		if ext == ".fb2" || ext == ".xml" {
-			rc, err := file.Open()
-			if err != nil {
-				continue
-			}
-
-			data, err := io.ReadAll(rc)
-			rc.Close()
-			if err != nil {
-				continue
-			}
-
-			book, err := ParseFB2FromBytes(data)
-			if err == nil {
-				return book, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no FB2 file found in archive")
 }
 
 func extractYear(dateStr string) string {

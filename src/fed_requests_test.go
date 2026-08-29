@@ -22,8 +22,8 @@ import (
 // fedRequestsMock is a mock neighbouring server that records the pushed
 // request batches it receives.
 type fedRequestsMock struct {
-	srv      *httptest.Server
-	pushHits int32
+	srv       *httptest.Server
+	pushHits  int32
 	lastBatch fedPushBatch
 }
 
@@ -118,7 +118,9 @@ func TestFedReceiveRequestPush(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var resp struct{ Received int `json:"received"` }
+	var resp struct {
+		Received int `json:"received"`
+	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, 2, resp.Received) // empty bookname skipped
 
@@ -545,6 +547,7 @@ func TestFedApproveOutgoing(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT status FROM fed_outgoing_requests WHERE id=$1`, outID).Scan(&st))
 	assert.Equal(t, "removed", st)
 }
+
 // offerTestCfg returns a config that points bookarch/temp into fresh
 // directories under the repo root (mirroring production, where stored file
 // paths are resolved relative to the working directory) so offer tests never
@@ -658,10 +661,10 @@ func TestServerOfferBook(t *testing.T) {
 	rec := post(makeOfferBody(mock.srv.URL, uidA, rlA, meta))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var resp struct {
-		OK         bool `json:"ok"`
-		Duplicate  bool `json:"duplicate"`
-		EditionID  int  `json:"edition_id"`
-		WorkID     int  `json:"work_id"`
+		OK        bool `json:"ok"`
+		Duplicate bool `json:"duplicate"`
+		EditionID int  `json:"edition_id"`
+		WorkID    int  `json:"work_id"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.True(t, resp.OK)
@@ -817,6 +820,7 @@ func TestServerOfferBookEditionIDCollision(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT title FROM editions WHERE id=2920002`).Scan(&locTitle))
 	assert.Equal(t, "Местный Захват", locTitle)
 }
+
 // and an incoming request sends a reference to the requesting neighbour so it
 // can pull the book, and the incoming request is marked handled.
 func TestAdminFederationOffer(t *testing.T) {
@@ -870,7 +874,12 @@ func TestAdminFederationOffer(t *testing.T) {
 	bookData := makeFB2Zip("Локальная книга", "Иван", "Петров")
 	innerHash, formatName, formatID, err := fedAnalyzeBook(bookData, db)
 	require.NoError(t, err)
-	workID, editionID, _, err := fedCreateLocal(db, cfg, &meta, bookData, innerHash, formatName, formatID, 1, false)
+	var upID int
+	require.NoError(t, db.QueryRow(`INSERT INTO users (username, password_hash, role)
+		VALUES ($1,$2,'admin') RETURNING id`,
+		"offer_up_"+strconv.FormatInt(time.Now().UnixNano(), 36), "$2a$10$dummyhash").Scan(&upID))
+	defer db.Exec("DELETE FROM users WHERE id=$1", upID)
+	workID, editionID, _, err := fedCreateLocal(db, cfg, &meta, bookData, innerHash, formatName, formatID, upID, false)
 	require.NoError(t, err)
 	defer db.Exec("DELETE FROM editions WHERE id=$1", editionID)
 	defer db.Exec("DELETE FROM works WHERE id=$1", workID)

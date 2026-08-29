@@ -12,11 +12,11 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig     `toml:"server"`
+	Server      ServerConfig      `toml:"server"`
 	Directories DirectoriesConfig `toml:"directories"`
-	Database   DatabaseConfig   `toml:"database"`
-	LLM        LLMConfig        `toml:"llm"`
-	Federation FederationConfig `toml:"federation"`
+	Database    DatabaseConfig    `toml:"database"`
+	LLM         LLMConfig         `toml:"llm"`
+	Federation  FederationConfig  `toml:"federation"`
 }
 
 type ServerConfig struct {
@@ -30,13 +30,11 @@ type ServerConfig struct {
 }
 
 type DirectoriesConfig struct {
-	Bookarch  string `toml:"bookarch"`
-	Temp      string `toml:"temp"`
-	Logs      string `toml:"logs"`
-	Templates string `toml:"templates"`
-	Static    string `toml:"static"`
-	Backup    string `toml:"backup"`
-	ApkDir    string `toml:"apk_dir"`
+	Bookarch string `toml:"bookarch"`
+	Temp     string `toml:"temp"`
+	Logs     string `toml:"logs"`
+	Backup   string `toml:"backup"`
+	ApkDir   string `toml:"apk_dir"`
 }
 
 type DatabaseConfig struct {
@@ -46,17 +44,16 @@ type DatabaseConfig struct {
 	User     string `toml:"user"`
 	Password string `toml:"password"`
 	SSLMode  string `toml:"sslmode"`
-	DataDir  string `toml:"pgdata"`
 }
 
 type LLMConfig struct {
-	BaseURL      string `toml:"base_url"`
-	Model        string `toml:"model"`
-	Token        string `toml:"token"`
-	Prompt       string `toml:"prompt"`
-	Prompt2      string `toml:"prompt2"`
+	BaseURL       string `toml:"base_url"`
+	Model         string `toml:"model"`
+	Token         string `toml:"token"`
+	Prompt        string `toml:"prompt"`
+	Prompt2       string `toml:"prompt2"`
 	PromptConvert string `toml:"prompt_convert"`
-	Timeout      int    `toml:"timeout"`
+	Timeout       int    `toml:"timeout"`
 }
 
 // FederationConfig controls the background distribution of user book requests
@@ -77,33 +74,30 @@ type FederationConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: 9091,
-			Bind: "0.0.0.0",
+			Port:     9091,
+			Bind:     "0.0.0.0",
 			LogLevel: "info",
 		},
 		Directories: DirectoriesConfig{
-			Bookarch:  "bookarch",
-			Temp:      "tempfld",
-			Logs:      "logs",
-			Templates: "templates",
-			Static:    "static",
+			Bookarch: "bookarch",
+			Temp:     "tempfld",
+			Logs:     "logs",
 		},
 		Database: DatabaseConfig{
-			Host:     "localhost",
-			Port:     5432,
-			Name:     "library",
-			User:     "postgres",
-			SSLMode:  "disable",
-			DataDir:  "/var/lib/postgresql/data",
+			Host:    "localhost",
+			Port:    5432,
+			Name:    "library",
+			User:    "postgres",
+			SSLMode: "disable",
 		},
 		LLM: LLMConfig{
-			BaseURL:      "http://localhost:8080",
-			Model:        "llama",
-			Token:        "",
-			Prompt:       "в тексте первых 3х страниц книги найди ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
-			Prompt2:      "по цитате нескольких страниц определи ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
+			BaseURL:       "http://localhost:8080",
+			Model:         "llama",
+			Token:         "",
+			Prompt:        "в тексте первых 3х страниц книги найди ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
+			Prompt2:       "по цитате нескольких страниц определи ФИО автора и название произведения, в результате верни только 2 строки в формате AUTHOR:ФИО автора BOOKNAME: название произведения",
 			PromptConvert: "Преобразуй к формату Автор - Название произведения следующий текст: \n",
-			Timeout:      60,
+			Timeout:       60,
 		},
 		Federation: FederationConfig{
 			Enabled:          true,
@@ -188,12 +182,6 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LIBAPP_DIR_LOGS"); v != "" {
 		cfg.Directories.Logs = v
 	}
-	if v := os.Getenv("LIBAPP_DIR_TEMPLATES"); v != "" {
-		cfg.Directories.Templates = v
-	}
-	if v := os.Getenv("LIBAPP_DIR_STATIC"); v != "" {
-		cfg.Directories.Static = v
-	}
 	if v := os.Getenv("LIBAPP_DIR_BACKUP"); v != "" {
 		cfg.Directories.Backup = v
 	}
@@ -227,9 +215,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LIBAPP_DB_SSLMODE"); v != "" {
 		cfg.Database.SSLMode = v
-	}
-	if v := os.Getenv("LIBAPP_DB_PGDATA"); v != "" {
-		cfg.Database.DataDir = v
 	}
 
 	if v := os.Getenv("LIBAPP_LLM_BASE_URL"); v != "" {

@@ -54,12 +54,12 @@ func canManageReadListItem(db *sql.DB, uid int, itemID string) (bool, error) {
 // readListFilter holds the filter criteria parsed from query parameters. It is
 // shared by the list endpoint and the bulk actions (shelf / delete / status).
 type readListFilter struct {
-	UserIDs    []int
-	Listnames  []string
-	Listname   string
-	Bookname   string
-	Author     string
-	Statuses   []string
+	UserIDs   []int
+	Listnames []string
+	Listname  string
+	Bookname  string
+	Author    string
+	Statuses  []string
 }
 
 func parseReadListFilter(c *gin.Context) readListFilter {

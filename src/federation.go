@@ -58,6 +58,44 @@ type federationNeighbour struct {
 	disabled    bool
 }
 
+// loadNeighbourByID fetches a single federation neighbour by primary key.
+func loadNeighbourByID(db *sql.DB, id int) (federationNeighbour, error) {
+	var n federationNeighbour
+	err := db.QueryRow(`
+		SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
+		FROM api_neighbours WHERE id = $1`, id).
+		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+	return n, err
+}
+
+// loadNeighbourByURL fetches a single federation neighbour by its URL.
+func loadNeighbourByURL(db *sql.DB, url string) (federationNeighbour, error) {
+	var n federationNeighbour
+	err := db.QueryRow(`
+		SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
+		FROM api_neighbours WHERE url = $1`, url).
+		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+	return n, err
+}
+
+// contentHash returns the hex-encoded SHA-256 of the given bytes.
+func contentHash(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func badRequest(c *gin.Context, msg string) {
+	c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+}
+
+func badGateway(c *gin.Context, msg string) {
+	c.JSON(http.StatusBadGateway, gin.H{"error": msg})
+}
+
+func notFound(c *gin.Context, msg string) {
+	c.JSON(http.StatusNotFound, gin.H{"error": msg})
+}
+
 // adminFederationSearch POST /api/v1/admin/federation/search (admin only).
 // With ?stop_on_first=1 neighbours are queried sequentially and the search
 // stops at the first neighbour that returns at least one book.
@@ -65,7 +103,7 @@ func adminFederationSearch(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req ServerSearchRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		req.Query = strings.TrimSpace(req.Query)
@@ -86,7 +124,7 @@ func adminFederationSearch(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 
 		neighbours, err := loadFederationNeighbours(db)
 		if err != nil {
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
@@ -149,7 +187,7 @@ func adminFederationTest(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req federationTestRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		if req.NeighbourID <= 0 {
@@ -157,17 +195,13 @@ func adminFederationTest(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			return
 		}
 
-		var n federationNeighbour
-		err := db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
-			FROM api_neighbours WHERE id = $1`, req.NeighbourID).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+		n, err := loadNeighbourByID(db, req.NeighbourID)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Сосед не найден"})
+				notFound(c, "Сосед не найден")
 				return
 			}
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
@@ -273,7 +307,7 @@ func adminFederationImport(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req federationImportRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		if req.NeighbourID <= 0 || req.EditionID <= 0 {
@@ -287,17 +321,13 @@ func adminFederationImport(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			return
 		}
 
-		var n federationNeighbour
-		err := db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
-			FROM api_neighbours WHERE id = $1`, req.NeighbourID).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+		n, err := loadNeighbourByID(db, req.NeighbourID)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Сосед не найден"})
+				notFound(c, "Сосед не найден")
 				return
 			}
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
@@ -350,7 +380,7 @@ func adminFederationImport(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 		// 5. Check whether the remote identifiers are already in use locally.
 		conflicts, err := analyzeFedConflicts(db, meta)
 		if err != nil {
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
@@ -395,7 +425,7 @@ func adminFederationImport(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			mode = "created"
 		}
 		if err != nil {
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
@@ -471,8 +501,7 @@ func fedAnalyzeBook(data []byte, db *sql.DB) (innerHash, formatName string, form
 			formatName = utils.ZipContentTypeToFormatName(zipResult.ContentType)
 		}
 	}
-	h := sha256.Sum256(inner)
-	innerHash = hex.EncodeToString(h[:])
+	innerHash = contentHash(inner)
 	if err := db.QueryRow("SELECT id FROM formats WHERE name=$1", formatName).Scan(&formatID); err != nil {
 		formatID = 1
 	}
@@ -746,8 +775,8 @@ type federationOfferRequest struct {
 // requesting server can pull the book (federation-search style) and attach it
 // to the user request that originated the order.
 type serverOffer struct {
-	SourceURL  string          `json:"source_url"`  // this server's URL as the requester knows it
-	UID        string          `json:"uid"`         // the uid of the original request (from fed_incoming_requests)
+	SourceURL  string          `json:"source_url"`   // this server's URL as the requester knows it
+	UID        string          `json:"uid"`          // the uid of the original request (from fed_incoming_requests)
 	ReadListID string          `json:"read_list_id"` // the requester's stable read_list id this offer fulfils
 	EditionID  int             `json:"edition_id"`   // the offered edition on this server
 	WorkID     int             `json:"work_id"`      // the offered work on this server
@@ -762,7 +791,7 @@ func adminFederationOffer(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req federationOfferRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		if req.IncomingRequestID <= 0 || req.EditionID <= 0 {
@@ -779,28 +808,24 @@ func adminFederationOffer(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Запрос соседа не найден"})
 				return
 			}
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
-		var n federationNeighbour
-		err = db.QueryRow(`
-			SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
-			FROM api_neighbours WHERE url = $1`, sourceURL).
-			Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+		n, err := loadNeighbourByURL(db, sourceURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "Сервер-источник не найден в списке соседей"})
 				return
 			}
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 
 		// 2. Build the local author/work/edition metadata and validate a file exists.
 		meta, err := loadLocalBookMetadata(db, req.EditionID)
 		if err != nil {
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 		if len(meta.Files) == 0 {
@@ -836,7 +861,7 @@ func adminFederationOffer(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 			loginBase+"/api/v1/server/book/offer", bytes.NewReader(bodyBytes))
 		if err != nil {
 			recordDelivery("failed", err.Error())
-			adminInternalError(c, err)
+			internalError(c, err)
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -1429,7 +1454,7 @@ func fedSyncSequence(tx *sql.Tx, table string) {
 	tx.Exec(fmt.Sprintf(`SELECT setval('%s_id_seq', GREATEST((SELECT MAX(id) FROM %s), 1))`, table, table))
 }
 
-// strOrNil returns nil for empty strings so NULL is stored instead of ''.
+// strOrNil returns nil for empty strings so NULL is stored instead of ”.
 func strOrNil(s string) interface{} {
 	if strings.TrimSpace(s) == "" {
 		return nil

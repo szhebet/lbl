@@ -28,18 +28,18 @@ func exportBooksJSON(db *sql.DB) gin.HandlerFunc {
 
 		var books []map[string]interface{}
 		columns, _ := rows.Columns()
-		
+
 		for rows.Next() {
 			values := make([]interface{}, len(columns))
 			valuePtrs := make([]interface{}, len(columns))
 			for i := range values {
 				valuePtrs[i] = &values[i]
 			}
-			
+
 			if err := rows.Scan(valuePtrs...); err != nil {
 				continue
 			}
-			
+
 			row := make(map[string]interface{})
 			for i, col := range columns {
 				row[col] = values[i]
@@ -72,15 +72,15 @@ func exportBooksCSV(db *sql.DB) gin.HandlerFunc {
 		defer rows.Close()
 
 		csv := "Title,Authors,Publisher,Year,Pages,Series,Series Number,ISBN\n"
-		
+
 		for rows.Next() {
 			var title, authors, publisher, series, isbn string
 			var year, pages, seriesNum *int
-			
+
 			if err := rows.Scan(&title, &authors, &publisher, &year, &pages, &series, &seriesNum, &isbn); err != nil {
 				continue
 			}
-			
+
 			yearStr := ""
 			if year != nil {
 				yearStr = fmt.Sprintf("%d", *year)
@@ -93,9 +93,9 @@ func exportBooksCSV(db *sql.DB) gin.HandlerFunc {
 			if seriesNum != nil {
 				seriesNumStr = fmt.Sprintf("%d", *seriesNum)
 			}
-			
-			csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n", 
-				escapeCSV(title), escapeCSV(authors), escapeCSV(publisher), 
+
+			csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+				escapeCSV(title), escapeCSV(authors), escapeCSV(publisher),
 				yearStr, pagesStr, escapeCSV(series), seriesNumStr, escapeCSV(isbn))
 		}
 

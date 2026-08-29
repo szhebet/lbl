@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -64,8 +63,7 @@ func adminGetUsers(db *sql.DB) gin.HandlerFunc {
 }
 
 func adminInternalError(c *gin.Context, err error) {
-	log.Printf("Admin internal error: %v", err)
-	c.JSON(http.StatusInternalServerError, gin.H{"error": "Внутренняя ошибка сервера"})
+	internalError(c, err)
 }
 
 func adminGetUser(db *sql.DB) gin.HandlerFunc {

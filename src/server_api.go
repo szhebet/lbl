@@ -124,20 +124,12 @@ func serverPing() gin.HandlerFunc {
 func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
-		var meta fedBookMetadata
-
-		err := db.QueryRow(`
-			SELECT e.id, e.uid::text, e.work_id, COALESCE(e.title,''), COALESCE(e.language,''), COALESCE(e.isbn,''),
-			       COALESCE(e.ean,''), COALESCE(e.udc,''), COALESCE(e.bbk,''),
-			       COALESCE(e.publisher,''), e.year, COALESCE(e.city,''), e.pages,
-			       COALESCE(e.series,''), COALESCE(e.series_number,''), COALESCE(e.annotation,''),
-			       COALESCE(e.source,''), e.is_complete, COALESCE(e.quality,'')
-			FROM editions e WHERE e.id = $1`, id).Scan(
-			&meta.Edition.ID, &meta.Edition.UID, &meta.Edition.WorkID, &meta.Edition.Title, &meta.Edition.Language,
-			&meta.Edition.ISBN, &meta.Edition.EAN, &meta.Edition.UDC, &meta.Edition.BBK,
-			&meta.Edition.Publisher, &meta.Edition.Year, &meta.Edition.City, &meta.Edition.Pages,
-			&meta.Edition.Series, &meta.Edition.SeriesNumber, &meta.Edition.Annotation,
-			&meta.Edition.Source, &meta.Edition.IsComplete, &meta.Edition.Quality)
+		eid, err := strconv.Atoi(id)
+		if err != nil {
+			badRequest(c, "Некорректный идентификатор издания")
+			return
+		}
+		meta, err := loadLocalBookMetadata(db, eid)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Edition not found"})
@@ -146,79 +138,6 @@ func serverBookMetadata(db *sql.DB) gin.HandlerFunc {
 			internalError(c, err)
 			return
 		}
-
-		err = db.QueryRow(`
-			SELECT id, uid::text, COALESCE(original_title,''), COALESCE(original_language,''), first_published,
-			       COALESCE(work_type,''), COALESCE(annotation,''), word_count
-			FROM works WHERE id = $1`, meta.Edition.WorkID).Scan(
-			&meta.Work.ID, &meta.Work.UID, &meta.Work.OriginalTitle, &meta.Work.OriginalLanguage,
-			&meta.Work.FirstPublished, &meta.Work.WorkType, &meta.Work.Annotation, &meta.Work.WordCount)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Work not found"})
-				return
-			}
-			internalError(c, err)
-			return
-		}
-
-		rows, err := db.Query(`
-			SELECT p.id, p.uid::text, COALESCE(p.first_name, ''), COALESCE(p.middle_name, ''), p.last_name, wc.role
-			FROM work_contributors wc
-			JOIN persons p ON p.id = wc.person_id
-			WHERE wc.work_id = $1`, meta.Work.ID)
-		if err != nil {
-			internalError(c, err)
-			return
-		}
-		for rows.Next() {
-			var a fedAuthorMeta
-			if err := rows.Scan(&a.ID, &a.UID, &a.FirstName, &a.MiddleName, &a.LastName, &a.Role); err != nil {
-				rows.Close()
-				internalError(c, err)
-				return
-			}
-			meta.Authors = append(meta.Authors, a)
-		}
-		rows.Close()
-
-		rows, err = db.Query(`
-			SELECT g.id, g.name FROM work_genres wg JOIN genres g ON g.id = wg.genre_id
-			WHERE wg.work_id = $1`, meta.Work.ID)
-		if err != nil {
-			internalError(c, err)
-			return
-		}
-		for rows.Next() {
-			var g fedGenreMeta
-			if err := rows.Scan(&g.ID, &g.Name); err != nil {
-				rows.Close()
-				internalError(c, err)
-				return
-			}
-			meta.Genres = append(meta.Genres, g)
-		}
-		rows.Close()
-
-		rows, err = db.Query(`
-			SELECT ef.id, ef.format_id, f.name, COALESCE(ef.file_size, 0), COALESCE(ef.file_hash, '')
-			FROM edition_files ef JOIN formats f ON f.id = ef.format_id
-			WHERE ef.edition_id = $1`, id)
-		if err != nil {
-			internalError(c, err)
-			return
-		}
-		for rows.Next() {
-			var f fedFileMeta
-			if err := rows.Scan(&f.ID, &f.FormatID, &f.FormatName, &f.FileSize, &f.FileHash); err != nil {
-				rows.Close()
-				internalError(c, err)
-				return
-			}
-			meta.Files = append(meta.Files, f)
-		}
-		rows.Close()
-
 		c.JSON(http.StatusOK, meta)
 	}
 }
@@ -227,7 +146,7 @@ func serverSearchBooks(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req ServerSearchRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		req.Query = strings.TrimSpace(req.Query)
@@ -349,7 +268,7 @@ func serverOfferBook(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var offer serverOffer
 		if err := c.ShouldBindJSON(&offer); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный запрос"})
+			badRequest(c, "Некорректный запрос")
 			return
 		}
 		if offer.EditionID <= 0 || offer.Metadata.Edition.ID <= 0 {
@@ -365,36 +284,29 @@ func serverOfferBook(db *sql.DB, nc *NeighbourCrypto) gin.HandlerFunc {
 		// servers. The content hash is a secondary fallback for peers that do
 		// not yet advertise a uid. When a local edition matches, the offer is
 		// recorded and linked when it is the first one.
-		editionUID := meta.Edition.UID
-		if eid := findEditionByUID(db, editionUID); eid > 0 {
+		acceptAndRespond := func(eid int) {
 			linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
 				meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
 			c.JSON(http.StatusOK, gin.H{
-				"ok":        true,
-				"duplicate": true,
-				"linked":    linked,
-				"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
-				"work_id":   meta.Work.ID,
+				"ok":         true,
+				"duplicate":  true,
+				"linked":     linked,
+				"message":    fedOfferMessage(linked, "она уже была в библиотеке"),
+				"work_id":    meta.Work.ID,
 				"edition_id": eid,
-				"title":     meta.Edition.Title,
-				"authors":   fedAuthorsDisplay(meta),
+				"title":      meta.Edition.Title,
+				"authors":    fedAuthorsDisplay(meta),
 			})
+		}
+
+		editionUID := meta.Edition.UID
+		if eid := findEditionByUID(db, editionUID); eid > 0 {
+			acceptAndRespond(eid)
 			return
 		}
 		if h := offeredFileHash(meta); h != "" {
 			if eid := findEditionIDByHash(db, h); eid > 0 {
-				linked := acceptFedOffer(db, offer.ReadListID, offer.UID, offer.SourceURL,
-					meta.Work.ID, meta.Edition.ID, eid, meta.Edition.Title, fedAuthorsDisplay(meta))
-				c.JSON(http.StatusOK, gin.H{
-					"ok":        true,
-					"duplicate": true,
-					"linked":    linked,
-					"message":   fedOfferMessage(linked, "она уже была в библиотеке"),
-					"work_id":   meta.Work.ID,
-					"edition_id": eid,
-					"title":     meta.Edition.Title,
-					"authors":   fedAuthorsDisplay(meta),
-				})
+				acceptAndRespond(eid)
 				return
 			}
 		}
@@ -598,11 +510,7 @@ func acceptFedOffer(db *sql.DB, readListID, uid, sourceURL string, remoteWorkID,
 // source_url against api_neighbours.url), fetches the authoritative metadata and
 // downloads the stored archive of the offered edition.
 func pullOfferedBook(db *sql.DB, nc *NeighbourCrypto, offer serverOffer) ([]byte, *fedBookMetadata, string) {
-	var n federationNeighbour
-	err := db.QueryRow(`
-		SELECT id, url, server_cert, client_cert, username, password_encrypted, disabled
-		FROM api_neighbours WHERE url = $1`, offer.SourceURL).
-		Scan(&n.id, &n.url, &n.serverCert, &n.clientCert, &n.username, &n.passwordEnc, &n.disabled)
+	n, err := loadNeighbourByURL(db, offer.SourceURL)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, "Сервер, приславший эту книгу, не найден в списке соседей"
@@ -630,4 +538,3 @@ func pullOfferedBook(db *sql.DB, nc *NeighbourCrypto, offer serverOffer) ([]byte
 
 // serverMetadataLike is a type alias used only to document server
 // role endpoints; it is not otherwise referenced.
-

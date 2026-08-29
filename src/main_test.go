@@ -4435,14 +4435,14 @@ func TestFederationImport(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "import failed: %s", w.Body.String())
 
 	var resp struct {
-		Message    string `json:"message"`
-		Title      string `json:"title"`
-		Mode       string `json:"mode"`
-		Authors    string `json:"authors"`
-		WorkID     int    `json:"work_id"`
-		EditionID  int    `json:"edition_id"`
-		FileHash   string `json:"file_hash"`
-		Conflict   bool   `json:"conflict"`
+		Message   string `json:"message"`
+		Title     string `json:"title"`
+		Mode      string `json:"mode"`
+		Authors   string `json:"authors"`
+		WorkID    int    `json:"work_id"`
+		EditionID int    `json:"edition_id"`
+		FileHash  string `json:"file_hash"`
+		Conflict  bool   `json:"conflict"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.False(t, resp.Conflict)
@@ -5012,4 +5012,3 @@ func TestFederationTest(t *testing.T) {
 	// 5. The working neighbour was contacted exactly once across all attempts.
 	assert.Equal(t, int32(1), atomic.LoadInt32(&mock.pingHits))
 }
-

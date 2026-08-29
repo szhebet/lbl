@@ -68,9 +68,9 @@ func TestNormalizeLanguage(t *testing.T) {
 
 func TestNormalizeAuthorName(t *testing.T) {
 	tests := []struct {
-		input          string
-		expectedFirst  string
-		expectedLast   string
+		input         string
+		expectedFirst string
+		expectedLast  string
 	}{
 		{"Аркадий и Борис Стругацкие", "Аркадий и Борис", "Стругацкие"},
 		{"Иван Тургенев", "Иван", "Тургенев"},
@@ -116,7 +116,7 @@ func TestNormalizeTitle(t *testing.T) {
 
 func TestParseFB2FromBytes(t *testing.T) {
 	testFile := filepath.Join(os.Getenv("HOME"), "git/aitest/agents/lbl/example", "ponedelnikNachVSubbotu.fb2")
-	
+
 	data, err := os.ReadFile(testFile)
 	if err != nil {
 		t.Skip("Test file not found:", testFile)
@@ -144,7 +144,7 @@ func TestParseFB2FromBytes(t *testing.T) {
 
 func TestParseFB2InvalidFile(t *testing.T) {
 	invalidData := []byte(`<?xml version="1.0"?><book><title>Test</title></book>`)
-	
+
 	_, err := ParseFB2FromBytes(invalidData)
 	if err == nil {
 		t.Error("Expected error for invalid FB2 file")

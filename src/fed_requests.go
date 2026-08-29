@@ -99,8 +99,13 @@ func (d *fedRequestsDistributor) Start() {
 	}()
 }
 
-func (d *fedRequestsDistributor) Stop()   { select { case <-d.stop: default: close(d.stop) } }
-func (d *fedRequestsDistributor) IsEnabled() bool { return d.cfg.Enabled }
+func (d *fedRequestsDistributor) Stop() {
+	select {
+	case <-d.stop:
+	default:
+		close(d.stop)
+	}
+}
 
 // cancelPendingFedDeliveries stops further distribution of a request once at
 // least one neighbour has responded with a book offer: pending/failed outbox
@@ -451,9 +456,9 @@ func serverReceiveRequestPush(db *sql.DB) gin.HandlerFunc {
 				exists++
 				continue
 			}
-_, err = tx.Exec(`INSERT INTO fed_incoming_requests
+			_, err = tx.Exec(`INSERT INTO fed_incoming_requests
 			(source_url, uid, bookname, author, priority, read_list_id) VALUES ($1,NULLIF($2,'')::uuid,$3,$4,$5,NULLIF($6,'')::uuid)`,
-			batch.SourceURL, r.UID, bookname, r.Author, r.Priority, r.ReadListID)
+				batch.SourceURL, r.UID, bookname, r.Author, r.Priority, r.ReadListID)
 			if err != nil {
 				tx.Rollback()
 				internalError(c, err)
@@ -562,6 +567,7 @@ func adminFedDeleteRequest(db *sql.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
+
 // immediate background distribution pass.
 func adminFedPushNow(db *sql.DB, dist *fedRequestsDistributor) gin.HandlerFunc {
 	return func(c *gin.Context) {

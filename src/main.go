@@ -8,10 +8,8 @@ package main
 import (
 	"archive/zip"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	_ "embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -456,13 +454,6 @@ func stripSchema(schema string) string {
 		clean.WriteString(line + "\n")
 	}
 	return clean.String()
-}
-
-func normalizeStr(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ReplaceAll(s, "ё", "е")
 }
 
 func normalizeQuery(s string) string {
@@ -3597,27 +3588,10 @@ func importFile(filename string, data []byte, ext string, db *sql.DB, cfg *confi
 		return nil, fmt.Errorf("cannot extract content from %s", ext)
 	}
 
-	hash := sha256.Sum256(bookContent)
-	hashStr := hex.EncodeToString(hash[:])
+	hashStr := contentHash(bookContent)
 
-	var existingTitle string
-	var existingAuthors string
-	err = db.QueryRow(`
-		SELECT w.original_title,
-			STRING_AGG(p.last_name || ' ' || COALESCE(p.first_name, ''), ', ' ORDER BY p.last_name)
-		FROM edition_files ef
-		JOIN editions e ON ef.edition_id = e.id
-		JOIN works w ON e.work_id = w.id
-		LEFT JOIN work_contributors wc ON w.id = wc.work_id AND wc.role = 'author'
-		LEFT JOIN persons p ON wc.person_id = p.id
-		WHERE ef.file_hash = $1
-		GROUP BY w.original_title
-	`, hashStr).Scan(&existingTitle, &existingAuthors)
-	if err == nil {
-		if existingAuthors == "" {
-			existingAuthors = "Неизвестный автор"
-		}
-		return nil, &duplicateInfo{title: existingTitle, authors: existingAuthors, hash: hashStr}
+	if dup := findDuplicateByHash(db, hashStr); dup != nil {
+		return nil, dup
 	}
 
 	var llmResult *utils.LLMResult

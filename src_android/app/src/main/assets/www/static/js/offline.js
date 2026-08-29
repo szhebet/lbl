@@ -34,18 +34,6 @@
         return null;
     }
 
-    function getCurrentUsername() {
-        try {
-            var stored = localStorage.getItem('auth_user');
-            if (stored) {
-                var user = JSON.parse(stored);
-                return user && user.username ? user.username : null;
-            }
-        } catch(e) {}
-        if (window.authUser && window.authUser.username) return window.authUser.username;
-        return null;
-    }
-
     function updateIndicator(status) {
         var btn = document.getElementById('mobileUserBtn');
         if (!btn) return;

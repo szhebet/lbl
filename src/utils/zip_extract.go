@@ -12,7 +12,7 @@ import (
 type ZipContentType int
 
 const (
-	ZipContentFB2  ZipContentType = iota
+	ZipContentFB2 ZipContentType = iota
 	ZipContentPDF
 	ZipContentDOC
 	ZipContentDOCX

@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	jwtSecret []byte
-	tokenTTL  = 24 // hours; default 24h
-	ErrInvalidToken  = errors.New("invalid token")
-	ErrTokenExpired  = errors.New("token expired")
+	jwtSecret       []byte
+	tokenTTL        = 24 // hours; default 24h
+	ErrInvalidToken = errors.New("invalid token")
+	ErrTokenExpired = errors.New("token expired")
 )
 
 type TokenClaims struct {
@@ -66,12 +66,12 @@ func generateToken(userID int, username, role string) string {
 	}
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	
+
 	payloadBytes, _ := json.Marshal(claims)
 	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
-	
+
 	signature := computeHMAC(header + "." + payload)
-	
+
 	return header + "." + payload + "." + signature
 }
 

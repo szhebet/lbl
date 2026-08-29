@@ -679,7 +679,7 @@ func TestAdminReadListsCreatedBySelfOnUserCreate(t *testing.T) {
 	r.Use(authMiddleware())
 	r.POST("/api/v1/user/readlist", createReadListItem(db))
 
-	uniqList := "Сам себе_"+strconv.FormatInt(time.Now().UnixNano(), 36)
+	uniqList := "Сам себе_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	w := doJSON(t, r, "POST", "/api/v1/user/readlist", map[string]interface{}{
 		"listname": uniqList, "bookname": "Книга", "author": "Автор", "status": "Читаю",
 	}, childToken)

@@ -18,6 +18,7 @@ tmp
 # Backup files
 *.backup
 *.bak
+backup/
 
 # Android APK build artifacts
 android-apk/
@@ -50,3 +51,9 @@ bookarch2/
 config2.toml
 nginx-federation.conf
 .opencode/
+
+# Scratch / debug files (kept locally, not tracked)
+plan.md
+debug_test.sh
+test_setup.sh
+zz_dbg_test.go
