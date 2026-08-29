@@ -685,29 +685,6 @@ function saveExpandedState() {
     return state;
 }
 
-function restoreExpandedState(state) {
-    state.authors.forEach(id => {
-        const el = document.querySelector(`.level-1 .edit-btn[data-id="${id}"]`);
-        if (el) {
-            const level1 = el.closest('.level-1');
-            level1.classList.remove('collapsed');
-            level1.querySelector('.expand-icon').textContent = '▼';
-            const container = level1.nextElementSibling;
-            if (container) container.style.display = 'block';
-        }
-    });
-    state.books.forEach(id => {
-        const el = document.querySelector(`.level-2 .edit-btn[data-id="${id}"]`);
-        if (el) {
-            const level2 = el.closest('.level-2');
-            level2.classList.remove('collapsed');
-            level2.querySelector('.expand-icon').textContent = '▼';
-            const container = level2.nextElementSibling;
-            if (container) container.style.display = 'block';
-        }
-    });
-}
-
 async function loadAuthors() {
     const treeContainer = document.getElementById('authorsTree');
     const expandedState = saveExpandedState();

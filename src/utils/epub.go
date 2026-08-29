@@ -11,15 +11,15 @@ import (
 )
 
 type EPUBBook struct {
-	Title     string
-	Authors   []string
-	Lang      string
-	Year      string
-	ISBN      string
-	Publisher string
-	Genres    []string
+	Title      string
+	Authors    []string
+	Lang       string
+	Year       string
+	ISBN       string
+	Publisher  string
+	Genres     []string
 	Annotation string
-	Sequence  string
+	Sequence   string
 }
 
 type epubContainer struct {
@@ -30,22 +30,22 @@ type epubContainer struct {
 }
 
 type epubPackage struct {
-	XMLName   xml.Name    `xml:"package"`
-	Metadata  epubMetadata `xml:"metadata"`
-	Manifest  epubManifest `xml:"manifest"`
-	Spine     epubSpine    `xml:"spine"`
+	XMLName  xml.Name     `xml:"package"`
+	Metadata epubMetadata `xml:"metadata"`
+	Manifest epubManifest `xml:"manifest"`
+	Spine    epubSpine    `xml:"spine"`
 }
 
 type epubMetadata struct {
-	Titles       []string         `xml:"title"`
-	Creators     []epubCreator    `xml:"creator"`
+	Titles       []string          `xml:"title"`
+	Creators     []epubCreator     `xml:"creator"`
 	Contributors []epubContributor `xml:"contributor"`
-	Descriptions []string         `xml:"description"`
-	Publishers   []string         `xml:"publisher"`
-	Dates        []epubDate       `xml:"date"`
-	Identifiers  []epubIdentifier `xml:"identifier"`
-	Subjects     []string         `xml:"subject"`
-	Languages    []string         `xml:"language"`
+	Descriptions []string          `xml:"description"`
+	Publishers   []string          `xml:"publisher"`
+	Dates        []epubDate        `xml:"date"`
+	Identifiers  []epubIdentifier  `xml:"identifier"`
+	Subjects     []string          `xml:"subject"`
+	Languages    []string          `xml:"language"`
 }
 
 type epubCreator struct {
@@ -64,9 +64,9 @@ type epubDate struct {
 }
 
 type epubIdentifier struct {
-	Value    string `xml:",chardata"`
-	Scheme   string `xml:"scheme,attr"`
-	ID       string `xml:"id,attr"`
+	Value  string `xml:",chardata"`
+	Scheme string `xml:"scheme,attr"`
+	ID     string `xml:"id,attr"`
 }
 
 type epubManifest struct {

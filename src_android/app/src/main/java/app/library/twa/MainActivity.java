@@ -155,11 +155,7 @@ public class MainActivity extends Activity {
         "setInterval(updateMobileUser,1000);\n" +
         "document.getElementById('mobileUserBtn')?.addEventListener('click',function(){\n" +
         "if(localStorage.getItem('auth_user')){\n" +
-        "if(confirm('Вы хотите завершить сессию пользователя?')){\n" +
-        "localStorage.removeItem('auth_token');\n" +
-        "localStorage.removeItem('auth_user');\n" +
-        "window.location.reload();\n" +
-        "}\n" +
+        "if(typeof openUserMenuModal==='function'){openUserMenuModal();}\n" +
         "}else{\n" +
         "var lb=document.getElementById('loginBtn');\n" +
         "if(lb)lb.click();\n" +

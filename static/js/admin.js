@@ -1026,11 +1026,6 @@ function loadTags() {
     });
 }
 
-function renderTableWithPostProcess(tbody, rows, rowFn, postFn) {
-    renderTable(tbody, rows, rowFn);
-    if (postFn) postFn(tbody);
-}
-
 function renderTags() {
     var tbody = document.getElementById('tagsTableBody');
     var pagEl = document.getElementById('tagsPagination');

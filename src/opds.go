@@ -15,27 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type OPDSFeed struct {
-	Title       string `xml:"title"`
-	Icon        string `xml:"icon"`
-	ID          string `xml:"id"`
-	Updated     string `xml:"updated"`
-	Description string `xml:"subtitle"`
-}
-
-type OPDSEntry struct {
-	Title      string `xml:"title"`
-	ID         string `xml:"id"`
-	Updated    string `xml:"updated"`
-	AuthorName string `xml:"author>name"`
-	LinkHref   string `xml:"link>href"`
-	LinkType   string `xml:"link>type"`
-	LinkRel    string `xml:"link>rel"`
-	CoverHref  string `xml:"link>href;rel=image"`
-	Summary    string `xml:"summary"`
-	Category   string `xml:"category;label=genre"`
-}
-
 func setupOPDSRoutes(api *gin.RouterGroup, db *sql.DB) {
 	opds := api.Group("/opds")
 	{
